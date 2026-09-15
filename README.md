@@ -191,6 +191,48 @@ When neither a key nor an allowed-signers file resolves, the clone is left
 alone, and `devctl` says so on stderr rather than pointing the repository at a
 file that does not exist.
 
+## `devctl sync`
+
+Fetches every remote with `--prune` and `--tags`, then fast-forwards each local
+branch that tracks an upstream.
+
+```sh
+devctl sync                                  # the repository you are standing in
+devctl sync -C ~/src/github.com/acme/widget  # or any other
+
+# a sweep across every clone in the layout
+find ~/src -name .git -maxdepth 4 -type d -exec dirname {} \; | while read -r r; do
+  devctl sync -C "$r"
+done
+```
+
+A branch that moved is printed on stdout as `<branch><TAB><upstream>`, one per
+line, so a sweep pipes. Everything else goes to stderr.
+
+### What it never does
+
+It never resets, forces, merges non-linearly or deletes anything. Every outcome
+is therefore recoverable, which is what makes it safe to run across every
+repository on a machine without reading them first.
+
+| Situation | What happens |
+| --- | --- |
+| Modified tracked files | The run stops before any branch is touched, and says so. Exit 0. |
+| Untracked files only | The sync proceeds. A fast-forward never touches an untracked file. |
+| Branch diverged from its upstream | Reported on stderr and left exactly where it is. Exit 0. |
+| Branch with no upstream | Left out of the report. Nothing was ever asked of it. |
+| Detached HEAD | Not an error. Every branch is updated without a checkout. |
+| Fetch failed | Exit 1. Deciding branch states against a stale view of the remote would be guessing. |
+| Not a repository | Exit 2. |
+
+The checked-out branch advances with `git merge --ff-only`, which refuses rather
+than touch a working tree it would have to change. Every other branch advances
+with `git fetch . <upstream>:<branch>`, and the missing `+` in front of that
+refspec is the safety property itself: without it git refuses a non
+fast-forward update instead of overwriting the branch.
+
+The fetch carries the same transport hardening as `devctl clone`.
+
 ## `devctl upgrade`
 
 Replaces the running binary with a published release, in place.
@@ -359,13 +401,18 @@ generator on the shell startup path.
 `rm` and `reorder` complete **real stored ids**, each shown with its reminder's
 first line as the description.
 
+`-C` and `clone`'s optional target complete directories only. `clone`'s URL
+position completes nothing: a half-typed URL is not a path, and a shell that
+fell back to file completion there would offer the current directory's
+contents.
+
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | success |
 | `1` | a runtime failure, a clone target that already holds something, or an id with nothing behind it |
-| `2` | a bad invocation, a directory with no usable `origin`, or an upgrade with no release to work from |
+| `2` | a bad invocation, a directory that is not a repository or has no usable `origin`, or an upgrade with no release to work from |
 
 ## Development
 

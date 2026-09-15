@@ -15,9 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// cloneSource is a repository for a clone to land on, with the machine's git
-// config neutralized so nothing the developer configured reaches the test.
-func cloneSource(t *testing.T) string {
+// hermeticGit points git at empty system and global config files, so nothing
+// the developer or the sandbox configured can reach a test.
+func hermeticGit(t *testing.T) {
 	t.Helper()
 
 	global := filepath.Join(t.TempDir(), "gitconfig")
@@ -25,19 +25,36 @@ func cloneSource(t *testing.T) string {
 
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	t.Setenv("GIT_CONFIG_GLOBAL", global)
+}
+
+// gitRun runs one git command for a fixture, failing the test if it refuses.
+func gitRun(t *testing.T, args ...string) {
+	t.Helper()
+
+	out, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput()
+	require.NoErrorf(t, err, "git %v: %s", args, out)
+}
+
+// gitCommit writes a file and commits it with an inline identity, so nothing
+// depends on the machine's git config, which hermeticGit has emptied.
+func gitCommit(t *testing.T, dir, name, content string) {
+	t.Helper()
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
+	gitRun(t, "-C", dir, "add", name)
+	gitRun(t, "-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com",
+		"-c", "commit.gpgsign=false", "commit", "-qm", "commit "+name)
+}
+
+// cloneSource is a repository for a clone to land on.
+func cloneSource(t *testing.T) string {
+	t.Helper()
+
+	hermeticGit(t)
 
 	dir := filepath.Join(t.TempDir(), "source")
-
-	run := func(args ...string) {
-		out, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput()
-		require.NoErrorf(t, err, "git %v: %s", args, out)
-	}
-
-	run("init", "-q", "-b", "main", dir)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "file"), []byte("one\n"), 0o600))
-	run("-C", dir, "add", "file")
-	run("-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com",
-		"-c", "commit.gpgsign=false", "commit", "-qm", "one")
+	gitRun(t, "init", "-q", "-b", "main", dir)
+	gitCommit(t, dir, "file", "one\n")
 
 	return dir
 }

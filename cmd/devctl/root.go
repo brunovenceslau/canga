@@ -65,7 +65,7 @@ func newRootCmd() *cobra.Command {
 			return nil, cobra.ShellCompDirectiveFilterDirs
 		})
 
-	root.AddCommand(newCloneCmd(), newRemindersCmd(a), newSetupCmd(a), newUpgradeCmd())
+	root.AddCommand(newCloneCmd(), newRemindersCmd(a), newSetupCmd(a), newSyncCmd(a), newUpgradeCmd())
 
 	return root
 }
