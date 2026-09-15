@@ -24,14 +24,19 @@ const checksumsName = "checksums.txt"
 // carries LICENSE and README.md, which are ignored.
 const binaryName = "devctl"
 
-// maxBinaryBytes caps what is read out of the archive. The binaries published
-// so far are around 6 MiB uncompressed; this is the ceiling that stops a
-// crafted archive from expanding until the process dies.
+// maxExpandedBytes caps what the whole archive may expand to, counted across
+// EVERY entry rather than only the devctl one. The binaries published so far
+// are around 6 MiB uncompressed.
+//
+// Counting every entry is the point. Capping only the entry that is kept leaves
+// a decompression bomb hidden in a LICENSE entry perfectly effective: tar walks
+// past a skipped entry by reading its payload, so those bytes are decompressed
+// whether or not anything keeps them.
 //
 // It is a var rather than a const ONLY so that the test for the cap can shrink
 // it: proving the limit with the real value means building a 64 MiB fixture on
 // every run. Nothing assigns to it outside that test.
-var maxBinaryBytes int64 = 64 << 20
+var maxExpandedBytes int64 = 64 << 20
 
 var (
 	// ErrChecksum reports an archive whose SHA-256 is not the one the release
@@ -139,7 +144,10 @@ func extractBinary(archive []byte) ([]byte, error) {
 
 	defer func() { _ = gz.Close() }()
 
-	reader := tar.NewReader(gz)
+	// The budget sits between gzip and tar, so it counts what was DECOMPRESSED,
+	// which is the quantity a bomb inflates — not what was downloaded, which
+	// the size caps in github.go already bound.
+	reader := tar.NewReader(&cappedReader{reader: gz, left: maxExpandedBytes})
 
 	for {
 		header, err := reader.Next()
@@ -159,19 +167,13 @@ func extractBinary(archive []byte) ([]byte, error) {
 	}
 }
 
-// readEntry reads one tar entry under a cap.
-//
-// The cap needs its own error rather than a short read: io.Copy treats io.EOF
-// as success, so a reader that simply stopped at the limit would hand back a
-// truncated binary and report nothing wrong.
+// readEntry reads one tar entry. The budget that bounds it belongs to the whole
+// archive and is applied by the reader underneath, so there is no second cap
+// here to drift out of step with the first.
 func readEntry(reader io.Reader, name string) ([]byte, error) {
-	binary, err := io.ReadAll(io.LimitReader(reader, maxBinaryBytes+1))
+	binary, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("read %s out of the release archive: %w", name, err)
-	}
-
-	if int64(len(binary)) > maxBinaryBytes {
-		return nil, fmt.Errorf("%w: %s expands past %d bytes", ErrTooLarge, name, maxBinaryBytes)
 	}
 
 	if len(binary) == 0 {
@@ -179,4 +181,30 @@ func readEntry(reader io.Reader, name string) ([]byte, error) {
 	}
 
 	return binary, nil
+}
+
+// cappedReader fails past a byte budget rather than stopping at it.
+//
+// io.LimitReader cannot express this: it signals its limit with io.EOF, and
+// every reader above it — tar, io.Copy, io.ReadAll — reads io.EOF as a clean
+// end of input. A bomb would be reported as a truncated archive, or as success
+// with short content, which is exactly the outcome a cap exists to prevent.
+type cappedReader struct {
+	reader io.Reader
+	left   int64
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		return 0, fmt.Errorf("%w: the release archive expands past %d bytes", ErrTooLarge, maxExpandedBytes)
+	}
+
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+
+	read, err := c.reader.Read(p)
+	c.left -= int64(read)
+
+	return read, err
 }

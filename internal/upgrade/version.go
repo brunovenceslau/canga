@@ -60,7 +60,13 @@ func releaseTag(version string) (tag string, isRelease bool) {
 		return tag, false
 	}
 
-	return tag, semver.IsValid(tag)
+	// Canonical, not merely valid. semver accepts "v1" and "v1.2" as well as
+	// "v1.2.3", and `git describe --always` falls back to a bare commit hash —
+	// so an all-digit hash like "1234567" normalizes to "v1234567", which IS
+	// valid semver. Such a build would then be treated as release v1234567.0.0,
+	// compare above every real tag, and report "nothing to do" forever. Roughly
+	// one hash in thirty is all digits, so this is a bug that waits.
+	return tag, semver.IsValid(tag) && semver.Canonical(tag) == tag
 }
 
 // isNewer reports whether tag names a later release than current. Both sides

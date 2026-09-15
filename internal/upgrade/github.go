@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -32,9 +33,10 @@ const (
 // the archives published so far are under 2 MiB, and a release document lists
 // five assets.
 const (
-	maxJSONBytes      = 1 << 20  // 1 MiB
-	maxChecksumsBytes = 64 << 10 // 64 KiB
-	maxArchiveBytes   = 64 << 20 // 64 MiB
+	maxJSONBytes      = 1 << 20  // 1 MiB — a release document listing its assets
+	maxChecksumsBytes = 64 << 10 // 64 KiB — one sha256 line per asset
+	maxArchiveBytes   = 64 << 20 // 64 MiB — the archives published so far are under 2 MiB
+	maxErrorBytes     = 8 << 10  // 8 KiB — GitHub's own "message" on a refusal
 )
 
 // httpTimeout bounds one request end to end, body included. The caller's
@@ -139,7 +141,12 @@ func (c *client) releaseAt(ctx context.Context, path string) (release, error) {
 	return found, nil
 }
 
-// download returns one asset's bytes.
+// download returns one asset's bytes, reading at most limit of them.
+//
+// The limit is the caller's, because the caller knows what it asked for: a
+// checksums.txt and a release archive differ by three orders of magnitude, and
+// a single cap generous enough for the archive is no cap at all for the text
+// file beside it.
 //
 // The request goes to the API, not to the browser download URL, because a
 // private repository's assets are only readable that way. GitHub answers with a
@@ -147,13 +154,14 @@ func (c *client) releaseAt(ctx context.Context, path string) (release, error) {
 // as net/http.Client documents — does NOT carry the Authorization header to,
 // since it is not a subdomain match. That is load-bearing rather than
 // incidental: the signed URL rejects a request that still carries one.
-func (c *client) download(ctx context.Context, want asset) ([]byte, error) {
+func (c *client) download(ctx context.Context, want asset, limit int64) ([]byte, error) {
 	path := fmt.Sprintf("/releases/assets/%d", want.ID)
 
-	limit := int64(maxArchiveBytes)
 	if want.Size > 0 && want.Size < limit {
 		// The release itself says how big the file is, so a body that outgrows
-		// it is refused as early as possible rather than at the global cap.
+		// it is refused before the caller's ceiling. Size is only ever allowed
+		// to NARROW the limit: a release declaring a huge one, or none at all,
+		// does not get to raise it.
 		limit = want.Size
 	}
 
@@ -186,7 +194,7 @@ func (c *client) fetch(ctx context.Context, path, accept string, limit int64) ([
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("reach %s: %w", c.baseURL, err)
+		return nil, fmt.Errorf("reach %s: %w", c.baseURL, redactQuery(err))
 	}
 
 	defer func() { _ = resp.Body.Close() }()
@@ -234,12 +242,38 @@ func statusError(resp *http.Response) error {
 	}
 }
 
+// redactQuery strips the query string from a failed request's URL.
+//
+// It matters because of the redirect the asset download depends on: by the time
+// a connection fails mid-download, the *url.Error carries GitHub's SIGNED asset
+// URL, and net/url prints it whole — signature parameters included. Those are a
+// short-lived credential, and the rule is the same one Token is written to:
+// what reaches a terminal scrollback or a CI log is not recoverable.
+//
+// The wrapped cause is preserved, so errors.Is still finds a cancelled context
+// underneath.
+func redactQuery(err error) error {
+	urlErr, ok := errors.AsType[*url.Error](err)
+	if !ok {
+		return err
+	}
+
+	parsed, parseErr := url.Parse(urlErr.URL)
+	if parseErr != nil || parsed.RawQuery == "" {
+		return err
+	}
+
+	parsed.RawQuery = ""
+
+	return fmt.Errorf("%s %s?<redacted>: %w", urlErr.Op, parsed, urlErr.Err)
+}
+
 // githubSaid renders GitHub's own explanation, which the error body carries as
 // a "message" field. Without it a refusal is a bare status code, and "Bad
 // credentials" versus "Resource not accessible by personal access token" is the
 // whole difference between two fixes.
 func githubSaid(body io.Reader) string {
-	raw, err := io.ReadAll(io.LimitReader(body, maxChecksumsBytes))
+	raw, err := io.ReadAll(io.LimitReader(body, maxErrorBytes))
 	if err != nil {
 		return ""
 	}

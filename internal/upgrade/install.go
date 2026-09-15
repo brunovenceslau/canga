@@ -16,10 +16,15 @@ import (
 	"time"
 )
 
-// binaryPerm is what the replacement is left as. The archive's own mode is
-// deliberately not honoured: the mode of the file devctl writes is devctl's
-// decision, not the archive's.
-const binaryPerm fs.FileMode = 0o755
+// defaultBinaryPerm is what a replacement is left as when there is nothing to
+// inherit from. The archive's own mode is deliberately not honoured: what
+// devctl writes is devctl's decision, not the archive's.
+const defaultBinaryPerm fs.FileMode = 0o755
+
+// ownerExec is the one bit an install cannot do without. Whatever else is
+// preserved, the person who just ran the upgrade has to be able to run what it
+// produced.
+const ownerExec fs.FileMode = 0o100
 
 // execTimeout bounds the sanity check run against the staged binary. It prints
 // a version string and exits; anything slower is broken.
@@ -50,8 +55,15 @@ var ErrWrongBinary = errors.New("the downloaded binary does not report the expec
 // Symlinks are followed on purpose. ~/.local/bin is where the dotfiles link
 // engine puts symlinks to tracked files, so replacing the NAME rather than the
 // file behind it would silently convert one of those links into a regular file
-// and break that layer's contract. Both paths come back so the caller can say
-// which one it is about to write, since they are not always the same file.
+// and break that layer's contract.
+//
+// invoked is the unresolved path, and it is reported only when it differs —
+// which depends on the operating system, not on how devctl was invoked. On
+// linux os.Executable reads /proc/self/exe, which the kernel has ALREADY
+// resolved, so the two are always equal there and nothing is reported even when
+// a symlink was used. On darwin the kernel hands back the path as given, so a
+// /var to /private/var resolution does show up. The file replaced is the right
+// one either way; only the diagnostic varies.
 func target() (path, invoked string, err error) {
 	invoked, err = os.Executable()
 	if err != nil {
@@ -104,7 +116,7 @@ func replace(ctx context.Context, path string, binary []byte, wantTag string) (e
 		}
 	}()
 
-	if err = writeStaged(staged, binary); err != nil {
+	if err = writeStaged(staged, binary, installPerm(path)); err != nil {
 		return fmt.Errorf("write %s: %w", name, err)
 	}
 
@@ -119,15 +131,32 @@ func replace(ctx context.Context, path string, binary []byte, wantTag string) (e
 	return nil
 }
 
+// installPerm is the mode a replacement should be left as: the one the file it
+// replaces already carries.
+//
+// Inheriting rather than imposing 0o755 is the difference between an upgrade
+// and a quiet policy change. A devctl deliberately installed 0o700 on a shared
+// host would otherwise become world-executable on the first upgrade, with
+// nothing said about it — a decision the user made, undone by a command that
+// was only asked to change the version.
+func installPerm(path string) fs.FileMode {
+	info, err := os.Stat(path)
+	if err != nil {
+		return defaultBinaryPerm
+	}
+
+	return info.Mode().Perm() | ownerExec
+}
+
 // writeStaged fills the staging file and gets it onto the disk.
-func writeStaged(staged *os.File, binary []byte) error {
+func writeStaged(staged *os.File, binary []byte, perm fs.FileMode) error {
 	if _, err := staged.Write(binary); err != nil {
 		return err
 	}
 
 	// Chmod on the open file rather than the path: it cannot race with anything
 	// that replaces the name in between.
-	if err := staged.Chmod(binaryPerm); err != nil {
+	if err := staged.Chmod(perm); err != nil {
 		return err
 	}
 

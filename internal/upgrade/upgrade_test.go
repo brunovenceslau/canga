@@ -33,7 +33,7 @@ func releaseFixture(t *testing.T, tag string) fixture {
 
 	files := map[string][]byte{
 		archive: tarGz(t,
-			tarEntry{name: "LICENSE", body: "GPL"},
+			tarEntry{name: licenseName, body: licenseBody},
 			tarEntry{name: binaryName, body: string(fakeBinary(tag))}),
 	}
 	files[checksumsName] = checksumsFile(files)
@@ -282,6 +282,19 @@ func TestRunRefusesAnArchiveThatIsNotTheOnePublished(t *testing.T) {
 
 	assert.Equal(t, string(fakeBinary(installedVersion)), readFile(t, opts.path))
 	assert.Empty(t, stagingLeftovers(t, filepath.Dir(opts.path)))
+}
+
+// TestRunCapsChecksumsSeparatelyFromTheArchive pins which cap reaches which
+// download. checksums.txt is one sha256 line per asset — a few hundred bytes —
+// and giving it the archive's 64 MiB ceiling is no ceiling at all.
+func TestRunCapsChecksumsSeparatelyFromTheArchive(t *testing.T) {
+	t.Parallel()
+
+	oversized := releaseFixture(t, newerVersion)
+	oversized.files[checksumsName] = []byte(strings.Repeat("A", maxChecksumsBytes+1))
+
+	_, err := Run(t.Context(), runOptions(t, installedVersion, oversized))
+	require.ErrorIs(t, err, ErrTooLarge)
 }
 
 func TestRunRefusesAReleaseWithNothingForThisPlatform(t *testing.T) {

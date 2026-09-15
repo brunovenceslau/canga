@@ -65,6 +65,10 @@ func TestReleaseTag(t *testing.T) {
 		{name: "a dirty build past the tag", version: "v0.1.0-3-gabc1234-dirty", expected: "v0.1.0-3-gabc1234-dirty"},
 		{name: "a dirty build at the tag", version: dirtyVersion, expected: dirtyVersion},
 		{name: "an untagged tree describes as a hash", version: "76b3a75", expected: "v76b3a75"},
+		// An all-digit hash is the one that gets through: "v1234567" is valid
+		// semver, so only the canonical check rejects it.
+		{name: "an all-digit describe hash", version: "1234567", expected: "v1234567"},
+		{name: "a version with no patch", version: "v1.2", expected: "v1.2"},
 	}
 
 	for _, tt := range tests {

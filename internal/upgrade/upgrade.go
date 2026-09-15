@@ -184,12 +184,12 @@ func fetchBinary(ctx context.Context, opts Options, found release) ([]byte, erro
 
 	api := newClient(opts.Token, opts.baseURL, opts.Current)
 
-	checksums, err := api.download(ctx, checksumsAsset)
+	checksums, err := api.download(ctx, checksumsAsset, maxChecksumsBytes)
 	if err != nil {
 		return nil, err
 	}
 
-	archive, err := api.download(ctx, archiveAsset)
+	archive, err := api.download(ctx, archiveAsset, maxArchiveBytes)
 	if err != nil {
 		return nil, err
 	}

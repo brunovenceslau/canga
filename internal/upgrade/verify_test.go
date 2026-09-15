@@ -19,6 +19,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// What a fixture archive's two kinds of entry contain: the binary that is kept,
+// and a file that is only there to be walked past.
+const (
+	licenseName = "LICENSE"
+	binaryBody  = "ELF"
+	licenseBody = "GPL"
+)
+
 // tarEntry is one file in a fixture archive. It is a slice of these rather than
 // a map because the order matters to some of the tests, and because a type
 // flag other than "regular file" has to be expressible.
@@ -167,13 +175,19 @@ func TestChecksumFor(t *testing.T) {
 		require.ErrorIs(t, err, ErrChecksum)
 	})
 
-	// The filename is matched for equality, so a name that merely LOOKS like
-	// another one under a pattern match gets nothing. "." is the character that
-	// would make the difference with a regexp or a glob.
-	t.Run("a near miss matches nothing", func(t *testing.T) {
+	// The filename is matched for equality, and this is the direction that
+	// proves it. An implementation that searched for the asset name as a
+	// PATTERN would compile "devctl_0.1.0_linux_arm64.tar.gz", whose dots are
+	// wildcards, and that pattern matches the line below — so a pattern-based
+	// lookup hands back cccc for an asset that has no checksum of its own.
+	// Written the other way round, with the mangled name as the query, the test
+	// passes whether or not the bug is there.
+	t.Run("a line that only a pattern would match", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := checksumFor(checksums, "devctl_0x1x0_linux_amd64Ttar.gz")
+		nearMiss := []byte("cccc  devctl_0X1X0_linux_arm64Xtar.gz\n")
+
+		_, err := checksumFor(nearMiss, "devctl_0.1.0_linux_arm64.tar.gz")
 		require.ErrorIs(t, err, ErrChecksum)
 	})
 }
@@ -217,21 +231,21 @@ func TestExtractBinary(t *testing.T) {
 		t.Parallel()
 
 		archive := tarGz(t,
-			tarEntry{name: "LICENSE", body: "GPL"},
-			tarEntry{name: binaryName, body: "ELF"},
+			tarEntry{name: licenseName, body: licenseBody},
+			tarEntry{name: binaryName, body: binaryBody},
 			tarEntry{name: "README.md", body: "# devctl"})
 
 		binary, err := extractBinary(archive)
 		require.NoError(t, err)
-		assert.Equal(t, "ELF", string(binary))
+		assert.Equal(t, binaryBody, string(binary))
 	})
 
 	t.Run("accepts the ./ spelling", func(t *testing.T) {
 		t.Parallel()
 
-		binary, err := extractBinary(tarGz(t, tarEntry{name: "./" + binaryName, body: "ELF"}))
+		binary, err := extractBinary(tarGz(t, tarEntry{name: "./" + binaryName, body: binaryBody}))
 		require.NoError(t, err)
-		assert.Equal(t, "ELF", string(binary))
+		assert.Equal(t, binaryBody, string(binary))
 	})
 
 	// The archive's names are never joined onto a path, so a traversing name is
@@ -261,7 +275,7 @@ func TestExtractBinary(t *testing.T) {
 	t.Run("an archive without devctl", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := extractBinary(tarGz(t, tarEntry{name: "LICENSE", body: "GPL"}))
+		_, err := extractBinary(tarGz(t, tarEntry{name: licenseName, body: licenseBody}))
 		require.ErrorIs(t, err, ErrNoBinary)
 	})
 
@@ -274,24 +288,46 @@ func TestExtractBinary(t *testing.T) {
 }
 
 // TestExtractBinaryStopsAtTheCap proves the decompression limit refuses rather
-// than truncating. io.Copy reads a limit reader's end as success, so a cap
-// without its own error hands back a short binary and reports nothing wrong.
+// than truncating, and that it counts EVERY entry — a bomb hidden in a LICENSE
+// nobody keeps is still decompressed on the way to the entry that is kept.
 //
 // The cap is shrunk for the duration instead of building a 64 MiB fixture on
-// every run, which is the only reason maxBinaryBytes is a var.
+// every run, which is the only reason maxExpandedBytes is a var. It is shrunk
+// to a few KiB rather than a few bytes because tar spends 512 of them on each
+// entry header, and those are decompressed bytes like any other.
 //
 //nolint:paralleltest // it swaps a package-level cap, so it cannot share the process with a parallel test.
 func TestExtractBinaryStopsAtTheCap(t *testing.T) {
-	original := maxBinaryBytes
+	original := maxExpandedBytes
 
-	t.Cleanup(func() { maxBinaryBytes = original })
+	t.Cleanup(func() { maxExpandedBytes = original })
 
-	maxBinaryBytes = 16
+	maxExpandedBytes = 4096
 
-	_, err := extractBinary(tarGz(t, tarEntry{name: binaryName, body: strings.Repeat("A", 17)}))
-	require.ErrorIs(t, err, ErrTooLarge)
+	t.Run("an oversized devctl", func(t *testing.T) {
+		_, err := extractBinary(tarGz(t, tarEntry{name: binaryName, body: strings.Repeat("A", 8192)}))
+		require.ErrorIs(t, err, ErrTooLarge)
+	})
 
-	binary, err := extractBinary(tarGz(t, tarEntry{name: binaryName, body: strings.Repeat("A", 16)}))
-	require.NoError(t, err, "a binary of exactly the cap is not over it")
-	assert.Len(t, binary, 16)
+	// The entry is skipped, never kept, and still has to be decompressed to
+	// reach the one after it. A cap that only measured what it kept would pass
+	// this archive straight through.
+	t.Run("a bomb in an entry that is thrown away", func(t *testing.T) {
+		archive := tarGz(t,
+			tarEntry{name: licenseName, body: strings.Repeat("A", 8192)},
+			tarEntry{name: binaryName, body: binaryBody})
+
+		_, err := extractBinary(archive)
+		require.ErrorIs(t, err, ErrTooLarge)
+	})
+
+	t.Run("an ordinary archive is well under it", func(t *testing.T) {
+		archive := tarGz(t,
+			tarEntry{name: licenseName, body: licenseBody},
+			tarEntry{name: binaryName, body: binaryBody})
+
+		binary, err := extractBinary(archive)
+		require.NoError(t, err)
+		assert.Equal(t, binaryBody, string(binary))
+	})
 }

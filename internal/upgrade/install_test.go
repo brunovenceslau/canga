@@ -6,7 +6,6 @@ package upgrade
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -77,7 +76,39 @@ func TestReplace(t *testing.T) {
 
 		info, err := os.Stat(path)
 		require.NoError(t, err)
-		assert.Equal(t, binaryPerm, info.Mode().Perm(), "the replacement has to be executable")
+		assert.Equal(t, defaultBinaryPerm, info.Mode().Perm(), "the replacement has to be executable")
+	})
+
+	// An upgrade changes the version, not the policy. A devctl deliberately
+	// kept private on a shared host must not come back world-executable.
+	t.Run("keeps the mode of the install it replaces", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := installedBinary(t, dir, installedVersion)
+		require.NoError(t, os.Chmod(path, 0o700))
+
+		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion))
+
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+	})
+
+	// The owner has to be able to run what they just installed, whatever the
+	// file that was there said.
+	t.Run("restores the owner execute bit", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := installedBinary(t, dir, installedVersion)
+		require.NoError(t, os.Chmod(path, 0o644))
+
+		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion))
+
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o744), info.Mode().Perm())
 	})
 
 	// The published v0.1.0 reports itself as "0.1.0" while its tag is installedVersion.
@@ -125,10 +156,6 @@ func TestReplace(t *testing.T) {
 
 		if os.Geteuid() == 0 {
 			t.Skip("root ignores the permission bits this case depends on")
-		}
-
-		if runtime.GOOS == "windows" {
-			t.Skip("mode bits do not gate writes here")
 		}
 
 		dir := t.TempDir()

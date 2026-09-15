@@ -153,8 +153,18 @@ away, and a stale `devctl.bak` on PATH is a worse problem than the backup solves
 The path is resolved through symlinks, and the resolved file is the one
 replaced. `~/.local/bin` holds symlinks from the dotfiles link engine, and
 replacing the *name* rather than the file behind it would quietly turn one of
-those links into a regular file. When the two differ, the command says so before
-writing anything. `--check` names the same path without touching it.
+those links into a regular file.
+
+Either way the command prints the path it is about to write, and `--check`
+prints the same one without touching it. Whether it also reports having followed
+a symlink is up to the operating system rather than to how you invoked it: on
+linux the kernel hands back an already-resolved path, so there is no symlink
+left to mention, while on macOS it does not. The file replaced is the right one
+on both.
+
+The mode of the file being replaced is kept, so a devctl deliberately installed
+`0700` does not come back world-executable — only the owner's execute bit is
+restored unconditionally, since an install you cannot run is not one.
 
 ### The token
 

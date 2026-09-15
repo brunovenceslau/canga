@@ -227,7 +227,7 @@ func TestClientDownloadDropsTheTokenOnRedirect(t *testing.T) {
 	t.Cleanup(api.Close)
 
 	body, err := newClient("s3cret", api.URL, installedVersion).
-		download(t.Context(), asset{ID: 1, Name: "devctl.tar.gz"})
+		download(t.Context(), asset{ID: 1, Name: "devctl.tar.gz"}, maxArchiveBytes)
 	require.NoError(t, err)
 	assert.Equal(t, "the archive", string(body))
 	assert.Empty(t, authOnSignedURL, "the token must not travel to the signed URL")
@@ -242,6 +242,31 @@ func TestClientDownloadRefusesMoreThanTheReleaseDeclares(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	_, err := newClient("token", server.URL, installedVersion).
-		download(t.Context(), asset{ID: 1, Name: "devctl.tar.gz", Size: 10})
+		download(t.Context(), asset{ID: 1, Name: "devctl.tar.gz", Size: 10}, maxArchiveBytes)
 	require.ErrorIs(t, err, ErrTooLarge)
+}
+
+// TestClientDownloadKeepsTheSignatureOutOfTheError covers the leak that is easy
+// to miss: by the time an asset download fails, the request has been redirected
+// to GitHub's SIGNED URL, and *url.Error prints the URL it failed on — query
+// string and all. Those parameters are a short-lived credential.
+func TestClientDownloadKeepsTheSignatureOutOfTheError(t *testing.T) {
+	t.Parallel()
+
+	// Port 1 refuses the connection, so the failure happens against the
+	// redirect target rather than against the API.
+	const signedURL = "http://127.0.0.1:1/devctl.tar.gz?X-Amz-Signature=deadbeefsecret"
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, signedURL, http.StatusFound)
+	}))
+	t.Cleanup(api.Close)
+
+	_, err := newClient("s3cret", api.URL, installedVersion).
+		download(t.Context(), asset{ID: 1, Name: "devctl.tar.gz"}, maxArchiveBytes)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "deadbeefsecret", "a signed URL must not reach stderr")
+	assert.Contains(t, err.Error(), "<redacted>")
+	assert.Contains(t, err.Error(), "127.0.0.1:1", "the host is still worth saying")
 }
