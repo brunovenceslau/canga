@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 
+	"github.com/brunovenceslau/devctl/internal/repo"
 	"github.com/spf13/cobra"
 )
 
@@ -10,8 +11,8 @@ import (
 // that calls it, so they live in one place rather than at each return.
 const (
 	exitOK      = 0
-	exitFailure = 1 // a runtime failure
-	exitUsage   = 2 // a bad invocation
+	exitFailure = 1 // a runtime failure, or an id with nothing behind it
+	exitUsage   = 2 // a bad invocation, or a directory with no usable origin
 )
 
 // usageError marks an error caused by how devctl was CALLED, not by something
@@ -55,7 +56,12 @@ func exitCode(err error) int {
 	switch {
 	case err == nil:
 		return exitOK
-	case errors.As(err, &usage):
+	case errors.As(err, &usage),
+		// A directory that is not a repository, or a URL nothing can be derived
+		// from, is the caller pointing devctl somewhere wrong: there is nothing
+		// to retry, which is what separates it from a runtime failure.
+		errors.Is(err, repo.ErrNoOrigin),
+		errors.Is(err, repo.ErrBadURL):
 		return exitUsage
 	default:
 		return exitFailure
