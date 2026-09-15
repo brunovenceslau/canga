@@ -25,12 +25,21 @@ RACE_PROCS ?=
 # assuming it.
 RACE_STORE_DIR ?=
 
+# The platforms a release ships, kept in step with .goreleaser.yml. Compiling
+# every one of them is a real gate rather than a formality: a build tag, a
+# syscall, or a constant that exists on only one of them fails here, on any
+# machine, instead of at release time on a runner nobody is watching. It is also
+# why the test matrix does not need a second operating system to catch a
+# platform-specific compile error.
+PLATFORMS ?= darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
+
 .DEFAULT_GOAL := help
-.PHONY: help build install fmt fix pre-commit lint test race vuln ci tools tool-lint tool-vuln clean
+.PHONY: help build cross install fmt fix pre-commit lint test race vuln ci tools tool-lint tool-vuln clean
 
 help:
 	@echo "Targets:"
 	@echo "  make build    build $(BIN) with version/commit stamped in"
+	@echo "  make cross    compile every platform a release ships"
 	@echo "  make install  go install devctl into GOBIN"
 	@echo "  make fmt      apply the configured formatters (gofumpt + goimports)"
 	@echo "  make fix      apply every automatic fix: go fix, the formatters, --fix linters"
@@ -39,11 +48,22 @@ help:
 	@echo "  make test     go test -race -shuffle=on ./... with coverage"
 	@echo "  make race     the multi-process store race gate, verbosely"
 	@echo "  make vuln     govulncheck ./..."
-	@echo "  make ci       lint + test + vuln — must be green before a push"
+	@echo "  make ci       lint + cross + test + vuln — must be green before a push"
 	@echo "  make tools    install the pinned dev tools into GOBIN"
 
 build:
 	go build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) $(PKG)
+
+# CGO_ENABLED=0 matches what .goreleaser.yml sets, so this compiles the way a
+# release does rather than however the host happens to be configured. The output
+# goes nowhere: the question is whether it builds, not what it produces.
+cross:
+	@set -e; for platform in $(PLATFORMS); do \
+	  goos=$${platform%/*}; goarch=$${platform#*/}; \
+	  echo "GOOS=$$goos GOARCH=$$goarch go build $(PKG)"; \
+	  CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch \
+	    go build -trimpath -ldflags '$(LDFLAGS)' -o /dev/null $(PKG); \
+	done
 
 install:
 	go install -trimpath -ldflags '$(LDFLAGS)' $(PKG)
@@ -92,7 +112,7 @@ race:
 vuln:
 	govulncheck ./...
 
-ci: lint test vuln
+ci: lint cross test vuln
 
 # Dev tools are PINNED here and installed with `go install`, not carried as
 # go.mod `tool` directives: golangci-lint and goreleaser each drag a module graph
