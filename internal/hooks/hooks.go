@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Package hooks installs a repository's own git hooks, the ones it keeps under
 // .devctl/hooks, into the repository devctl was pointed at.
 //

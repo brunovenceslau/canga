@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Build output. `make build` writes here; GoReleaser writes dist/.
 /bin/
 /dist/

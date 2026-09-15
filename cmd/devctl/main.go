@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Command devctl is a developer control tool: small, deterministic operations
 // on the repositories and sandboxes a working day is spent in.
 package main

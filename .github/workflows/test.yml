@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Tests and cross-compilation. Both jobs invoke a `make` target rather than
 # restating the flags, so what CI runs is what a push was checked against
 # locally.

@@ -1,5 +1,7 @@
 #!/bin/sh
-#
+# SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Pre-commit hook: apply every fix a tool can apply, then REFUSE the commit if
 # anything changed.
 #

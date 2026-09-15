@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Package repo derives the deterministic identity of a git working tree: the
 // URL of its origin remote, and the "<host>/<owner>/<repo>" path tail that
 // every per-repo artifact devctl owns is keyed by.

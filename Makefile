@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Makefile — the repo's quality gates.
 #
 # Every gate lands here FIRST and CI (.github/workflows/) only invokes a target;
@@ -34,7 +37,7 @@ RACE_STORE_DIR ?=
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
 
 .DEFAULT_GOAL := help
-.PHONY: help build cross install fmt fix pre-commit lint test race vuln ci tools tool-lint tool-vuln clean
+.PHONY: help build cross install fmt fix pre-commit lint license-check test race vuln ci tools tool-lint tool-vuln clean
 
 help:
 	@echo "Targets:"
@@ -45,10 +48,11 @@ help:
 	@echo "  make fix      apply every automatic fix: go fix, the formatters, --fix linters"
 	@echo "  make pre-commit  the fast subset a commit hook runs"
 	@echo "  make lint     go vet + golangci-lint over the tree"
+	@echo "  make license-check  every commentable tracked file carries its SPDX tag"
 	@echo "  make test     go test -race -shuffle=on ./... with coverage"
 	@echo "  make race     the multi-process store race gate, verbosely"
 	@echo "  make vuln     govulncheck ./..."
-	@echo "  make ci       lint + cross + test + vuln — must be green before a push"
+	@echo "  make ci       lint + license-check + cross + test + vuln — must be green before a push"
 	@echo "  make tools    install the pinned dev tools into GOBIN"
 
 build:
@@ -109,10 +113,30 @@ race:
 	  $(if $(RACE_PROCS),-race-procs=$(RACE_PROCS),) \
 	  $(if $(RACE_STORE_DIR),-race-store-dir=$(RACE_STORE_DIR),)
 
+# Files that cannot carry a tag: go.sum has no comment syntax, and a licence
+# text is never edited, which is the one rule every licensing standard agrees on.
+LICENSE_EXEMPT := go.sum LICENSE
+
+# Without this the header is aspiration rather than fact: it would vanish from
+# the first file added and nobody would notice. Driven by `git ls-files`, so a
+# file has to be tracked before it is judged.
+license-check:
+	@missing=0; \
+	for f in $$(git ls-files); do \
+	  case " $(LICENSE_EXEMPT) " in *" $$f "*) continue;; esac; \
+	  grep -q 'SPDX-License-Identifier:' "$$f" || { \
+	    echo "missing SPDX tag: $$f" >&2; missing=1; }; \
+	done; \
+	if [ $$missing -ne 0 ]; then \
+	  echo "every tracked file that can hold a comment must carry the SPDX tag" >&2; \
+	  exit 1; \
+	fi
+	@echo "license-check: every commentable tracked file carries its SPDX tag"
+
 vuln:
 	govulncheck ./...
 
-ci: lint cross test vuln
+ci: lint license-check cross test vuln
 
 # Dev tools are PINNED here and installed with `go install`, not carried as
 # go.mod `tool` directives: golangci-lint and goreleaser each drag a module graph

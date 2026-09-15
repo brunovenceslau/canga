@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Lint. `make tool-lint` installs the version pinned in the Makefile, so CI and
 # a developer's machine run the same linter over the same .golangci.yml.
 name: Lint

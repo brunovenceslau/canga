@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Vulnerability scan. govulncheck reports only vulnerabilities the build can
 # actually reach, so a finding here is actionable rather than advisory.
 name: Security
