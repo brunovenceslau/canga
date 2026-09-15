@@ -34,6 +34,9 @@ func TestExitCode(t *testing.T) {
 		{name: "git missing", err: fmt.Errorf("x: %w", repo.ErrGitMissing), want: exitFailure},
 		{name: "interrupted", err: fmt.Errorf("x: %w", context.Canceled), want: exitFailure},
 		{name: "no store", err: fmt.Errorf("x: %w", store.ErrNoStore), want: exitFailure},
+		// A typo in an id is a bad invocation. Exit 1 would tell a caller to
+		// retry, and retrying a typo never stops.
+		{name: "malformed id", err: fmt.Errorf("x: %w", store.ErrInvalidID), want: exitUsage},
 		{name: "runtime failure", err: fs.ErrPermission, want: exitFailure},
 	}
 

@@ -11,6 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// preCommit is the hook name most cases install.
+const preCommit = "pre-commit"
+
 // scratchRepo builds a git repository with the given executable hooks under
 // .devctl/hooks, and points git at empty system and global config so nothing
 // the developer or the sandbox configured can reach the test.
@@ -70,7 +73,7 @@ func TestInstall_Rejects(t *testing.T) {
 		root := scratchRepo(t)
 		// A non-executable hook is skipped rather than installed: git would
 		// silently never run it, and reporting it as installed would lie.
-		write(t, filepath.Join(root, SourceDir, "pre-commit"), 0o644)
+		write(t, filepath.Join(root, SourceDir, preCommit), 0o644)
 
 		_, err := Install(t.Context(), root, Options{})
 		require.ErrorIs(t, err, ErrNoHooks)
@@ -80,13 +83,13 @@ func TestInstall_Rejects(t *testing.T) {
 //nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
 func TestInstall_HooksPath(t *testing.T) {
 	t.Run("sets the config and reports the hooks", func(t *testing.T) {
-		root := scratchRepo(t, "pre-commit", "commit-msg")
+		root := scratchRepo(t, preCommit, "commit-msg")
 
 		report, err := Install(t.Context(), root, Options{})
 		require.NoError(t, err)
 
 		assert.Equal(t, "core.hooksPath", report.Mode)
-		assert.Equal(t, []string{"commit-msg", "pre-commit"}, report.Installed)
+		assert.Equal(t, []string{"commit-msg", preCommit}, report.Installed)
 		assert.Empty(t, report.Warnings)
 
 		value, err := repo.Config(t.Context(), root, "core.hooksPath")
@@ -97,7 +100,7 @@ func TestInstall_HooksPath(t *testing.T) {
 	// The requirement that the command works from anywhere inside the tree,
 	// not only from its top level.
 	t.Run("works from a subdirectory", func(t *testing.T) {
-		root := scratchRepo(t, "pre-commit")
+		root := scratchRepo(t, preCommit)
 		sub := filepath.Join(root, "a", "b")
 		require.NoError(t, os.MkdirAll(sub, 0o755))
 
@@ -109,7 +112,7 @@ func TestInstall_HooksPath(t *testing.T) {
 	// The cost of this mode is stated rather than discovered: git reads hooks
 	// from one directory, so anything already in the default one stops running.
 	t.Run("warns about hooks it will shadow", func(t *testing.T) {
-		root := scratchRepo(t, "pre-commit")
+		root := scratchRepo(t, preCommit)
 		write(t, filepath.Join(root, ".git", "hooks", "pre-push"), 0o755)
 
 		report, err := Install(t.Context(), root, Options{})
@@ -119,7 +122,7 @@ func TestInstall_HooksPath(t *testing.T) {
 	})
 
 	t.Run("ignores git's own samples", func(t *testing.T) {
-		root := scratchRepo(t, "pre-commit")
+		root := scratchRepo(t, preCommit)
 		write(t, filepath.Join(root, ".git", "hooks", "pre-push.sample"), 0o755)
 
 		report, err := Install(t.Context(), root, Options{})
@@ -128,7 +131,7 @@ func TestInstall_HooksPath(t *testing.T) {
 	})
 
 	t.Run("refuses a foreign setting, replaces it with force", func(t *testing.T) {
-		root := scratchRepo(t, "pre-commit")
+		root := scratchRepo(t, preCommit)
 		require.NoError(t, repo.SetConfig(t.Context(), root, "core.hooksPath", "/somewhere/else"))
 
 		_, err := Install(t.Context(), root, Options{})
@@ -147,7 +150,7 @@ func TestInstall_HooksPath(t *testing.T) {
 	})
 
 	t.Run("re-running is not a conflict with itself", func(t *testing.T) {
-		root := scratchRepo(t, "pre-commit")
+		root := scratchRepo(t, preCommit)
 
 		_, err := Install(t.Context(), root, Options{})
 		require.NoError(t, err)
@@ -160,18 +163,18 @@ func TestInstall_HooksPath(t *testing.T) {
 //nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
 func TestInstall_Symlink(t *testing.T) {
 	t.Run("links relatively, so moving the repository does not break it", func(t *testing.T) {
-		root := scratchRepo(t, "pre-commit")
+		root := scratchRepo(t, preCommit)
 
 		report, err := Install(t.Context(), root, Options{Symlink: true})
 		require.NoError(t, err)
 		assert.Equal(t, "symlink", report.Mode)
-		assert.Equal(t, []string{"pre-commit"}, report.Installed)
+		assert.Equal(t, []string{preCommit}, report.Installed)
 
-		link := filepath.Join(root, ".git", "hooks", "pre-commit")
+		link := filepath.Join(root, ".git", "hooks", preCommit)
 
 		target, err := os.Readlink(link)
 		require.NoError(t, err)
-		assert.Equal(t, filepath.Join("..", "..", SourceDir, "pre-commit"), target)
+		assert.Equal(t, filepath.Join("..", "..", SourceDir, preCommit), target)
 		assert.False(t, filepath.IsAbs(target), "an absolute link breaks when the repository moves")
 
 		// core.hooksPath is left alone in this mode, which is the point of it.
@@ -181,20 +184,20 @@ func TestInstall_Symlink(t *testing.T) {
 	})
 
 	t.Run("re-running is idempotent", func(t *testing.T) {
-		root := scratchRepo(t, "pre-commit")
+		root := scratchRepo(t, preCommit)
 
 		_, err := Install(t.Context(), root, Options{Symlink: true})
 		require.NoError(t, err)
 
 		report, err := Install(t.Context(), root, Options{Symlink: true})
 		require.NoError(t, err)
-		assert.Equal(t, []string{"pre-commit"}, report.Installed)
+		assert.Equal(t, []string{preCommit}, report.Installed)
 		assert.Empty(t, report.BackedUp, "an already-correct link must not be backed up")
 	})
 
 	t.Run("refuses a file in the way, backs it up with force", func(t *testing.T) {
-		root := scratchRepo(t, "pre-commit")
-		existing := filepath.Join(root, ".git", "hooks", "pre-commit")
+		root := scratchRepo(t, preCommit)
+		existing := filepath.Join(root, ".git", "hooks", preCommit)
 		require.NoError(t, os.MkdirAll(filepath.Dir(existing), 0o755))
 		require.NoError(t, os.WriteFile(existing, []byte("mine\n"), 0o755))
 
@@ -216,9 +219,53 @@ func TestInstall_Symlink(t *testing.T) {
 
 	// The first .bak is the pristine one. Losing it to a second run would be the
 	// one unrecoverable mistake this code could make.
+	// git reads hooks from ONE directory. With core.hooksPath set, the directory
+	// these links go into is ignored, so a success here would be a lie: the
+	// links exist and git never runs them.
+	t.Run("refuses when core.hooksPath makes the links dead", func(t *testing.T) {
+		root := scratchRepo(t, preCommit)
+		require.NoError(t, repo.SetConfig(t.Context(), root, "core.hooksPath", "/somewhere/else"))
+
+		_, err := Install(t.Context(), root, Options{Symlink: true})
+		require.ErrorIs(t, err, ErrConflict)
+		assert.Contains(t, err.Error(), "core.hooksPath")
+
+		assert.NoFileExists(t, filepath.Join(root, ".git", "hooks", preCommit),
+			"a refusal must not leave a dead link behind")
+
+		// --force installs them anyway, but says they will not run.
+		report, err := Install(t.Context(), root, Options{Symlink: true, Force: true})
+		require.NoError(t, err)
+		require.Len(t, report.Warnings, 1)
+		assert.Contains(t, report.Warnings[0], "core.hooksPath")
+	})
+
+	// A run that moved a file aside and then failed has already changed the
+	// repository. Returning an empty report leaves the user hunting for a file
+	// they were never told was renamed.
+	t.Run("a partial install still reports what it moved", func(t *testing.T) {
+		root := scratchRepo(t, preCommit, "pre-push")
+		gitHooks := filepath.Join(root, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(gitHooks, 0o755))
+
+		// pre-commit gets backed up and linked; pre-push then fails, because its
+		// backup slot is already taken.
+		require.NoError(t, os.WriteFile(filepath.Join(gitHooks, preCommit), []byte("mine\n"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(gitHooks, "pre-push"), []byte("other\n"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(gitHooks, "pre-push"+backupSuffix), []byte("pristine\n"), 0o755))
+
+		report, err := Install(t.Context(), root, Options{Symlink: true, Force: true})
+		require.ErrorIs(t, err, ErrConflict)
+
+		assert.Equal(t, []string{filepath.Join(gitHooks, preCommit+backupSuffix)}, report.BackedUp,
+			"the backup already made must travel with the error")
+		assert.Equal(t, []string{preCommit}, report.Installed)
+		assert.FileExists(t, filepath.Join(gitHooks, preCommit+backupSuffix))
+	})
+
 	t.Run("force never overwrites an existing backup", func(t *testing.T) {
-		root := scratchRepo(t, "pre-commit")
-		hook := filepath.Join(root, ".git", "hooks", "pre-commit")
+		root := scratchRepo(t, preCommit)
+		hook := filepath.Join(root, ".git", "hooks", preCommit)
 		require.NoError(t, os.MkdirAll(filepath.Dir(hook), 0o755))
 		require.NoError(t, os.WriteFile(hook+backupSuffix, []byte("pristine\n"), 0o755))
 		require.NoError(t, os.WriteFile(hook, []byte("later\n"), 0o755))

@@ -18,6 +18,38 @@ func newSetupCmd(a *app) *cobra.Command {
 	return cmd
 }
 
+// reportInstall prints what an install did. Warnings and the summary go to
+// stderr; stdout carries only the hook names, one per line, so the result stays
+// pipeable.
+func reportInstall(cmd *cobra.Command, report hooks.Report, failure error) {
+	errOut := cmd.ErrOrStderr()
+
+	for _, warning := range report.Warnings {
+		fprintf(errOut, "devctl: %s\n", warning)
+	}
+
+	for _, backup := range report.BackedUp {
+		fprintf(errOut, "devctl: moved aside to %s\n", backup)
+	}
+
+	// A zero report means nothing was touched, so there is nothing to summarize.
+	if report.Mode == "" {
+		return
+	}
+
+	// The summary must not claim success when the run failed part way. What was
+	// already installed is still worth naming, and the error itself follows.
+	if failure != nil {
+		fprintf(errOut, "devctl: stopped part way through %s in %s\n", report.Mode, report.Root)
+	} else {
+		fprintf(errOut, "devctl: installed via %s in %s\n", report.Mode, report.Root)
+	}
+
+	for _, name := range report.Installed {
+		printf(cmd, "%s\n", name)
+	}
+}
+
 func newSetupHooksCmd(a *app) *cobra.Command {
 	var options hooks.Options
 
@@ -36,28 +68,13 @@ func newSetupHooksCmd(a *app) *cobra.Command {
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			report, err := hooks.Install(cmd.Context(), a.repoDir, options)
-			if err != nil {
-				return err
-			}
 
-			// Warnings and the summary go to stderr; stdout carries only the
-			// names, one per line, so the result stays pipeable.
-			errOut := cmd.ErrOrStderr()
-			for _, warning := range report.Warnings {
-				fprintf(errOut, "devctl: %s\n", warning)
-			}
+			// Reported BEFORE the error is returned, and on both paths: a run
+			// that moved a file aside and then failed has already changed the
+			// repository, and the user has to hear about it.
+			reportInstall(cmd, report, err)
 
-			for _, backup := range report.BackedUp {
-				fprintf(errOut, "devctl: moved aside to %s\n", backup)
-			}
-
-			fprintf(errOut, "devctl: installed via %s in %s\n", report.Mode, report.Root)
-
-			for _, name := range report.Installed {
-				printf(cmd, "%s\n", name)
-			}
-
-			return nil
+			return err
 		},
 	}
 

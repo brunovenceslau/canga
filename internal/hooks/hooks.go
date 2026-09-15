@@ -57,6 +57,10 @@ type Options struct {
 }
 
 // Report says what Install did, so the caller can print it rather than guess.
+//
+// It is returned ALONGSIDE an error too, not only on success: a run that moved
+// a file aside and then failed has already changed the repository, and saying
+// nothing about it is the worst of both outcomes.
 type Report struct {
 	Root      string   // the repository's top level
 	Mode      string   // "core.hooksPath" or "symlink"
@@ -124,6 +128,27 @@ func installHooksPath(ctx context.Context, root string, names []string, opts Opt
 func installLinks(ctx context.Context, root string, names []string, opts Options) (Report, error) {
 	report := Report{Root: root, Mode: "symlink"}
 
+	// git reads hooks from ONE directory. With core.hooksPath set, the directory
+	// these links go into is ignored entirely, so installing them would report
+	// success for hooks that can never run. The default mode warns about the
+	// symmetric case; this is the one where the install does not take effect at
+	// all, so it refuses instead.
+	current, err := repo.Config(ctx, root, "core.hooksPath")
+	if err != nil {
+		return Report{}, err
+	}
+
+	if current != "" {
+		if !opts.Force {
+			return Report{}, fmt.Errorf(
+				"%w: core.hooksPath is set to %q, so git ignores the directory these links go into;"+
+					" unset it, install without --symlink, or pass --force", ErrConflict, current)
+		}
+
+		report.Warnings = append(report.Warnings, fmt.Sprintf(
+			"core.hooksPath is set to %q, so git will ignore these links until it is unset", current))
+	}
+
 	commonDir, err := repo.CommonDir(ctx, root)
 	if err != nil {
 		return Report{}, err
@@ -131,7 +156,7 @@ func installLinks(ctx context.Context, root string, names []string, opts Options
 
 	hooksDir := filepath.Join(commonDir, "hooks")
 	if err := os.MkdirAll(hooksDir, hooksDirPerm); err != nil {
-		return Report{}, fmt.Errorf("create %s: %w", hooksDir, err)
+		return report, fmt.Errorf("create %s: %w", hooksDir, err)
 	}
 
 	for _, name := range names {
@@ -142,12 +167,16 @@ func installLinks(ctx context.Context, root string, names []string, opts Options
 		// absolute one would point at wherever the repository used to be.
 		relative, err := filepath.Rel(hooksDir, source)
 		if err != nil {
-			return Report{}, fmt.Errorf("link %s: %w", name, err)
+			return report, fmt.Errorf("link %s: %w", name, err)
 		}
 
+		// The accumulated report travels WITH the error from here on. Failing on
+		// the third hook after moving the first one aside, and then returning an
+		// empty report, leaves the user hunting for a file they were never told
+		// was renamed.
 		backup, err := clearTarget(target, relative, opts.Force)
 		if err != nil {
-			return Report{}, err
+			return report, err
 		}
 
 		if backup != "" {
@@ -162,7 +191,7 @@ func installLinks(ctx context.Context, root string, names []string, opts Options
 				continue
 			}
 
-			return Report{}, fmt.Errorf("link %s: %w", name, err)
+			return report, fmt.Errorf("link %s: %w", name, err)
 		}
 
 		report.Installed = append(report.Installed, name)

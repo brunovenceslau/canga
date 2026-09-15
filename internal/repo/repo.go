@@ -152,8 +152,11 @@ func git(ctx context.Context, dir string, refused error, args ...string) (string
 // but the wrong exit code, since those are runtime failures rather than the
 // caller having pointed devctl at the wrong directory.
 func classify(ctx context.Context, dir string, refused, err error) error {
+	// Operation-neutral: classify is shared by every git call, and naming one
+	// of them would report an operation that never ran. A Ctrl-C during
+	// `devctl setup hooks` used to say "reading the origin".
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return fmt.Errorf("reading the origin of %s: %w", dir, ctxErr)
+		return fmt.Errorf("running git in %s: %w", dir, ctxErr)
 	}
 
 	if errors.Is(err, exec.ErrNotFound) {
@@ -316,20 +319,26 @@ func EscapePath(path string) string {
 // Redact returns url with any "user[:secret]@" userinfo removed, for echoing in
 // a diagnostic. A personal access token mistyped into a URL must not reach the
 // terminal scrollback or a CI log just because the URL failed to parse.
+//
+// It cuts at the LAST "@" in everything after the scheme, rather than isolating
+// the authority first and cutting inside that. Isolating first looks tidier and
+// is wrong: a credential containing an unencoded "/" puts the split before the
+// "@", the "@" is then never found, and the secret is echoed verbatim. Measured,
+// on the one input where it matters most, because such a URL also fails to parse
+// and so is the very thing this gets asked to print.
+//
+// The cost is over-redaction when a PATH contains an "@", which loses a hostname
+// from a diagnostic. That trade is deliberate: a lost hostname is an
+// inconvenience, and a leaked token is not recoverable.
 func Redact(url string) string {
 	scheme := ""
 	if before, after, ok := strings.Cut(url, "://"); ok {
 		scheme, url = before+"://", after
 	}
 
-	authority, path := url, ""
-	if before, after, ok := strings.Cut(url, "/"); ok {
-		authority, path = before, "/"+after
+	if at := strings.LastIndex(url, "@"); at >= 0 {
+		url = url[at+1:]
 	}
 
-	if at := strings.LastIndex(authority, "@"); at >= 0 {
-		authority = authority[at+1:]
-	}
-
-	return scheme + authority + path
+	return scheme + url
 }

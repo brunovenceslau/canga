@@ -16,8 +16,13 @@ import (
 // case below is one of that suite's, so the two implementations cannot drift on
 // the path they both key off — which is the whole reason the derivation is
 // allowed to exist twice at all.
-// ownerRepo is the tail every canonical spelling below must collapse to.
-const ownerRepo = "github.com/owner/repo"
+const (
+	// ownerRepo is the tail every canonical spelling below must collapse to.
+	ownerRepo = "github.com/owner/repo"
+
+	// shortHTTPS is a canonical https spelling reused across cases.
+	shortHTTPS = "https://github.com/o/r"
+)
 
 func TestPath(t *testing.T) {
 	t.Parallel()
@@ -58,7 +63,7 @@ func TestPath_Determinism(t *testing.T) {
 		"git@github.com:o/r.git",
 		"https://github.com/o/r.git",
 		"ssh://git@github.com/o/r.git",
-		"https://github.com/o/r",
+		shortHTTPS,
 	}
 
 	for _, url := range spellings {
@@ -101,10 +106,17 @@ func TestPath_Rejects(t *testing.T) {
 func TestPath_RedactsCredentials(t *testing.T) {
 	t.Parallel()
 
-	_, err := Path("https://u:s3cr3ttoken@github.com/onlyhost")
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "s3cr3ttoken")
-	assert.Contains(t, err.Error(), "github.com")
+	// Both spellings must be safe. The second is the dangerous one: it ALSO
+	// fails to parse, so the diagnostic carrying it is exactly what gets
+	// printed, and the secret used to travel with it.
+	for _, url := range []string{
+		"https://u:s3cr3ttoken@github.com/onlyhost",
+		"https://u:s3cr3t/token@github.com/o/r.git",
+	} {
+		_, err := Path(url)
+		require.Errorf(t, err, "url %q", url)
+		assert.NotContainsf(t, err.Error(), "s3cr3t", "url %q leaked its credential", url)
+	}
 }
 
 func TestEscapePath(t *testing.T) {
@@ -174,7 +186,12 @@ func TestRedact(t *testing.T) {
 		{name: "password", url: "https://u:p@github.com/o/r.git", want: "https://github.com/o/r.git"},
 		{name: "user only", url: "ssh://git@github.com/o/r", want: "ssh://github.com/o/r"},
 		{name: "scp-like", url: "git@github.com:o/r.git", want: "github.com:o/r.git"},
-		{name: "nothing to redact", url: "https://github.com/o/r", want: "https://github.com/o/r"},
+		{name: "nothing to redact", url: shortHTTPS, want: shortHTTPS},
+		// The one that used to leak: a credential holding a "/" put the
+		// authority split before the "@", so the "@" was never found and the
+		// secret was echoed verbatim into a diagnostic.
+		{name: "slash inside the credential", url: "https://user:pa/ss@github.com/o/r.git", want: "https://github.com/o/r.git"},
+		{name: "slash and no password", url: "https://to/ken@github.com/o/r", want: shortHTTPS},
 	}
 
 	for _, tt := range tests {
@@ -257,6 +274,18 @@ func TestOrigin(t *testing.T) {
 		_, err := Origin(ctx, t.TempDir())
 		require.ErrorIs(t, err, context.Canceled)
 		require.NotErrorIs(t, err, ErrNoOrigin)
+	})
+
+	// classify is shared by every git call, so its cancellation message must
+	// not name one of them. A Ctrl-C during `devctl setup hooks`, which never
+	// asks for a remote, used to report "reading the origin".
+	t.Run("cancellation does not name an operation that never ran", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		_, err := Root(ctx, t.TempDir())
+		require.ErrorIs(t, err, context.Canceled)
+		assert.NotContains(t, err.Error(), "origin")
 	})
 
 	t.Run("git not installed", func(t *testing.T) {

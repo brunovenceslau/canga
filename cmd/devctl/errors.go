@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/brunovenceslau/devctl/internal/repo"
+	"github.com/brunovenceslau/devctl/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -62,7 +63,11 @@ func exitCode(err error) int {
 		// to retry, which is what separates it from a runtime failure.
 		errors.Is(err, repo.ErrNoOrigin),
 		errors.Is(err, repo.ErrBadURL),
-		errors.Is(err, repo.ErrNotARepository):
+		errors.Is(err, repo.ErrNotARepository),
+		// An id that is not one ordinary path segment is a typo on the command
+		// line. Exit 1 would tell a caller to retry, and retrying a typo never
+		// stops.
+		errors.Is(err, store.ErrInvalidID):
 		return exitUsage
 	default:
 		return exitFailure
