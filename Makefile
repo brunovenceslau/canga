@@ -38,6 +38,15 @@ RACE_STORE_DIR ?=
 # platform-specific compile error.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
 
+# Prerequisite order is load-bearing in this file, and `make -j` does not keep
+# it: GNU make only promises left-to-right processing in serial mode. `release`
+# lists release-preflight before ci so that a refusal costs a second instead of
+# four cross-compiles, and under -j make would start both together and let ci
+# run to completion after preflight had already failed. `test` and `race` also
+# both run `go test -race` over the same packages, which is no faster in
+# parallel. Scoping this to one target needs make 4.4; macOS ships 3.81.
+.NOTPARALLEL:
+
 .DEFAULT_GOAL := help
 .PHONY: help build cross install fmt fix pre-commit lint license-check test race vuln ci release release-preflight tools tool-lint tool-vuln tool-release clean
 
@@ -159,8 +168,14 @@ ci: lint license-check cross test vuln
 # --clobber so that a second run replaces the assets instead of refusing. A
 # release built twice from one tag is a normal thing to want; a half-uploaded
 # one that cannot be repaired is not.
+# set -e is not decoration. The whole recipe is ONE logical line, so it runs in
+# ONE shell and make judges it by the LAST command's status — an echo. Without
+# it, goreleaser could die after three of four platforms, `gh ... --clobber`
+# would attach that partial set, and the target would report success and exit 0.
+# Measured, not reasoned about: a recipe of `false; echo done` exits 0.
 release: release-preflight ci
-	@tag=$$(git describe --tags --exact-match); \
+	@set -e; \
+	tag=$$(git describe --tags --exact-match); \
 	echo "building $$tag"; \
 	goreleaser release --clean --skip=publish; \
 	echo "uploading to the $$tag release"; \
@@ -168,6 +183,13 @@ release: release-preflight ci
 	echo "release: $$tag now carries $$(ls dist/*.tar.gz | wc -l | tr -d ' ') archives and checksums.txt"
 
 # Everything that can refuse a release, and nothing that takes time.
+#
+# Two of the checks are about the tag being the SAME tag everywhere. HEAD with
+# two tags on it has no single answer to "which release is this", and
+# `git describe` answers anyway, silently, while GoReleaser resolves the tag
+# independently — so the archives can end up named after one tag and attached to
+# the release of the other. And a tag that was moved locally after being pushed
+# would attach artifacts to a release pointing at another commit.
 #
 # It is a SEPARATE target, and first in release's prerequisite list, so every
 # refusal lands in a second. Folded into the recipe these checks would run after
@@ -182,9 +204,35 @@ release-preflight:
 	  echo "goreleaser is not installed; run 'make tool-release'" >&2; exit 1; }
 	@command -v gh >/dev/null 2>&1 || { \
 	  echo "gh is not installed; it is what uploads the artifacts" >&2; exit 1; }
-	@tag=$$(git describe --tags --exact-match 2>/dev/null); \
-	if [ -z "$$tag" ]; then \
+	@set -e; \
+	tags=$$(git tag --points-at HEAD); \
+	count=$$(printf '%s' "$$tags" | grep -c . || true); \
+	if [ "$$count" -eq 0 ]; then \
 	  echo "HEAD carries no tag: a release is built from the tag it is named after" >&2; \
+	  exit 1; \
+	fi; \
+	if [ "$$count" -gt 1 ]; then \
+	  echo "HEAD carries $$count tags, so which release this is has no answer:" >&2; \
+	  printf '    %s\n' $$tags >&2; \
+	  echo "git describe would pick one silently and GoReleaser might pick the other," >&2; \
+	  echo "which attaches archives named after one tag to the release of the other." >&2; \
+	  exit 1; \
+	fi; \
+	tag=$$(printf '%s' "$$tags"); \
+	here=$$(git rev-parse "$$tag^{commit}"); \
+	there=$$(git ls-remote origin "refs/tags/$$tag^{}" | cut -f1); \
+	if [ -z "$$there" ]; then \
+	  there=$$(git ls-remote origin "refs/tags/$$tag" | cut -f1); \
+	fi; \
+	if [ -z "$$there" ]; then \
+	  echo "$$tag is not on the remote yet; push it before building from it:" >&2; \
+	  echo "    git push origin $$tag" >&2; \
+	  exit 1; \
+	fi; \
+	if [ "$$here" != "$$there" ]; then \
+	  echo "$$tag here is $$here, but on the remote it is $$there." >&2; \
+	  echo "Artifacts built from this tree would be attached to a release naming" >&2; \
+	  echo "another commit, and stamped with a commit that release does not contain." >&2; \
 	  exit 1; \
 	fi; \
 	if ! gh release view "$$tag" >/dev/null 2>&1; then \
@@ -193,7 +241,7 @@ release-preflight:
 	  echo "    gh release create $$tag --generate-notes" >&2; \
 	  exit 1; \
 	fi; \
-	echo "release-preflight: $$tag is tagged here and has a release to attach to"
+	echo "release-preflight: $$tag is the only tag here, matches the remote, and has a release"
 
 # Dev tools are PINNED here and installed with `go install`, not carried as
 # go.mod `tool` directives: golangci-lint and goreleaser each drag a module graph

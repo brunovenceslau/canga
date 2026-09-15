@@ -357,12 +357,30 @@ costs a second rather than a four-platform build:
 | GoReleaser is not installed | `make tool-release` |
 | `gh` is not installed | install `gh` |
 | HEAD carries no tag | tag the commit you are releasing |
+| HEAD carries more than one tag | delete the tag you are not releasing |
+| The tag is not on the remote | `git push origin <tag>` |
+| The tag names a different commit on the remote | force-push the tag, or build from the commit the release already names |
 | The tag has no release on GitHub | create the release, step 2 above |
 | The working tree is dirty | commit or stash first. GoReleaser enforces this one |
+
+The three tag checks exist because the tag is resolved twice: `make release`
+reads it to pick the release to upload to, and GoReleaser reads it again to name
+the archives and stamp `main.version`. Two tags on one commit let those answers
+differ, which attaches archives named after one tag to the release of the other.
+A tag moved locally after being pushed attaches artifacts to a release that
+names a different commit.
 
 `make ci` then runs before the build. A release is the one build nobody
 re-checks afterwards, and while the Release workflow cannot start a job, `make
 ci` is the only gate between a broken tree and a published binary.
+
+This procedure assumes `.github/workflows/release.yml` is not running. That
+workflow triggers on a pushed `v*` tag and creates the release itself, so step 1
+would produce the release before step 2 gets to, with workflow notes rather than
+the ones you meant, and `make release` would then replace its artifacts with
+locally built ones. GitHub Actions currently cannot start a job on the account,
+which is why the two paths do not collide today. Whether to keep both, or retire
+the workflow now that the local path exists, is still open.
 
 `make release` calls GoReleaser rather than packaging with `tar` and `shasum`,
 so `.goreleaser.yml` stays the single definition of the artifact format. The
