@@ -54,7 +54,7 @@ func TestSyncCmd_ReportsWhatItRefused(t *testing.T) {
 	require.NoError(t, err, "a diverged branch is a normal outcome, not a failure")
 	assert.Empty(t, stdout, "nothing moved, so there is no record")
 	assert.Contains(t, stderr, "skip main")
-	assert.Contains(t, stderr, "not a fast-forward")
+	assert.Contains(t, stderr, "fast-forward", "git's own refusal reaches the user")
 }
 
 //nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
@@ -83,6 +83,38 @@ func TestSyncCmd_ExitCodes(t *testing.T) {
 	_, err = execute(t, "sync", "/some/path")
 	require.Error(t, err)
 	assert.Equal(t, exitUsage, exitCode(err))
+}
+
+// A fetch that cannot complete is a RUNTIME failure: the remote or the network
+// is the problem and the same command is worth running again. Pinned here
+// because the code it exits with is documented, and it is reached through
+// exitCode's default branch, where nothing else would notice it moving.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
+func TestSyncCmd_AFailedFetchIsARuntimeFailure(t *testing.T) {
+	upstream, local := syncFixture(t)
+	require.NoError(t, os.RemoveAll(upstream))
+
+	_, err := execute(t, "sync", "-C", local)
+	require.ErrorIs(t, err, repo.ErrFetchFailed)
+	assert.Equal(t, exitFailure, exitCode(err))
+}
+
+// A branch with nothing to bring in is the common case. It prints nothing at
+// all, so a sweep across a machine is not a wall of "already up to date".
+//
+//nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
+func TestSyncCmd_SaysNothingWhenThereIsNothingToDo(t *testing.T) {
+	_, local := syncFixture(t)
+
+	// Sync once to catch up, then again with nothing left to do.
+	_, _, err := executeSplit(t, "sync", "-C", local)
+	require.NoError(t, err)
+
+	stdout, stderr, err := executeSplit(t, "sync", "-C", local)
+	require.NoError(t, err)
+	assert.Empty(t, stdout)
+	assert.Empty(t, stderr)
 }
 
 func TestSyncCmd_IsRegistered(t *testing.T) {

@@ -206,8 +206,10 @@ find ~/src -name .git -maxdepth 4 -type d -exec dirname {} \; | while read -r r;
 done
 ```
 
-A branch that moved is printed on stdout as `<branch><TAB><upstream>`, one per
-line, so a sweep pipes. Everything else goes to stderr.
+A branch that MOVED is printed on stdout as `<branch><TAB><upstream>`, one per
+line, so a sweep pipes and the output is a change log rather than an inventory.
+A branch with nothing to bring in prints nothing at all. Refusals and the
+dirty-tree notice go to stderr.
 
 ### What it never does
 
@@ -218,17 +220,26 @@ repository on a machine without reading them first.
 | Situation | What happens |
 | --- | --- |
 | Modified tracked files | The run stops before any branch is touched, and says so. Exit 0. |
-| Untracked files only | The sync proceeds. A fast-forward never touches an untracked file. |
-| Branch diverged from its upstream | Reported on stderr and left exactly where it is. Exit 0. |
+| Untracked files only | The tree does not count as dirty, and the sync proceeds. |
+| Branch already level with, or ahead of, its upstream | Nothing to bring in, and nothing printed. |
+| Branch diverged from its upstream | Reported on stderr in git's own words, and left exactly where it is. Exit 0. |
+| Branch git refuses for another reason | Same: git's words are printed rather than a guess at them. A branch checked out in a linked worktree, a rebase in progress, or an incoming commit that would overwrite an untracked file all land here. |
 | Branch with no upstream | Left out of the report. Nothing was ever asked of it. |
 | Detached HEAD | Not an error. Every branch is updated without a checkout. |
 | Fetch failed | Exit 1. Deciding branch states against a stale view of the remote would be guessing. |
-| Not a repository | Exit 2. |
+| Interrupted with Ctrl-C | Exit 1, naming the cancellation. A branch that was never asked about is never reported as refused. |
+| Bare repository, or not a repository | Exit 2. Both arms below need a working tree. |
 
-The checked-out branch advances with `git merge --ff-only`, which refuses rather
-than touch a working tree it would have to change. Every other branch advances
-with `git fetch . <upstream>:<branch>`, and the missing `+` in front of that
-refspec is the safety property itself: without it git refuses a non
+Each branch is asked first whether its upstream is already an ancestor of it. If
+it is, there is nothing to fast-forward and nothing is run. That question is not
+an optimization: without it the two arms below disagree about the same
+repository, because `merge --ff-only` answers "Already up to date" for a branch
+that is ahead of its upstream while `fetch` refuses the same state.
+
+The checked-out branch then advances with `git merge --ff-only`, which refuses
+rather than touch a working tree it would have to change. Every other branch
+advances with `git fetch . <upstream>:<branch>`, and the missing `+` in front of
+that refspec is the safety property itself: without it git refuses a non
 fast-forward update instead of overwriting the branch.
 
 The fetch carries the same transport hardening as `devctl clone`.

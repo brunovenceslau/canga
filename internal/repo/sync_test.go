@@ -4,6 +4,7 @@
 package repo
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,7 +66,7 @@ func TestSync(t *testing.T) {
 		require.Len(t, result.Branches, 1)
 		assert.Equal(t, mainBranch, result.Branches[0].Branch)
 		assert.Equal(t, "origin/"+mainBranch, result.Branches[0].Upstream)
-		assert.True(t, result.Branches[0].Advanced)
+		assert.Equal(t, BranchAdvanced, result.Branches[0].State)
 
 		assert.Equal(t, head(t, upstream, "HEAD"), head(t, local, "HEAD"))
 		// The merge arm has to move the working tree with the ref, or the
@@ -88,7 +89,7 @@ func TestSync(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, result.Dirty)
 		require.Len(t, result.Branches, 1)
-		assert.True(t, result.Branches[0].Advanced)
+		assert.Equal(t, BranchAdvanced, result.Branches[0].State)
 		assert.FileExists(t, filepath.Join(local, "scratch"), "and it is still there")
 	})
 
@@ -127,8 +128,49 @@ func TestSync(t *testing.T) {
 		result, err := Sync(t.Context(), local)
 		require.NoError(t, err)
 		require.Len(t, result.Branches, 1)
-		assert.False(t, result.Branches[0].Advanced)
+		assert.Equal(t, BranchRefused, result.Branches[0].State)
+		require.Error(t, result.Branches[0].Refusal)
+		assert.Contains(t, result.Branches[0].Refusal.Error(), "fast-forward",
+			"git's own words travel, rather than a guess at them")
 		assert.Equal(t, before, head(t, local, "HEAD"), "the local commit is still there")
+	})
+	// A branch that is AHEAD of its upstream has nothing to bring in. It must
+	// read the same way on both arms of advance, and `merge --ff-only` answering
+	// "Already up to date" with exit 0 is exactly what would otherwise report it
+	// as a branch that moved.
+	t.Run("a branch ahead of its upstream has nothing to do", func(t *testing.T) {
+		hermeticGit(t)
+
+		_, local := syncPair(t)
+		commitFile(t, local, "mine", "mine\n")
+		before := head(t, local, "HEAD")
+
+		result, err := Sync(t.Context(), local)
+		require.NoError(t, err)
+		require.Len(t, result.Branches, 1)
+		assert.Equal(t, BranchUpToDate, result.Branches[0].State)
+		assert.Equal(t, before, head(t, local, "HEAD"))
+	})
+
+	// The same state, on the other arm. Before the ancestor check these two
+	// disagreed: this one was refused while the one above claimed to advance.
+	t.Run("an ahead branch that is not checked out reads the same way", func(t *testing.T) {
+		hermeticGit(t)
+
+		upstream, local := syncPair(t)
+		runGit(t, "-C", upstream, "checkout", "-q", "-b", "feature")
+		commitFile(t, upstream, "feature-file", "f\n")
+		runGit(t, "-C", upstream, "checkout", "-q", mainBranch)
+
+		runGit(t, "-C", local, "fetch", "-q", "origin")
+		runGit(t, "-C", local, "branch", "feature", "origin/feature")
+		runGit(t, "-C", local, "checkout", "-q", "feature")
+		commitFile(t, local, "local-only", "l\n")
+		runGit(t, "-C", local, "checkout", "-q", mainBranch)
+
+		result, err := Sync(t.Context(), local)
+		require.NoError(t, err)
+		assert.Equal(t, BranchUpToDate, stateOf(t, result, "feature"))
 	})
 }
 
@@ -155,9 +197,11 @@ func TestSync_OtherBranches(t *testing.T) {
 
 		result, err := Sync(t.Context(), local)
 		require.NoError(t, err)
-		assert.Equal(t, mainBranch, currentBranch(t.Context(), local), "sync never changes the checkout")
+		checkedOut, err := currentBranch(t.Context(), local)
+		require.NoError(t, err)
+		assert.Equal(t, mainBranch, checkedOut, "sync never changes the checkout")
 		assert.Equal(t, head(t, upstream, "feature"), head(t, local, "feature"))
-		assert.True(t, advanced(t, result, "feature"))
+		assert.Equal(t, BranchAdvanced, stateOf(t, result, "feature"))
 	})
 
 	t.Run("a diverged branch that is not checked out is preserved", func(t *testing.T) {
@@ -184,7 +228,7 @@ func TestSync_OtherBranches(t *testing.T) {
 
 		result, err := Sync(t.Context(), local)
 		require.NoError(t, err)
-		assert.False(t, advanced(t, result, "feature"))
+		assert.Equal(t, BranchRefused, stateOf(t, result, "feature"))
 		assert.Equal(t, before, head(t, local, "feature"))
 	})
 
@@ -200,7 +244,7 @@ func TestSync_OtherBranches(t *testing.T) {
 		result, err := Sync(t.Context(), local)
 		require.NoError(t, err)
 		require.Len(t, result.Branches, 1)
-		assert.True(t, result.Branches[0].Advanced)
+		assert.Equal(t, BranchAdvanced, result.Branches[0].State)
 		assert.Equal(t, head(t, upstream, "HEAD"), head(t, local, mainBranch))
 	})
 
@@ -217,7 +261,7 @@ func TestSync_OtherBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, result.Branches, 1, "only the tracking branch is reported")
 		assert.Equal(t, mainBranch, result.Branches[0].Branch)
-		assert.True(t, result.Branches[0].Advanced, "and it still synced")
+		assert.Equal(t, BranchAdvanced, result.Branches[0].State, "and it still synced")
 	})
 }
 
@@ -244,19 +288,62 @@ func TestSync_Refusals(t *testing.T) {
 		_, err := Sync(t.Context(), local)
 		require.ErrorIs(t, err, ErrFetchFailed)
 	})
+
+	// A bare repository has no working tree, so neither arm of advance can move
+	// a branch in it. The zsh original gated on `rev-parse --git-dir`, which a
+	// bare repository passes, and then failed branch by branch; this refuses up
+	// front, and git's own words say why.
+	t.Run("a bare repository is refused", func(t *testing.T) {
+		hermeticGit(t)
+
+		bare := filepath.Join(t.TempDir(), "bare.git")
+		runGit(t, "init", "-q", "--bare", bare)
+
+		_, err := Sync(t.Context(), bare)
+		require.ErrorIs(t, err, ErrNotARepository)
+		assert.Contains(t, err.Error(), "work tree")
+	})
+
+	// The one a review found: every helper below the fetch answers a failure
+	// with a legitimate-looking value — "not a fast-forward", "detached HEAD",
+	// "no upstream" — so a Ctrl-C used to be reported as a dozen refused
+	// branches and an exit code of 0. A failure to ASK is not an answer.
+	t.Run("a cancelled context is never read as an answer", func(t *testing.T) {
+		hermeticGit(t)
+
+		_, local := syncPair(t)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		_, err := advance(ctx, local, mainBranch, "origin/"+mainBranch, true)
+		require.ErrorIs(t, err, context.Canceled)
+
+		_, err = currentBranch(ctx, local)
+		require.ErrorIs(t, err, context.Canceled)
+
+		_, _, err = upstreamOf(ctx, local, mainBranch)
+		require.ErrorIs(t, err, context.Canceled)
+
+		_, err = isDirty(ctx, local)
+		require.ErrorIs(t, err, context.Canceled)
+
+		_, err = Sync(ctx, local)
+		require.ErrorIs(t, err, context.Canceled)
+	})
 }
 
-// advanced reports what a run did to one named branch.
-func advanced(t *testing.T, result SyncResult, branch string) bool {
+// stateOf reports what a run did to one named branch.
+func stateOf(t *testing.T, result SyncResult, branch string) BranchState {
 	t.Helper()
 
 	for _, got := range result.Branches {
 		if got.Branch == branch {
-			return got.Advanced
+			return got.State
 		}
 	}
 
 	t.Fatalf("branch %q is not in the result", branch)
 
-	return false
+	return BranchUpToDate
 }

@@ -164,3 +164,30 @@ func gitSaid(exit *exec.ExitError) string {
 
 	return ": " + first
 }
+
+// gitStatus runs a git command that ANSWERS with its exit status, and reports
+// whether it exited zero.
+//
+// It exists for the queries where a non-zero status is a legitimate answer
+// rather than a failure — `merge-base --is-ancestor` being the one that matters
+// here. Collapsing the two is what lets a cancelled context read as "no", which
+// is a wrong answer delivered confidently.
+func gitStatus(ctx context.Context, dir string, args ...string) (bool, error) {
+	//nolint:gosec // as in gitWith: constant program name, separate arguments.
+	err := exec.CommandContext(ctx, "git", gitArgs(dir, nil, args)...).Run()
+	if err == nil {
+		return true, nil
+	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, fmt.Errorf("running git %s in %s: %w", args[0], dir, ctxErr)
+	}
+
+	// Exit 1 is the "no" this is asked for. Anything else is git failing to
+	// answer at all, which is not a no.
+	if exit, ran := errors.AsType[*exec.ExitError](err); ran && exit.ExitCode() == 1 {
+		return false, nil
+	}
+
+	return false, classify(ctx, dir, ErrGitRefused, err)
+}
