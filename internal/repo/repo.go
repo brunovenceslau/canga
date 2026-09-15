@@ -33,6 +33,11 @@ var (
 	// from ErrNoOrigin because it is a different problem with a different
 	// answer: install git, rather than run the command somewhere else.
 	ErrGitMissing = errors.New("git is not installed")
+
+	// ErrNotARepository reports a directory that is not inside a git working
+	// tree. Every devctl subcommand is keyed by a repository, so this is the
+	// caller standing in the wrong place rather than anything having failed.
+	ErrNotARepository = errors.New("not inside a git repository")
 )
 
 // segmentPattern is what a host, owner, or repository segment may look like.
@@ -57,24 +62,87 @@ func isSafeSegment(segment string) bool {
 }
 
 // Origin returns the fetch URL of dir's `origin` remote.
-//
-// git is invoked with separate arguments and no shell, so neither dir nor
-// anything git echoes back can be interpreted as a command.
 func Origin(ctx context.Context, dir string) (string, error) {
-	//nolint:gosec // the program name is a constant and every argument is passed
-	// separately, so no shell ever parses dir — which is the whole point of not
-	// building a command string.
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "remote", "get-url", "origin").Output()
+	url, err := git(ctx, dir, ErrNoOrigin, "remote", "get-url", "origin")
 	if err != nil {
-		return "", classify(ctx, dir, err)
+		return "", err
 	}
 
-	url := strings.TrimSpace(string(out))
 	if url == "" {
 		return "", fmt.Errorf("%w in %s", ErrNoOrigin, dir)
 	}
 
 	return url, nil
+}
+
+// Root returns the top level of the working tree dir belongs to. dir may be any
+// subdirectory of it.
+func Root(ctx context.Context, dir string) (string, error) {
+	return git(ctx, dir, ErrNotARepository, "rev-parse", "--show-toplevel")
+}
+
+// CommonDir returns the git directory hooks are run from, as an absolute path.
+// It is the COMMON one, so a linked worktree resolves to the hooks its main
+// working tree uses rather than to a directory git never reads.
+func CommonDir(ctx context.Context, dir string) (string, error) {
+	return git(ctx, dir, ErrNotARepository, "rev-parse", "--path-format=absolute", "--git-common-dir")
+}
+
+// Config reads one git configuration value, or "" if it is not set.
+//
+// It does not go through the shared helper, because it needs the exit code the
+// helper deliberately hides: git reports an unset key by exiting 1 with no
+// output, which is an ordinary state rather than a failure.
+//
+// Two things about what it returns. It is the EFFECTIVE value, so a key set
+// globally is reported even though the repository does not set it, which is
+// right: the effective value is the one git will obey. And `git config --get`
+// does not need a repository at all, so outside one this reads the global
+// configuration rather than failing. Callers that mean the repository's own
+// setting resolve Root first, which is where the real refusal happens.
+//
+// SetConfig, by contrast, writes LOCALLY. Reading what git will obey and
+// writing only where devctl was invited are deliberately different scopes.
+func Config(ctx context.Context, dir, key string) (string, error) {
+	//nolint:gosec // the program name is a constant and every argument is passed
+	// separately, so no shell ever parses dir or key.
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", key).Output()
+	if err == nil {
+		return strings.TrimSpace(string(out)), nil
+	}
+
+	if exit, ran := errors.AsType[*exec.ExitError](err); ran && exit.ExitCode() == 1 {
+		return "", nil
+	}
+
+	return "", classify(ctx, dir, ErrNotARepository, err)
+}
+
+// SetConfig writes one git configuration value into the repository's own
+// config, never a global or system one.
+func SetConfig(ctx context.Context, dir, key, value string) error {
+	_, err := git(ctx, dir, ErrNotARepository, "config", key, value)
+
+	return err
+}
+
+// git runs one git command in dir and returns its trimmed stdout.
+//
+// refused is the sentinel to report when git RAN and refused, which is the case
+// that means the caller pointed devctl somewhere wrong. A missing binary or a
+// cancelled context are classified separately; see classify.
+func git(ctx context.Context, dir string, refused error, args ...string) (string, error) {
+	full := append([]string{"-C", dir}, args...)
+
+	//nolint:gosec // the program name is a constant and every argument is passed
+	// separately, so no shell ever parses dir — which is the whole point of not
+	// building a command string.
+	out, err := exec.CommandContext(ctx, "git", full...).Output()
+	if err != nil {
+		return "", classify(ctx, dir, refused, err)
+	}
+
+	return strings.TrimSpace(string(out)), nil
 }
 
 // classify says what actually went wrong when git could not be asked.
@@ -83,7 +151,7 @@ func Origin(ctx context.Context, dir string) (string, error) {
 // or a Ctrl-C, with "no origin remote in <dir>" — which is not just misleading
 // but the wrong exit code, since those are runtime failures rather than the
 // caller having pointed devctl at the wrong directory.
-func classify(ctx context.Context, dir string, err error) error {
+func classify(ctx context.Context, dir string, refused, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("reading the origin of %s: %w", dir, ctxErr)
 	}
@@ -96,7 +164,7 @@ func classify(ctx context.Context, dir string, err error) error {
 	// will not read. All three are fixed by pointing devctl somewhere else or by
 	// changing git's configuration, never by running the same command again.
 	if exit, ran := errors.AsType[*exec.ExitError](err); ran {
-		return fmt.Errorf("%w in %s%s", ErrNoOrigin, dir, gitSaid(exit))
+		return fmt.Errorf("%w: %s%s", refused, dir, gitSaid(exit))
 	}
 
 	return fmt.Errorf("running git in %s: %w", dir, err)

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/brunovenceslau/devctl/internal/store"
@@ -16,7 +17,13 @@ import (
 // death; reporting it instead would make `devctl reminders list | head` look
 // like a broken command rather than a finished one.
 func printf(cmd *cobra.Command, format string, args ...any) {
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), format, args...)
+	fprintf(cmd.OutOrStdout(), format, args...)
+}
+
+// fprintf writes to any of a command's streams, dropping the write error for
+// the reason given above printf.
+func fprintf(out io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(out, format, args...)
 }
 
 func newRemindersCmd(a *app) *cobra.Command {

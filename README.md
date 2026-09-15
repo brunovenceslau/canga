@@ -138,8 +138,25 @@ commit through commits something you never read.
 Install it:
 
 ```sh
-git config core.hooksPath .devctl/hooks
+devctl setup hooks
 ```
+
+That points git's `core.hooksPath` at `.devctl/hooks`, which covers every hook
+at once and is undone with `git config --unset core.hooksPath`. git reads hooks
+from only one directory, so anything already in `.git/hooks` stops running;
+`devctl setup hooks` says so when that is the case, and `--symlink` links each
+hook individually instead, which keeps them.
+
+`--force` replaces a conflicting setting and moves any file in the way to
+`<name>.bak`. It never deletes, and it never overwrites an existing `.bak`: the
+first backup is the pristine one.
+
+The command works from any subdirectory of the repository, and fails with the
+reason if it is run outside one.
+
+The hooks are the repository's own tracked files, so installing them means its
+content runs on every commit. Install them in repositories whose contents you
+would run anyway.
 
 `make pre-commit` is deliberately a fast subset rather than `make ci`. A hook
 slow enough to be annoying is a hook that gets `--no-verify`d, and then it

@@ -61,7 +61,8 @@ func exitCode(err error) int {
 		// from, is the caller pointing devctl somewhere wrong: there is nothing
 		// to retry, which is what separates it from a runtime failure.
 		errors.Is(err, repo.ErrNoOrigin),
-		errors.Is(err, repo.ErrBadURL):
+		errors.Is(err, repo.ErrBadURL),
+		errors.Is(err, repo.ErrNotARepository):
 		return exitUsage
 	default:
 		return exitFailure

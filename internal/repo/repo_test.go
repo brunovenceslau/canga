@@ -198,8 +198,8 @@ func TestOrigin(t *testing.T) {
 
 	t.Run("reads the origin url", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "repo")
-		git(t, "init", "-q", "-b", "main", dir)
-		git(t, "-C", dir, "remote", "add", "origin", "git@github.com:acme/widget.git")
+		runGit(t, "init", "-q", "-b", "main", dir)
+		runGit(t, "-C", dir, "remote", "add", "origin", "git@github.com:acme/widget.git")
 
 		got, err := Origin(t.Context(), dir)
 		require.NoError(t, err)
@@ -212,9 +212,9 @@ func TestOrigin(t *testing.T) {
 	// asserts, rather than assuming it.
 	t.Run("an insteadOf rewrite does not move the repository", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "repo")
-		git(t, "init", "-q", "-b", "main", dir)
-		git(t, "-C", dir, "remote", "add", "origin", "git@github.com:acme/widget.git")
-		git(t, "-C", dir, "config", "url.https://github.com/.insteadOf", "git@github.com:")
+		runGit(t, "init", "-q", "-b", "main", dir)
+		runGit(t, "-C", dir, "remote", "add", "origin", "git@github.com:acme/widget.git")
+		runGit(t, "-C", dir, "config", "url.https://github.com/.insteadOf", "git@github.com:")
 
 		origin, err := Origin(t.Context(), dir)
 		require.NoError(t, err)
@@ -241,7 +241,7 @@ func TestOrigin(t *testing.T) {
 
 	t.Run("repository with no origin", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "repo")
-		git(t, "init", "-q", "-b", "main", dir)
+		runGit(t, "init", "-q", "-b", "main", dir)
 
 		_, err := Origin(t.Context(), dir)
 		require.ErrorIs(t, err, ErrNoOrigin)
@@ -268,6 +268,70 @@ func TestOrigin(t *testing.T) {
 	})
 }
 
+//nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
+func TestRootAndCommonDir(t *testing.T) {
+	hermeticGit(t)
+
+	dir := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "init", "-q", "-b", "main", dir)
+
+	sub := filepath.Join(dir, "a", "b")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	// Resolved from a SUBDIRECTORY: every devctl command is keyed by a
+	// repository, and a caller is rarely standing at its top level.
+	root, err := Root(t.Context(), sub)
+	require.NoError(t, err)
+	assert.Equal(t, resolve(t, dir), resolve(t, root))
+
+	common, err := CommonDir(t.Context(), sub)
+	require.NoError(t, err)
+	assert.True(t, filepath.IsAbs(common), "hooks are written by absolute path, so this must be one")
+	assert.Equal(t, resolve(t, filepath.Join(dir, ".git")), resolve(t, common))
+
+	_, err = Root(t.Context(), t.TempDir())
+	require.ErrorIs(t, err, ErrNotARepository)
+}
+
+//nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
+func TestConfigRoundTrip(t *testing.T) {
+	hermeticGit(t)
+
+	dir := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "init", "-q", "-b", "main", dir)
+
+	// An unset key is an ordinary state, reported as "" rather than an error.
+	// git signals it by exiting 1, which has to be told apart from the 128 a
+	// directory that is not a repository exits with.
+	value, err := Config(t.Context(), dir, "core.hooksPath")
+	require.NoError(t, err)
+	assert.Empty(t, value)
+
+	require.NoError(t, SetConfig(t.Context(), dir, "core.hooksPath", ".devctl/hooks"))
+
+	value, err = Config(t.Context(), dir, "core.hooksPath")
+	require.NoError(t, err)
+	assert.Equal(t, ".devctl/hooks", value)
+
+	// `git config --get` needs no repository, so outside one this reads the
+	// global configuration rather than failing. Pinned because it is surprising:
+	// callers that mean the repository's own setting resolve Root first.
+	outside, err := Config(t.Context(), t.TempDir(), "core.hooksPath")
+	require.NoError(t, err)
+	assert.Empty(t, outside, "the hermetic global config sets nothing")
+}
+
+// resolve follows symlinks so an assertion does not depend on /var being a link
+// to /private/var, which is what macOS makes of a temporary directory.
+func resolve(t *testing.T, path string) string {
+	t.Helper()
+
+	resolved, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+
+	return resolved
+}
+
 // hermeticGit points git at empty system and global config files, so nothing
 // the developer or the sandbox configured can reach a test.
 func hermeticGit(t *testing.T) {
@@ -280,7 +344,7 @@ func hermeticGit(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", global)
 }
 
-func git(t *testing.T, args ...string) {
+func runGit(t *testing.T, args ...string) {
 	t.Helper()
 
 	out, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput()
