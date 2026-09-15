@@ -16,8 +16,10 @@ derived from its `origin` remote. The derivation is deterministic, so
 ## Install
 
 devctl lives in a private repository. Both paths below need a GitHub account
-with access to it: `go install` authenticates through git, and `gh` through your
-`gh auth login` token.
+with access to it. `gh` uses your `gh auth login` token. `go install` reaches
+the repository through git instead, so git needs a credential of its own: run
+`gh auth setup-git` once, or configure an SSH `insteadOf` rewrite. Authenticating
+`gh` alone leaves `go install` unable to fetch the module.
 
 ### Build from source
 
@@ -31,27 +33,42 @@ database, neither of which can read a private repository. `GOBIN` puts the
 binary in a directory on your PATH, because the default, `$(go env GOPATH)/bin`,
 is not on it.
 
-A build from source reports its version as `dev`. The tag is stamped in by the
-release build, and `go install` applies no ldflags.
+`go install` on a module path applies no ldflags, so a binary built this way
+reports its version as `dev`. To stamp the git description in, build from a
+checkout with `make install` instead.
 
 ### Install a release binary
 
 Download with `gh`, verify against the published checksums, then extract:
 
 ```sh
-tag=v0.1.0
+tag=$(gh release view -R brunovenceslau/devctl --json tagName -q .tagName)
 asset=devctl_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64, linux_amd64, linux_arm64
 
-gh release download "$tag" -R brunovenceslau/devctl -p "$asset" -p checksums.txt
-grep "  $asset\$" checksums.txt | shasum -a 256 -c -
+gh release download "$tag" -R brunovenceslau/devctl -p "$asset" -p checksums.txt --clobber
 mkdir -p "$HOME/.local/bin"
-tar -xzf "$asset" -C "$HOME/.local/bin" devctl
+awk -v a="$asset" '$2 == a' checksums.txt | shasum -a 256 -c - \
+  && tar -xzf "$asset" -C "$HOME/.local/bin" devctl
 ```
+
+Read the last two lines as one command. `&&` is what makes the checksum a gate:
+without it a pasted block runs every line in turn, and a `FAILED` verification is
+followed by the extraction it was supposed to stop.
+
+`awk` selects the one line of `checksums.txt` naming this asset, matching the
+filename field for equality. `grep` would read the dots in the filename as
+wildcards. An asset absent from `checksums.txt` yields no line, and `shasum`
+rejects empty input rather than reporting success.
+
+`--clobber` lets you run the block again in a directory that already holds an
+earlier download. Without it `gh` refuses the whole command rather than replace
+a file.
 
 The archive also carries `LICENSE` and `README.md`. Naming `devctl` in the `tar`
 command extracts the binary alone.
 
-Confirm the result:
+Confirm the result. It prints the version, the commit it was built from, and the
+Go version:
 
 ```sh
 devctl --version
@@ -65,22 +82,31 @@ membership, which this tool does not have.
 
 Gatekeeper only evaluates a file carrying the `com.apple.quarantine` extended
 attribute, and that attribute is not part of the download. The program that
-fetched the file decides whether to attach it. A web browser always attaches it.
-`gh`, `curl`, `wget`, and `go install` never do, so the commands above produce a
-binary that runs without a prompt.
+fetched the file decides whether to attach it. Safari, Chrome and Firefox attach
+it. `gh`, `curl`, `wget`, and `go install` do not, so the commands above produce
+a binary that runs without a prompt.
 
-To repair a binary already downloaded through a browser, strip the attribute:
+Ask a specific file whether it carries the attribute:
 
 ```sh
-xattr -d com.apple.quarantine "$HOME/.local/bin/devctl"
+xattr -p com.apple.quarantine <path-to-devctl>
 ```
 
-`xattr -l <file>` prints what a file carries. Empty output means Gatekeeper
-leaves it alone.
+It prints the attribute, or `No such xattr` when there is none. Use it rather
+than `xattr -l`, which lists every extended attribute: a file can carry
+`com.apple.metadata:kMDItemWhereFroms` and nothing else, and Gatekeeper leaves
+that file alone.
+
+To repair a binary that does carry it, strip the attribute:
+
+```sh
+xattr -d com.apple.quarantine <path-to-devctl>
+```
 
 Double-clicking a quarantined archive in Finder copies the attribute onto every
-file it extracts. Extracting the same archive with `tar` on the command line
-does not.
+file it extracts, so the `devctl` it leaves next to the archive is quarantined
+and stays so when you move it. Extracting the same archive with `tar` on the
+command line does not.
 
 ## `devctl reminders`
 
