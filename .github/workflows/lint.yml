@@ -1,0 +1,30 @@
+# Lint. `make tool-lint` installs the version pinned in the Makefile, so CI and
+# a developer's machine run the same linter over the same .golangci.yml.
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - name: Install linter
+        run: make tool-lint
+
+      - name: Lint
+        run: make lint
