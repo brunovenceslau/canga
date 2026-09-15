@@ -27,6 +27,13 @@ func scratchRepo(t *testing.T, names ...string) string {
 	out, err := exec.CommandContext(t.Context(), "git", "init", "-q", "-b", "main", root).CombinedOutput()
 	require.NoErrorf(t, err, "git init: %s", out)
 
+	// Canonicalized, because git reports the RESOLVED top level. On macOS a
+	// temporary directory lives under /var, which is a symlink to /private/var,
+	// so an uncanonicalized path compares unequal to git's answer for the same
+	// directory and the test fails only on the mac.
+	root, err = filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+
 	if len(names) > 0 {
 		require.NoError(t, os.MkdirAll(filepath.Join(root, SourceDir), 0o755))
 	}
