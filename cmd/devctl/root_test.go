@@ -114,6 +114,24 @@ func TestConfig_KeysTheStoreByTheRepository(t *testing.T) {
 		cfg.Dir)
 }
 
+// TestConfig_EncodesCaseInTheDirectory: the directory has to mean the same
+// thing on a case-folding APFS and on a sandbox filesystem that does not fold,
+// which is the boundary a shared store spans. The readable spelling stays in
+// Repo, because that is what each reminder's header records.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
+func TestConfig_EncodesCaseInTheDirectory(t *testing.T) {
+	dir := scratchRepo(t, "git@github.com:Acme/Widget.git")
+
+	cfg, err := (&app{repoDir: dir}).config(t.Context())
+	require.NoError(t, err)
+
+	assert.Equal(t, "github.com/Acme/Widget", cfg.Repo)
+	assert.Equal(t,
+		filepath.Join(os.Getenv("DEVCTL_REMINDERS_DIR"), "github.com", "!acme", "!widget", scopeRepo),
+		cfg.Dir)
+}
+
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestRoot_UsageErrors(t *testing.T) {
 	tests := []struct {

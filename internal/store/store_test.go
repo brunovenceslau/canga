@@ -50,7 +50,17 @@ const (
 	raceFiller = 2000
 )
 
-var raceProcs = flag.Int("race-procs", 4, "writer processes the store race gates fan out to")
+var (
+	raceProcs = flag.Int("race-procs", 4, "writer processes the store race gates fan out to")
+
+	// raceStoreDir runs the gates against a filesystem of the caller's choosing
+	// instead of the default temporary one. It exists because the invariants
+	// this store relies on are the FILESYSTEM's, not Go's: link(2) refusing an
+	// existing name has been measured on ext4 and APFS, and is still unmeasured
+	// across the macOS-to-VM virtiofs boundary a shared store would span.
+	raceStoreDir = flag.String("race-store-dir", "",
+		"parent directory to build the gates' store under (default: a temporary one)")
+)
 
 // report is what a helper process tells its parent. Every field is a COUNT, not
 // a duration: the gate asserts invariants, never timing, so it cannot be made
@@ -326,7 +336,23 @@ func (p *helperProc) wait(t *testing.T) report {
 func pristineStore(t *testing.T) string {
 	t.Helper()
 
-	dir := filepath.Join(t.TempDir(), "store")
+	parent := *raceStoreDir
+	if parent == "" {
+		parent = t.TempDir()
+	}
+
+	// A fresh, uniquely named subdirectory even under a caller-supplied parent:
+	// the gate is only valid against a store this run created, and it must never
+	// be tempted to clear a directory someone else owns.
+	//nolint:usetesting // t.TempDir takes no parent, and pointing the gates at a
+	// chosen filesystem is this helper's entire purpose. When no filesystem is
+	// chosen, parent IS t.TempDir above.
+	dir, err := os.MkdirTemp(parent, "devctl-gate-")
+	require.NoError(t, err)
+
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+
+	dir = filepath.Join(dir, "store")
 
 	reminders, err := Open(Config{Dir: dir, Repo: "example.test/acme/widget", Scope: scopeName})
 	require.NoError(t, err)
