@@ -60,13 +60,31 @@ func releaseTag(version string) (tag string, isRelease bool) {
 		return tag, false
 	}
 
-	// Canonical, not merely valid. semver accepts "v1" and "v1.2" as well as
-	// "v1.2.3", and `git describe --always` falls back to a bare commit hash —
-	// so an all-digit hash like "1234567" normalizes to "v1234567", which IS
-	// valid semver. Such a build would then be treated as release v1234567.0.0,
-	// compare above every real tag, and report "nothing to do" forever. Roughly
-	// one hash in thirty is all digits, so this is a bug that waits.
-	return tag, semver.IsValid(tag) && semver.Canonical(tag) == tag
+	return tag, isReleaseTag(tag)
+}
+
+// isReleaseTag reports whether tag can name a published release. It is the ONE
+// answer to that question: --tag asks it of what the user typed and releaseTag
+// asks it of what the binary reports, and the two disagreeing would make the
+// same string a release on one path and not on the other.
+//
+// Valid semver is not enough on its own. semver accepts a bare major, and
+// `git describe --always` falls back to a bare commit hash — so an all-digit
+// hash like "1234567" normalizes to "v1234567", which IS valid semver, and such
+// a build would read as release 1234567.0.0, compare above every real tag, and
+// answer "nothing to do" forever. Roughly one hash in thirty is all digits.
+//
+// A dot in the version core is what separates the two: a hex hash carries none,
+// and every tag this project publishes carries two. The core is taken before
+// any pre-release, so a dot inside "-rc1.2" cannot vouch for a bare major.
+//
+// It deliberately does NOT demand all three components. "v1.2" is a tag a person
+// could plausibly push, semver orders it correctly, and rejecting it would only
+// move the disagreement rather than remove it.
+func isReleaseTag(tag string) bool {
+	core, _, _ := strings.Cut(tag, "-")
+
+	return semver.IsValid(tag) && strings.Contains(core, ".")
 }
 
 // isNewer reports whether tag names a later release than current. Both sides

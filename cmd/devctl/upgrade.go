@@ -84,15 +84,24 @@ func reportUpgrade(cmd *cobra.Command, options upgrade.Options, result upgrade.R
 		return
 	case result.Installed:
 		fprintf(errOut, "devctl: installed %s over %s at %s\n", result.Release, result.Current, result.Path)
-	case options.Check && result.Newer:
-		fprintf(errOut, "devctl: %s is available, %s is installed; run `devctl upgrade`\n",
-			result.Release, result.Current)
 	case options.Check:
-		fprintf(errOut, "devctl: %s is the newest release, %s is installed; it would replace %s\n",
-			result.Release, result.Current, result.Path)
+		fprintf(errOut, "devctl: %s\n", checkSummary(result))
+		// On its own line, and on BOTH branches. Saying what would happen
+		// without saying where is half an answer, and the file replaced is
+		// resolved through symlinks, so it is not always the path that was typed.
+		fprintf(errOut, "devctl: it would replace %s\n", result.Path)
 	default:
 		fprintf(errOut, "devctl: %s is the newest release; nothing to do\n", result.Release)
 	}
 
 	printf(cmd, "%s\n", result.Release)
+}
+
+// checkSummary is the line --check prints above the path.
+func checkSummary(result upgrade.Result) string {
+	if result.Newer {
+		return result.Release + " is available, " + result.Current + " is installed; run `devctl upgrade`"
+	}
+
+	return result.Release + " is the newest release, " + result.Current + " is installed"
 }

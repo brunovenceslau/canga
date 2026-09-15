@@ -95,6 +95,24 @@ func TestReplace(t *testing.T) {
 		assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
 	})
 
+	// Preserving a deliberate 0o700 is the point; preserving a 0o777 that came
+	// from a zero umask or a FAT volume is preserving a mistake — and it would
+	// put a world-writable executable in the install directory for the window
+	// between staging and rename, before anything has verified it.
+	t.Run("does not carry group and world write bits forward", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := installedBinary(t, dir, installedVersion)
+		require.NoError(t, os.Chmod(path, 0o777))
+
+		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion))
+
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+	})
+
 	// The owner has to be able to run what they just installed, whatever the
 	// file that was there said.
 	t.Run("restores the owner execute bit", func(t *testing.T) {

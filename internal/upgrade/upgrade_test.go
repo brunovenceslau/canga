@@ -5,6 +5,7 @@ package upgrade
 
 import (
 	"encoding/json"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -26,19 +27,21 @@ type fixture struct {
 // releaseFixture builds the release GoReleaser would publish for tag: one
 // archive for this platform, holding a devctl that reports tag, plus the
 // checksums.txt covering it.
-func releaseFixture(t *testing.T, tag string) fixture {
+func releaseFixture(t *testing.T, tag string, extra ...tarEntry) fixture {
 	t.Helper()
 
-	archive := "devctl_" + strings.TrimPrefix(tag, "v") + assetSuffix()
+	entries := append([]tarEntry{{name: licenseName, body: licenseBody}}, extra...)
+	entries = append(entries, tarEntry{name: binaryName, body: string(fakeBinary(tag))})
 
-	files := map[string][]byte{
-		archive: tarGz(t,
-			tarEntry{name: licenseName, body: licenseBody},
-			tarEntry{name: binaryName, body: string(fakeBinary(tag))}),
-	}
+	files := map[string][]byte{archiveName(tag): tarGz(t, entries...)}
 	files[checksumsName] = checksumsFile(files)
 
 	return fixture{tag: tag, files: files}
+}
+
+// archiveName is what GoReleaser calls the archive for this platform.
+func archiveName(tag string) string {
+	return "devctl_" + strings.TrimPrefix(tag, "v") + assetSuffix()
 }
 
 // fakeGitHub serves the three endpoints devctl reads, and nothing else. The
@@ -295,6 +298,43 @@ func TestRunCapsChecksumsSeparatelyFromTheArchive(t *testing.T) {
 
 	_, err := Run(t.Context(), runOptions(t, installedVersion, oversized))
 	require.ErrorIs(t, err, ErrTooLarge)
+}
+
+// TestRunDoesNotCapTheArchiveAtTheChecksumsCeiling is the other half of the
+// pair above, and it is the half that matters in production: the two caps are
+// arguments at one call site, so passing them the wrong way round would cap
+// every real 2 MiB release archive at 64 KiB and break upgrade against every
+// published release. Fixtures are a few hundred bytes, so nothing else in this
+// suite would notice.
+func TestRunDoesNotCapTheArchiveAtTheChecksumsCeiling(t *testing.T) {
+	t.Parallel()
+
+	big := releaseFixture(t, newerVersion, tarEntry{name: licenseName, body: string(incompressible(t, 128<<10))})
+
+	opts := runOptions(t, installedVersion, big)
+
+	archive := big.files[archiveName(newerVersion)]
+	require.Greater(t, len(archive), maxChecksumsBytes,
+		"the fixture only tests anything if its archive is past the checksums ceiling")
+
+	result, err := Run(t.Context(), opts)
+	require.NoError(t, err)
+	assert.True(t, result.Installed)
+}
+
+// incompressible returns n bytes gzip cannot shrink, so a fixture archive can
+// be made to exceed a size cap. Deterministic, so a failure reproduces.
+func incompressible(t *testing.T, n int) []byte {
+	t.Helper()
+
+	noise := make([]byte, n)
+	random := rand.New(rand.NewPCG(1, 2))
+
+	for i := range noise {
+		noise[i] = byte(random.UintN(256))
+	}
+
+	return noise
 }
 
 func TestRunRefusesAReleaseWithNothingForThisPlatform(t *testing.T) {

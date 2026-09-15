@@ -16,6 +16,7 @@ const (
 	installedVersion = "v0.1.0"            // a published release
 	newerVersion     = "v0.2.0"            // a later published release
 	goInstallVersion = "dev"               // what a plain `go build` or `go install` stamps
+	preRelease       = "v1.0.0-rc1"        // a release candidate, which IS a release
 	describedVersion = "v0.1.0-3-gabc1234" // a tree that has moved past its last tag
 	dirtyVersion     = "v0.1.0-dirty"      // uncommitted changes at the tag
 )
@@ -55,7 +56,7 @@ func TestReleaseTag(t *testing.T) {
 	}{
 		{name: "a tag", version: installedVersion, expected: installedVersion, isRelease: true},
 		{name: "a tag as goreleaser spells it", version: "0.1.0", expected: installedVersion, isRelease: true},
-		{name: "a pre-release tag", version: "v1.0.0-rc1", expected: "v1.0.0-rc1", isRelease: true},
+		{name: "a pre-release tag", version: preRelease, expected: preRelease, isRelease: true},
 		{name: "a go install build", version: goInstallVersion, expected: goInstallVersion},
 		// The three git describe shapes. Every one of them is VALID semver that
 		// sorts below the tag it carries, which is why none of them may be
@@ -68,7 +69,11 @@ func TestReleaseTag(t *testing.T) {
 		// An all-digit hash is the one that gets through: "v1234567" is valid
 		// semver, so only the canonical check rejects it.
 		{name: "an all-digit describe hash", version: "1234567", expected: "v1234567"},
-		{name: "a version with no patch", version: "v1.2", expected: "v1.2"},
+		{name: "a bare major is the shape a hash takes", version: "v1", expected: "v1"},
+		// Accepted on purpose. It is a tag a person could push, semver orders it
+		// correctly, and --tag accepts it too — which is the point: one
+		// predicate, so the same string cannot be a release on one path only.
+		{name: "a version with no patch", version: "v1.2", expected: "v1.2", isRelease: true},
 	}
 
 	for _, tt := range tests {
@@ -113,7 +118,7 @@ func TestIsNewer(t *testing.T) {
 		{name: "a later patch", current: installedVersion, tag: "v0.1.1", expected: true},
 		{name: "an earlier release", current: newerVersion, tag: installedVersion},
 		{name: "the same release, spelled differently", current: "0.1.0", tag: installedVersion},
-		{name: "a release over its own pre-release", current: "v1.0.0-rc1", tag: "v1.0.0", expected: true},
+		{name: "a release over its own pre-release", current: preRelease, tag: "v1.0.0", expected: true},
 	}
 
 	for _, tt := range tests {
@@ -135,4 +140,47 @@ func TestSameTag(t *testing.T) {
 	assert.True(t, sameTag(installedVersion, installedVersion))
 	assert.False(t, sameTag(installedVersion, "v0.1.1"))
 	assert.False(t, sameTag("", installedVersion))
+}
+
+// TestReleaseTagAndWantedTagAgree pins the property the shared predicate exists
+// for: --tag asks whether a string names a release, releaseTag asks whether a
+// binary was built from one, and the two must not answer differently about the
+// same spelling.
+//
+// A `git describe` build is deliberately absent: "v0.1.0-3-gabc1234" is not a
+// release BUILD, while as a --tag it is a release that simply does not exist.
+// Those are different questions with different right answers.
+func TestReleaseTagAndWantedTagAgree(t *testing.T) {
+	t.Parallel()
+
+	versions := []string{
+		installedVersion,
+		"v1.2",
+		"v1",
+		"v1234567",
+		goInstallVersion,
+		preRelease,
+		"",
+	}
+
+	for _, version := range versions {
+		t.Run("version "+version, func(t *testing.T) {
+			t.Parallel()
+
+			_, isRelease := releaseTag(version)
+
+			_, err := wantedTag(Options{Tag: version, Current: installedVersion})
+
+			// An empty --tag is not a tag at all, so that one case asks the
+			// other question and is expected to succeed either way.
+			if version == "" {
+				assert.NoError(t, err)
+
+				return
+			}
+
+			assert.Equal(t, isRelease, err == nil,
+				"--tag and the version check must answer the same question the same way")
+		})
+	}
 }

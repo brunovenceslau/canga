@@ -30,8 +30,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"golang.org/x/mod/semver"
 )
 
 var (
@@ -137,7 +135,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 func wantedTag(opts Options) (string, error) {
 	if opts.Tag != "" {
 		tag := normalizeTag(opts.Tag)
-		if !semver.IsValid(tag) {
+		if !isReleaseTag(tag) {
 			return "", fmt.Errorf("%w: %q", ErrBadTag, opts.Tag)
 		}
 

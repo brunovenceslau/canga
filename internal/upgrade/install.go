@@ -26,6 +26,13 @@ const defaultBinaryPerm fs.FileMode = 0o755
 // produced.
 const ownerExec fs.FileMode = 0o100
 
+// groupOtherWrite is the half of the mode that is NOT inherited. Preserving a
+// deliberate 0o700 is the point; preserving a 0o777 that came from a zero
+// umask, or from reading the file off a FAT volume, is preserving a mistake —
+// and it would put a world-writable executable in the install directory during
+// the window between staging and rename, before anything has verified it.
+const groupOtherWrite fs.FileMode = 0o022
+
 // execTimeout bounds the sanity check run against the staged binary. It prints
 // a version string and exits; anything slower is broken.
 const execTimeout = 30 * time.Second
@@ -139,13 +146,15 @@ func replace(ctx context.Context, path string, binary []byte, wantTag string) (e
 // host would otherwise become world-executable on the first upgrade, with
 // nothing said about it — a decision the user made, undone by a command that
 // was only asked to change the version.
+//
+// What is inherited is only the half worth inheriting; see groupOtherWrite.
 func installPerm(path string) fs.FileMode {
 	info, err := os.Stat(path)
 	if err != nil {
 		return defaultBinaryPerm
 	}
 
-	return info.Mode().Perm() | ownerExec
+	return info.Mode().Perm()&^groupOtherWrite | ownerExec
 }
 
 // writeStaged fills the staging file and gets it onto the disk.
