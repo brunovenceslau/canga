@@ -68,10 +68,21 @@ func StampSigning(ctx context.Context, dir string) (Signing, error) {
 		return stamped, nil
 	}
 
-	// The three writes are one decision: a key without commit.gpgsign leaves the
+	// The four writes are one decision: a key without commit.gpgsign leaves the
 	// clone configured to sign and not signing. Written in a fixed order, so a
 	// half-written config after a failure is always the same half.
+	//
+	// gpg.format is written rather than inherited because inheriting it is what
+	// made this break outside the dotfiles framework: git's default format is
+	// openpgp, so a machine that does not set gpg.format=ssh globally answers an
+	// SSH key with `gpg: skipped "…": No secret key` on every commit. This
+	// configuration is SSH signing by definition — it is what the key and the
+	// allowed-signers file are — so the clone says so instead of depending on
+	// the machine to have said it. The cost is deliberate: a machine that signs
+	// with GPG must not hand its key over through DEVCTL_SIGNING_KEY or a global
+	// user.signingkey, because the clone will be configured for SSH regardless.
 	settings := [][2]string{
+		{"gpg.format", "ssh"},
 		{"user.signingkey", key},
 		{"commit.gpgsign", "true"},
 		{"tag.gpgsign", "true"},

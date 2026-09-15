@@ -201,6 +201,24 @@ func TestTargetDir(t *testing.T) {
 		assert.Equal(t, filepath.Join(home, "src", "github.com", "owner", "repo"), got)
 	})
 
+	// The path is printed for `cd $(devctl clone …)` to consume, so a relative
+	// DEVCTL_BASE_DIR must not produce a relative answer.
+	t.Run("absolutizes a relative base", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv(envBaseDir, "relative-base")
+
+		got, err := TargetDir("https://github.com/owner/repo")
+		require.NoError(t, err)
+		require.True(t, filepath.IsAbs(got), "got %q", got)
+
+		// Against the working directory as the process sees it: t.Chdir's
+		// argument can be a symlink, and filepath.Abs joins onto the resolved
+		// one that os.Getwd reports.
+		cwd, err := os.Getwd()
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(cwd, "relative-base", "github.com", "owner", "repo"), got)
+	})
+
 	// The clone layout is the one a human types, so it keeps the repository's
 	// own spelling. Only the reminder store, which is shared between a
 	// case-insensitive and a case-sensitive filesystem, is escaped.

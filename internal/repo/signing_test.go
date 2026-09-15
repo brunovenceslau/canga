@@ -43,6 +43,11 @@ func TestStampSigning(t *testing.T) {
 		assert.Equal(t, "explicit-key", localValue(t, dir, "user.signingkey"))
 		assert.Equal(t, "true", localValue(t, dir, "commit.gpgsign"))
 		assert.Equal(t, "true", localValue(t, dir, "tag.gpgsign"))
+
+		// Without this the clone signs with git's default format, openpgp, and
+		// an SSH key fails every commit on a machine that does not set
+		// gpg.format=ssh globally.
+		assert.Equal(t, "ssh", localValue(t, dir, "gpg.format"))
 		assert.Equal(t, "/etc/allowed_signers", localValue(t, dir, "gpg.ssh.allowedSignersFile"))
 	})
 
@@ -81,6 +86,7 @@ func TestStampSigning(t *testing.T) {
 		assert.False(t, stamped.On())
 		assert.Empty(t, localValue(t, dir, "user.signingkey"))
 		assert.Empty(t, localValue(t, dir, "commit.gpgsign"))
+		assert.Empty(t, localValue(t, dir, "gpg.format"))
 		assert.Empty(t, localValue(t, dir, "gpg.ssh.allowedSignersFile"))
 	})
 
@@ -100,6 +106,7 @@ func TestStampSigning(t *testing.T) {
 		assert.False(t, stamped.On())
 		assert.Equal(t, "/only/signers", localValue(t, dir, "gpg.ssh.allowedSignersFile"))
 		assert.Empty(t, localValue(t, dir, "commit.gpgsign"))
+		assert.Empty(t, localValue(t, dir, "gpg.format"), "nothing to sign with, nothing to declare")
 	})
 
 	// Writes are LOCAL. A tool that stamps a machine's global config while

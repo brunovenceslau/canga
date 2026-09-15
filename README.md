@@ -175,11 +175,19 @@ the fetch reject a malformed object graph rather than write it to disk first.
 ### Signing
 
 After the clone, SSH signing is written into the new repository's **local**
-config: the allowed-signers file when one resolves, and `user.signingkey` plus
-`commit.gpgsign` and `tag.gpgsign` when a key resolves. The fallback reads the
-**global** git config rather than the effective one, so the key is the machine's
-identity and never the local key of whatever repository you ran the command in.
-Nothing global is written.
+config: the allowed-signers file when one resolves, and `gpg.format=ssh`,
+`user.signingkey`, `commit.gpgsign` and `tag.gpgsign` when a key resolves.
+
+`gpg.format` is written rather than inherited. git's default format is openpgp,
+so on a machine that does not set `gpg.format=ssh` globally, a stamped SSH key
+would fail every commit with `gpg: skipped "…": No secret key`. The consequence
+is deliberate: a clone made by `devctl clone` signs with SSH, so do not hand a
+GPG key to `DEVCTL_SIGNING_KEY` or leave one in the global `user.signingkey` and
+expect it to be used here.
+
+The key fallback reads the **global** git config rather than the effective one,
+so the key is the machine's identity and never the local key of whatever
+repository you ran the command in. Nothing global is written.
 
 When neither a key nor an allowed-signers file resolves, the clone is left
 alone, and `devctl` says so on stderr rather than pointing the repository at a

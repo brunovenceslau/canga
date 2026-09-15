@@ -149,6 +149,14 @@ func GlobalConfig(ctx context.Context, key string) (string, error) {
 		return strings.TrimSpace(string(out)), nil
 	}
 
+	// The context is checked FIRST, before the exit status, because cancellation
+	// arrives AS an exit status: CommandContext kills git, and the ExitError that
+	// leaves behind reports -1. Reading that as git's own answer would report
+	// "git exited -1" for a Ctrl-C.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", fmt.Errorf("reading %s from the global git config: %w", key, ctxErr)
+	}
+
 	if exit, ran := errors.AsType[*exec.ExitError](err); ran {
 		// Exit 1 is git's answer for "no such key", which is not a failure here:
 		// most machines set neither of the two keys this reads, and the caller's
@@ -161,9 +169,9 @@ func GlobalConfig(ctx context.Context, key string) (string, error) {
 			key, exit.ExitCode(), gitSaid(exit))
 	}
 
-	// Only a missing binary or a cancelled context can reach classify here, since
-	// every exit status was answered above — which is why the sentinel it is
-	// handed never appears in the message.
+	// Only a missing binary can reach classify here: cancellation and every exit
+	// status were answered above, which is why the sentinel it is handed never
+	// appears in the message.
 	return "", classify(ctx, ".", ErrNotARepository, err)
 }
 

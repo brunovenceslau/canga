@@ -124,18 +124,29 @@ func TargetDir(url string) (string, error) {
 	return filepath.Join(base, filepath.FromSlash(tail)), nil
 }
 
-// BaseDir is the root of the deterministic clone layout.
+// BaseDir is the root of the deterministic clone layout, as an absolute path.
+//
+// Absolute even when DEVCTL_BASE_DIR is not, because the derived path is
+// PRINTED for a caller to use: `cd $(devctl clone <url>)` from another directory
+// needs an answer that does not depend on where devctl was standing. It is also
+// what makes the non-empty check and the clone itself agree about one place.
 func BaseDir() (string, error) {
-	if dir := os.Getenv(envBaseDir); dir != "" {
-		return dir, nil
+	dir := os.Getenv(envBaseDir)
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolving the clone base directory: %w", err)
+		}
+
+		dir = filepath.Join(home, "src")
 	}
 
-	home, err := os.UserHomeDir()
+	absolute, err := filepath.Abs(dir)
 	if err != nil {
-		return "", fmt.Errorf("resolving the clone base directory: %w", err)
+		return "", fmt.Errorf("resolving the clone base directory %s: %w", dir, err)
 	}
 
-	return filepath.Join(home, "src"), nil
+	return absolute, nil
 }
 
 // resolveTarget decides where a clone lands.

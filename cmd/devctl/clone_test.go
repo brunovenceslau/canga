@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -100,16 +101,29 @@ func TestCloneCmd_ExitCodes(t *testing.T) {
 	assert.Equal(t, exitUsage, exitCode(err))
 }
 
-// A repository is a directory, so neither position offers file completion: the
-// URL offers nothing at all, the target offers directories only.
+// Completion is driven through cobra's own `__complete`, not by calling the
+// function directly: a direct call proves what the function returns, and
+// deleting the ValidArgsFunction that wires it to the command would leave that
+// test green while the shell fell back to offering files on the URL position.
 func TestCloneCmd_Completion(t *testing.T) {
 	t.Parallel()
 
-	_, directive := completeCloneArgs(nil, nil, "")
-	assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
+	// cobra renders the directive as the last line, as ":<bitmask>".
+	noFiles := ":" + strconv.Itoa(int(cobra.ShellCompDirectiveNoFileComp))
+	dirsOnly := ":" + strconv.Itoa(int(cobra.ShellCompDirectiveFilterDirs))
 
-	_, directive = completeCloneArgs(nil, []string{"https://example.com/o/r"}, "")
-	assert.Equal(t, cobra.ShellCompDirectiveFilterDirs, directive)
+	out, err := execute(t, "__complete", "clone", "")
+	require.NoError(t, err)
+	assert.Contains(t, out, noFiles, "the url position offers nothing, not files")
+
+	out, err = execute(t, "__complete", "clone", "https://example.com/o/r", "")
+	require.NoError(t, err)
+	assert.Contains(t, out, dirsOnly, "the target position offers directories")
+
+	// -C names a repository, so it completes directories too.
+	out, err = execute(t, "__complete", "--repo", "")
+	require.NoError(t, err)
+	assert.Contains(t, out, dirsOnly)
 }
 
 // The command must be reachable by name, with the help text a user reads before
