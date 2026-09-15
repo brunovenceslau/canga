@@ -42,7 +42,7 @@ Download with `gh`, verify against the published checksums, then extract:
 tag=v0.1.0
 asset=devctl_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64, linux_amd64, linux_arm64
 
-gh release download "$tag" -R brunovenceslau/devctl -p "$asset" -p checksums.txt
+gh release download "$tag" -R brunovenceslau/devctl -p "$asset" -p checksums.txt --clobber
 grep "  $asset\$" checksums.txt | shasum -a 256 -c -
 mkdir -p "$HOME/.local/bin"
 tar -xzf "$asset" -C "$HOME/.local/bin" devctl
@@ -50,6 +50,10 @@ tar -xzf "$asset" -C "$HOME/.local/bin" devctl
 
 The archive also carries `LICENSE` and `README.md`. Naming `devctl` in the `tar`
 command extracts the binary alone.
+
+`--clobber` lets you run the block again in a directory that already holds an
+earlier download. Without it `gh` refuses the whole command rather than replace
+a file. Overwriting is safe here because the next line verifies whatever landed.
 
 Confirm the result:
 
