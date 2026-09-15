@@ -188,8 +188,8 @@ release-preflight:
 	  exit 1; \
 	fi; \
 	if ! gh release view "$$tag" >/dev/null 2>&1; then \
-	  echo "no GitHub release for $$tag yet. Create it first — that is where the" >&2; \
-	  echo "generated notes come from — and then run make release again:" >&2; \
+	  echo "no GitHub release for $$tag yet. Create it first, which is where the" >&2; \
+	  echo "generated notes come from, then run make release again:" >&2; \
 	  echo "    gh release create $$tag --generate-notes" >&2; \
 	  exit 1; \
 	fi; \

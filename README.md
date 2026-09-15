@@ -308,50 +308,68 @@ over a virtiofs mount rather than assumed to hold there.
 
 ### Releasing
 
-The release itself is created by hand on GitHub, because its auto-generated
-notes are the reason to do it there. `make release` builds the artifacts and
-attaches them to it. It never edits the release or its notes.
+You create the release on GitHub. `make release` builds the artifacts and
+attaches them to it, and never edits the release or its notes. The split exists
+to keep GitHub's generated notes, which is the reason to create the release
+there in the first place.
 
-Install the pinned GoReleaser once:
+Two things have to be installed. `gh` you already have, since it is how devctl
+is installed. GoReleaser is pinned in the `Makefile` and installed once:
 
 ```sh
-make tool-release
+GOBIN="$HOME/.local/bin" make tool-release
 ```
 
-`go install` puts it in `$(go env GOPATH)/bin`, which is not on PATH on either
-mac. Prefix it with `GOBIN="$HOME/.local/bin"`, or add that directory to PATH.
+`go install` writes to `$(go env GOPATH)/bin` by default, which is on neither
+mac's PATH. `GOBIN` puts the binary in a directory that is.
 
-Then, in order:
+To publish a version:
 
 1. Tag the commit and push the tag.
 
    ```sh
-   git tag -a v0.2.0 -m "v0.2.0"
+   git tag -a v0.2.0 -m v0.2.0
    git push origin v0.2.0
    ```
 
 2. Create the release on GitHub from that tag, and let it generate the notes.
 
-3. Build and attach the artifacts:
+3. Build the artifacts and attach them.
 
    ```sh
    make release
    ```
 
-It refuses, in under a second, if GoReleaser or `gh` is missing, if HEAD carries
-no tag, or if that tag has no release to attach to. It then runs `make ci`,
-because a release is the one build nobody re-checks afterwards. GoReleaser
-itself refuses a dirty working tree.
+The last line reports what landed:
 
-Re-running it replaces the assets rather than failing, so a release built twice
-from one tag is fine.
+```
+release: v0.2.0 now carries 4 archives and checksums.txt
+```
 
-The artifact format has one definition, `.goreleaser.yml`, and `make release`
-invokes GoReleaser rather than restating it. That matters beyond tidiness:
-`devctl upgrade` finds its asset by the `_<os>_<arch>.tar.gz` suffix and reads
-`checksums.txt` by exact filename, so a second packaging implementation that
-drifted would break upgrading rather than releasing, and only for whoever ran it
-next.
+Run it again and it replaces those assets instead of failing, so building one
+tag twice is safe.
+
+Every condition below is checked before anything is compiled, so a mistake
+costs a second rather than a four-platform build:
+
+| It stops when | Do this |
+| --- | --- |
+| GoReleaser is not installed | `make tool-release` |
+| `gh` is not installed | install `gh` |
+| HEAD carries no tag | tag the commit you are releasing |
+| The tag has no release on GitHub | create the release, step 2 above |
+| The working tree is dirty | commit or stash first. GoReleaser enforces this one |
+
+`make ci` then runs before the build. A release is the one build nobody
+re-checks afterwards, and while the Release workflow cannot start a job, `make
+ci` is the only gate between a broken tree and a published binary.
+
+`make release` calls GoReleaser rather than packaging with `tar` and `shasum`,
+so `.goreleaser.yml` stays the single definition of the artifact format. The
+reason is `devctl upgrade`: it finds its asset by the `_<os>_<arch>.tar.gz`
+suffix and reads `checksums.txt` by exact filename. A second packaging
+implementation that drifted from the first would break upgrading, for whoever
+ran it next, rather than releasing, for whoever changed it.
 
 ### Commit hook
 
