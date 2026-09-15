@@ -20,7 +20,12 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X main.version={{.Version}}
+      # {{.Tag}}, not {{.Version}}: Version drops the leading "v", so a release
+      # used to report "0.1.0" while `make build` reported "v0.1.0" for the same
+      # commit. `devctl upgrade` compares these two spellings against each
+      # other, and normalizes them for the releases already published — but one
+      # spelling is what they should have been all along.
+      - -X main.version={{.Tag}}
       - -X main.commit={{.Commit}}
 
 archives:

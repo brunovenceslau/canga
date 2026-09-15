@@ -13,7 +13,9 @@ BIN      := bin/devctl
 PKG      := ./cmd/devctl
 # Injected into main.version by ldflags. A release overrides it from the tag;
 # a local build reports the git description so `devctl version` never lies about
-# which tree it came from. `devctl upgrade` will compare against this value.
+# which tree it came from. `devctl upgrade` compares a release against this
+# value, and refuses to act on a describe-style one: it is not a release, and
+# under semver it sorts BELOW the tag it carries.
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)

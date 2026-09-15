@@ -74,6 +74,8 @@ Go version:
 devctl --version
 ```
 
+Do this once. From here on `devctl upgrade` replaces the binary for you.
+
 ### macOS reports "Apple could not verify devctl is free of malware"
 
 macOS prints that when Gatekeeper evaluates a binary Apple has not notarized.
@@ -107,6 +109,80 @@ Double-clicking a quarantined archive in Finder copies the attribute onto every
 file it extracts, so the `devctl` it leaves next to the archive is quarantined
 and stays so when you move it. Extracting the same archive with `tar` on the
 command line does not.
+
+## `devctl upgrade`
+
+Replaces the running binary with a published release, in place.
+
+```sh
+devctl upgrade                # install the newest release
+devctl upgrade --check        # say what is available, change nothing
+devctl upgrade --tag v0.1.0   # install exactly that release
+```
+
+Only the release tag goes to stdout, one line, so `v=$(devctl upgrade)` is the
+version now installed. Everything else is a diagnostic on stderr.
+
+**This is not `dotfiles-upgrade`.** That one fetches git and updates a checkout.
+This one downloads a release artifact and swaps one executable file for another.
+The two share a verb and nothing else.
+
+### What it verifies
+
+The archive is checked against the SHA-256 the release publishes in
+`checksums.txt`, and an archive with no line of its own there is refused rather
+than waved through.
+
+Be clear about what that proves: the bytes downloaded are the bytes the release
+names, so a corrupted or truncated download is caught. It does **not** prove the
+release is genuine — the same account publishes the asset and the checksum
+beside it. That is integrity, not authenticity.
+
+The new binary is then written beside the old one, flushed to disk, and **run
+once** to confirm it reports the version it was downloaded as. Only then is it
+renamed over the target. An archive holding something that is not devctl, or a
+binary for the wrong platform, fails at that step with the working binary
+untouched, instead of after taking its place on your PATH.
+
+Nothing is written outside the directory the binary already lives in, and no
+backup is left behind: the previous release is always one `devctl upgrade --tag`
+away, and a stale `devctl.bak` on PATH is a worse problem than the backup solves.
+
+### Which file it replaces
+
+The path is resolved through symlinks, and the resolved file is the one
+replaced. `~/.local/bin` holds symlinks from the dotfiles link engine, and
+replacing the *name* rather than the file behind it would quietly turn one of
+those links into a regular file. When the two differ, the command says so before
+writing anything. `--check` names the same path without touching it.
+
+### The token
+
+The repository is private, so a GitHub credential is required — an
+unauthenticated request cannot see that a release exists at all. `GH_TOKEN` is
+read first, then `GITHUB_TOKEN`, and failing both, whatever `gh auth token`
+answers.
+
+That last one is why `devctl upgrade` works on a mac with no token in the
+environment: `gh` keeps it in the keychain. `gh` is optional, not required —
+export `GH_TOKEN` and it is never consulted.
+
+A private repository answers 404 both for a release that does not exist and for
+a token that cannot see the repository, deliberately, so that it does not
+confirm the repository exists. The two are indistinguishable from here and the
+error says so.
+
+### When it refuses to guess
+
+A binary built by `go install`, or from a tree that has moved past its last tag,
+reports `dev` or `v0.1.0-3-gabc1234` rather than a release. Neither names a
+published artifact, and `v0.1.0-3-gabc1234` sorts *below* `v0.1.0` under semver
+— so treating it as a release would offer older code as an upgrade. Those builds
+are refused, and `--tag` is how you say which release you meant:
+
+```sh
+devctl upgrade --tag v0.1.0
+```
 
 ## `devctl reminders`
 
@@ -201,7 +277,7 @@ first line as the description.
 | --- | --- |
 | `0` | success |
 | `1` | a runtime failure, or an id with nothing behind it |
-| `2` | a bad invocation, or a directory with no usable `origin` |
+| `2` | a bad invocation, a directory with no usable `origin`, or an upgrade with no release to work from |
 
 ## Development
 
