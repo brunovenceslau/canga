@@ -36,19 +36,19 @@ func TestUpgradeRefusesATagThatIsNotAVersion(t *testing.T) {
 	assert.Equal(t, exitUsage, exitCode(err))
 }
 
-// The command reaches for a token before anything else, so a machine with
-// neither the environment nor gh is told which of the two to fix.
-//
-
+// A machine with neither a token in the environment nor gh installed is no
+// longer refused: the repository is public, so the run proceeds anonymously and
+// stops at the next real question, which for this test binary is that `dev` is
+// not a release. Nothing here reaches the network.
 func TestUpgradeWithoutAToken(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
 	_, err := execute(t, upgradeCmd)
-	require.ErrorIs(t, err, upgrade.ErrNoToken)
-	assert.Equal(t, exitFailure, exitCode(err),
-		"a missing credential is a runtime failure, like a missing git, not a bad invocation")
+	require.ErrorIs(t, err, upgrade.ErrNotRelease)
+	assert.NotContains(t, err.Error(), "token",
+		"a missing credential is no longer a reason to refuse")
 }
 
 func TestUpgradeUsage(t *testing.T) {

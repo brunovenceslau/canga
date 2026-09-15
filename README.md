@@ -15,23 +15,17 @@ derived from its `origin` remote. The derivation is deterministic, so
 
 ## Install
 
-devctl lives in a private repository. Both paths below need a GitHub account
-with access to it. `gh` uses your `gh auth login` token. `go install` reaches
-the repository through git instead, so git needs a credential of its own: run
-`gh auth setup-git` once, or configure an SSH `insteadOf` rewrite. Authenticating
-`gh` alone leaves `go install` unable to fetch the module.
+The repository is public, so neither path below needs a GitHub account or a
+credential of any kind.
 
 ### Build from source
 
 ```sh
-GOPRIVATE='github.com/brunovenceslau/*' GOBIN="$HOME/.local/bin" \
-  go install github.com/brunovenceslau/devctl/cmd/devctl@latest
+GOBIN="$HOME/.local/bin" go install github.com/brunovenceslau/devctl/cmd/devctl@latest
 ```
 
-`GOPRIVATE` keeps the request away from `proxy.golang.org` and the checksum
-database, neither of which can read a private repository. `GOBIN` puts the
-binary in a directory on your PATH, because the default, `$(go env GOPATH)/bin`,
-is not on it.
+`GOBIN` puts the binary in a directory on your PATH, because the default,
+`$(go env GOPATH)/bin`, is not on it.
 
 `go install` on a module path applies no ldflags, so a binary built this way
 reports its version as `dev`. To stamp the git description in, build from a
@@ -39,17 +33,22 @@ checkout with `make install` instead.
 
 ### Install a release binary
 
-Download with `gh`, verify against the published checksums, then extract:
+Download, verify against the published checksums, then extract:
 
 ```sh
-tag=$(gh release view -R brunovenceslau/devctl --json tagName -q .tagName)
+releases=https://github.com/brunovenceslau/devctl/releases
+tag=$(basename "$(curl -fsS -o /dev/null -w '%{url_effective}' "$releases/latest")")
 asset=devctl_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64, linux_amd64, linux_arm64
 
-gh release download "$tag" -R brunovenceslau/devctl -p "$asset" -p checksums.txt --clobber
+curl -fsSLO "$releases/download/$tag/$asset"
+curl -fsSLO "$releases/download/$tag/checksums.txt"
 mkdir -p "$HOME/.local/bin"
 awk -v a="$asset" '$2 == a' checksums.txt | shasum -a 256 -c - \
   && tar -xzf "$asset" -C "$HOME/.local/bin" devctl
 ```
+
+`$releases/latest` redirects to the newest release, so `%{url_effective}` names
+its tag without parsing any JSON.
 
 Read the last two lines as one command. `&&` is what makes the checksum a gate:
 without it a pasted block runs every line in turn, and a `FAILED` verification is
@@ -60,9 +59,8 @@ filename field for equality. `grep` would read the dots in the filename as
 wildcards. An asset absent from `checksums.txt` yields no line, and `shasum`
 rejects empty input rather than reporting success.
 
-`--clobber` lets you run the block again in a directory that already holds an
-earlier download. Without it `gh` refuses the whole command rather than replace
-a file.
+Running the block again in a directory that already holds an earlier download
+overwrites it: `curl -O` replaces a file rather than refusing.
 
 The archive also carries `LICENSE` and `README.md`. Naming `devctl` in the `tar`
 command extracts the binary alone.
@@ -251,19 +249,16 @@ restored unconditionally, since an install you cannot run is not one.
 
 ### The token
 
-The repository is private, so a GitHub credential is required — an
-unauthenticated request cannot see that a release exists at all. `GH_TOKEN` is
-read first, then `GITHUB_TOKEN`, and failing both, whatever `gh auth token`
-answers.
+A GitHub credential is optional. The repository is public, so an unauthenticated
+request reads a release perfectly well. What a token buys is GitHub's
+authenticated rate limit, 5000 requests an hour against 60 for an anonymous
+client, which one shared outbound address can exhaust on its own.
 
-That last one is why `devctl upgrade` works on a mac with no token in the
-environment: `gh` keeps it in the keychain. `gh` is optional, not required —
-export `GH_TOKEN` and it is never consulted.
-
-A private repository answers 404 both for a release that does not exist and for
-a token that cannot see the repository, deliberately, so that it does not
-confirm the repository exists. The two are indistinguishable from here and the
-error says so.
+`GH_TOKEN` is read first, then `GITHUB_TOKEN`, and failing both, whatever `gh
+auth token` answers. That last one is why a token you never exported is still
+used on a mac: `gh` keeps it in the keychain. `gh` is optional — export
+`GH_TOKEN` and it is never consulted, install neither and the upgrade still
+runs.
 
 ### When it refuses to guess
 

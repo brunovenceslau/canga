@@ -46,9 +46,7 @@ func TestToken(t *testing.T) {
 		t.Setenv("GH_TOKEN", "from-gh-token")
 		t.Setenv("GITHUB_TOKEN", "from-github-token")
 
-		token, err := Token(t.Context())
-		require.NoError(t, err)
-		assert.Equal(t, "from-gh-token", token)
+		assert.Equal(t, "from-gh-token", Token(t.Context()))
 	})
 
 	t.Run("GITHUB_TOKEN is the second look", func(t *testing.T) {
@@ -56,9 +54,8 @@ func TestToken(t *testing.T) {
 		t.Setenv("GH_TOKEN", "")
 		t.Setenv("GITHUB_TOKEN", "  from-github-token\n")
 
-		token, err := Token(t.Context())
-		require.NoError(t, err)
-		assert.Equal(t, "from-github-token", token, "surrounding whitespace never reaches a header")
+		assert.Equal(t, "from-github-token", Token(t.Context()),
+			"surrounding whitespace never reaches a header")
 	})
 
 	// The reason the fallback exists: on the mac the token is in the keychain
@@ -69,20 +66,17 @@ func TestToken(t *testing.T) {
 		t.Setenv("GITHUB_TOKEN", "")
 		fakeGH(t, "from-the-keychain")
 
-		token, err := Token(t.Context())
-		require.NoError(t, err)
-		assert.Equal(t, "from-the-keychain", token)
+		assert.Equal(t, "from-the-keychain", Token(t.Context()))
 	})
 
+	// Finding nothing is not a failure. The repository is public, so the empty
+	// string is a usable answer: the request goes out unauthenticated.
 	t.Run("no gh and no environment", func(t *testing.T) {
 		noToolsPath(t)
 		t.Setenv("GH_TOKEN", "")
 		t.Setenv("GITHUB_TOKEN", "")
 
-		_, err := Token(t.Context())
-		require.ErrorIs(t, err, ErrNoToken)
-		require.ErrorContains(t, err, "GH_TOKEN", "the refusal has to name both ways to supply one")
-		require.ErrorContains(t, err, "gh auth login")
+		assert.Empty(t, Token(t.Context()))
 	})
 
 	t.Run("gh present but signed out", func(t *testing.T) {
@@ -90,8 +84,7 @@ func TestToken(t *testing.T) {
 		t.Setenv("GITHUB_TOKEN", "")
 		fakeGH(t, "")
 
-		_, err := Token(t.Context())
-		require.ErrorIs(t, err, ErrNoToken)
+		assert.Empty(t, Token(t.Context()))
 	})
 }
 
@@ -125,13 +118,13 @@ func TestClientStatusErrors(t *testing.T) {
 			mustState: "rate limit",
 		},
 		{
-			// On a private repository these are one answer, and the message has
-			// to say so: 404 is also what a token with no access is told, so
-			// that the API does not confirm the repository exists.
-			name:      "no release, or no access",
+			// The repository is public, so 404 means what it says. The message
+			// names the repository it asked, because a devctl built from a fork
+			// still reads releases from this one.
+			name:      "no such release",
 			status:    http.StatusNotFound,
 			expected:  ErrNoRelease,
-			mustState: "cannot see",
+			mustState: "brunovenceslau/devctl",
 		},
 		{
 			name:      "something else entirely",

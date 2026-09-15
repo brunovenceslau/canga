@@ -254,14 +254,18 @@ func TestRunRefusesABuildItCannotPlace(t *testing.T) {
 	}
 }
 
-func TestRunNeedsAToken(t *testing.T) {
+// The repository is public, so an anonymous run is a supported one rather than
+// a refusal. A token only raises the rate limit.
+func TestRunWithoutAToken(t *testing.T) {
 	t.Parallel()
 
 	opts := runOptions(t, installedVersion, releaseFixture(t, newerVersion))
 	opts.Token = ""
 
-	_, err := Run(t.Context(), opts)
-	require.ErrorIs(t, err, ErrNoToken)
+	result, err := Run(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, newerVersion, result.Release)
+	assert.True(t, result.Installed)
 }
 
 // TestRunRefusesAnArchiveThatIsNotTheOnePublished is the gate the whole command
