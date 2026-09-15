@@ -47,6 +47,16 @@ ${DEVCTL_REMINDERS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/devctl/reminders}/
     tmp/               # staging, deliberately outside the items glob
 ```
 
+An uppercase letter in the path is encoded as `!` plus its lowercase form, so
+`github.com/Acme/Widget` is stored under `github.com/!acme/!widget`. This is
+Go's own encoding, the one the module cache uses (`~/go/pkg/mod/github.com` has
+`!burnt!sushi` entries for the same reason). It is load-bearing here: a store is
+shared between a mac, whose APFS folds case, and a linux sandbox, whose
+filesystem does not. Unencoded, `Acme/Widget` and `acme/widget` are two
+directories on one side and one on the other, so the two sides disagree about
+whether they are looking at the same list. The readable spelling is kept in each
+item's `repo:` header.
+
 `DEVCTL_REMINDERS_DIR` exists because `$HOME` is not the same on both sides of a
 sandbox boundary: a sandbox is handed the path rather than left to derive a
 different one. The store sits under the XDG **data** directory, not a cache or

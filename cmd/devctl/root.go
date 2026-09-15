@@ -78,7 +78,12 @@ func (a *app) config(ctx context.Context) (store.Config, error) {
 	}
 
 	return store.Config{
-		Dir:   filepath.Join(base, filepath.FromSlash(name), scopeRepo),
+		// EscapePath on the DIRECTORY only. The store has to mean the same
+		// thing on a case-insensitive APFS and a case-sensitive sandbox
+		// filesystem, which is the boundary it is meant to be shared across.
+		// Repo below keeps the readable spelling, because that is what lands in
+		// each reminder's header and what a clone is named after.
+		Dir:   filepath.Join(base, filepath.FromSlash(repo.EscapePath(name)), scopeRepo),
 		Repo:  name,
 		Scope: scopeRepo,
 	}, nil

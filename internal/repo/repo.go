@@ -131,14 +131,10 @@ func gitSaid(exit *exec.ExitError) string {
 // The returned value always uses forward slashes; a caller joining it onto a
 // filesystem path converts with filepath.FromSlash.
 //
-// What it deliberately does NOT normalize is CASE. Git hosts treat an owner and
-// a repository name case-insensitively, so ".../Acme/Widget" and
-// ".../acme/widget" are one repository but two values here: two stores on a
-// case-sensitive Linux filesystem, one on a case-insensitive macOS one — and
-// those are exactly the two sides a shared store would span. Folding the case
-// would make them collapse, but dotfiles-host's zsh helper does not fold
-// either, and the two must not disagree while both exist. Settle it when a
-// store is actually shared through a mount; every store is local today.
+// The value is case-PRESERVING, because it is also what a human reads: it is
+// the name a clone lands under and the name stamped into each reminder's
+// header. A caller using it as a DIRECTORY name must pass it through
+// EscapePath first; see there for why.
 func Path(rawURL string) (string, error) {
 	trimmed := strings.TrimSuffix(strings.TrimSuffix(rawURL, "/"), ".git")
 
@@ -204,6 +200,49 @@ func hostOf(authority string) string {
 	host, _, _ := strings.Cut(authority, ":")
 
 	return host
+}
+
+// EscapePath encodes a derived repository path so that two spellings differing
+// only in case cannot collide on a case-insensitive filesystem.
+//
+// Each uppercase letter becomes "!" followed by its lowercase form, so
+// "github.com/Acme/Widget" encodes to "github.com/!acme/!widget". This is Go's
+// own encoding, the one the module cache uses for exactly this problem: the
+// "!burnt!sushi" entries under ~/go/pkg/mod/github.com are it.
+//
+// Why it is load-bearing rather than cosmetic: a reminder store is meant to be
+// shared between a mac, whose APFS is case-insensitive, and a linux sandbox,
+// whose filesystem is not. Unencoded, "Acme/Widget" and "acme/widget" are two
+// directories on one side and one directory on the other, so the two sides
+// disagree about whether they are looking at the same list. Encoded, every
+// character that survives is lowercase, so the two sides always agree.
+//
+// It deliberately does not FOLD case. Two spellings remain two stores, because
+// nothing here can know whether a given host treats them as one repository.
+// What this guarantees is that every machine answers that question identically.
+func EscapePath(path string) string {
+	// Only ASCII can reach here: segmentPattern admits nothing else, and
+	// restricting to A-Z keeps this byte-for-byte the encoding Go uses.
+	if !strings.ContainsFunc(path, func(r rune) bool { return r >= 'A' && r <= 'Z' }) {
+		return path
+	}
+
+	var escaped strings.Builder
+
+	escaped.Grow(len(path) + 8)
+
+	for _, char := range []byte(path) {
+		if char >= 'A' && char <= 'Z' {
+			escaped.WriteByte('!')
+			escaped.WriteByte(char + ('a' - 'A'))
+
+			continue
+		}
+
+		escaped.WriteByte(char)
+	}
+
+	return escaped.String()
 }
 
 // Redact returns url with any "user[:secret]@" userinfo removed, for echoing in

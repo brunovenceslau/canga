@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -104,6 +105,62 @@ func TestPath_RedactsCredentials(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "s3cr3ttoken")
 	assert.Contains(t, err.Error(), "github.com")
+}
+
+func TestEscapePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "already lowercase is untouched", path: ownerRepo, want: ownerRepo},
+		{name: "each capital gains a bang", path: "github.com/Acme/Widget", want: "github.com/!acme/!widget"},
+		{name: "several in one segment", path: "github.com/BurntSushi/toml", want: "github.com/!burnt!sushi/toml"},
+		{name: "digits and punctuation survive", path: "git.corp.example/team-2/svc.v3", want: "git.corp.example/team-2/svc.v3"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, EscapePath(tt.path))
+		})
+	}
+}
+
+// TestEscapePath_SurvivesACaseInsensitiveFilesystem is the property the
+// encoding exists for. A store is shared between a mac, whose APFS folds case,
+// and a linux sandbox, whose filesystem does not. Two spellings must therefore
+// never be case-insensitively equal after encoding, or the two sides would
+// disagree about whether they are looking at one list or two.
+func TestEscapePath_SurvivesACaseInsensitiveFilesystem(t *testing.T) {
+	t.Parallel()
+
+	spellings := []string{
+		"github.com/acme/widget",
+		"github.com/Acme/widget",
+		"github.com/acme/Widget",
+		"github.com/ACME/WIDGET",
+		"github.com/AcMe/WiDgEt",
+	}
+
+	seen := make(map[string]string, len(spellings))
+
+	for _, spelling := range spellings {
+		escaped := EscapePath(spelling)
+
+		assert.Equal(t, strings.ToLower(escaped), escaped,
+			"an encoded path must carry no capital for a filesystem to fold")
+
+		folded := strings.ToLower(escaped)
+		if previous, clash := seen[folded]; clash {
+			t.Errorf("%q and %q collide on a case-insensitive filesystem", previous, spelling)
+		}
+
+		seen[folded] = spelling
+	}
 }
 
 func TestRedact(t *testing.T) {
