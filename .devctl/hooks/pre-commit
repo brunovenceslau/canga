@@ -1,0 +1,40 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Pre-commit hook: apply every fix a tool can apply, then REFUSE the commit if
+# anything changed.
+#
+# Refusing rather than amending is the point. A hook that rewrites files and
+# lets the commit through commits something the author never read, and the
+# staged content then differs from what they reviewed. This one leaves the fix
+# in the working tree and hands the decision back.
+#
+# Install it with `devctl setup hooks`, or by hand:
+#   git config core.hooksPath .devctl/hooks
+#
+# Bypass for an emergency with `git commit --no-verify`.
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+# `git diff` is the portable way to ask "did anything tracked change": it needs
+# no sha1sum, which macOS does not ship under that name.
+before=$(git diff)
+
+make pre-commit
+
+after=$(git diff)
+
+if [ "$before" != "$after" ]; then
+	echo >&2
+	echo "pre-commit: a tool changed the working tree, so this commit is not" >&2
+	echo "what you asked for. Review the changes, stage them, and commit again." >&2
+	echo >&2
+	echo "Unstaged now (some of these may predate the hook):" >&2
+	git diff --name-only | sed 's/^/  /' >&2
+	echo >&2
+	echo "To skip this check: git commit --no-verify" >&2
+	exit 1
+fi

@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Tests and cross-compilation. Both jobs invoke a `make` target rather than
+# restating the flags, so what CI runs is what a push was checked against
+# locally.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      # Without zsh, TestCompletionScript skips its `zsh -n` parse of the
+      # generated completion script and still reports a pass. Installing it
+      # keeps the gate real rather than letting a missing shell look green.
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+
+      - name: Verify dependencies
+        run: |
+          go mod verify
+          go mod download
+
+      - name: Check go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Test
+        run: make test
+
+  # A second operating system in the test matrix would cost a runner to catch
+  # what compiling for that system catches directly. This builds every platform
+  # a release ships, from whichever one the runner happens to be.
+  cross:
+    name: Cross-compile
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - name: Build every release platform
+        run: make cross
