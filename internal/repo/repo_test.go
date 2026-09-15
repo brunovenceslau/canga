@@ -109,16 +109,33 @@ func TestPath_Rejects(t *testing.T) {
 func TestPath_RedactsCredentials(t *testing.T) {
 	t.Parallel()
 
-	// Both spellings must be safe. The second is the dangerous one: it ALSO
-	// fails to parse, so the diagnostic carrying it is exactly what gets
-	// printed, and the secret used to travel with it.
-	for _, url := range []string{
-		"https://u:s3cr3ttoken@github.com/onlyhost",
-		"https://u:s3cr3t/token@github.com/o/r.git",
-	} {
-		_, err := Path(url)
-		require.Errorf(t, err, "url %q", url)
-		assert.NotContainsf(t, err.Error(), "s3cr3t", "url %q leaked its credential", url)
+	// Every spelling must be safe, and the whole secret must be gone, not the
+	// half before the slash. Redact was fixed once and the message still leaked,
+	// because the OFFENDING SEGMENT was quoted from the raw url beside the
+	// redacted one: "refusing path segment \"SECONDHALF@github.com\"". The test
+	// then passed because it only looked for the first half.
+	// The half AFTER the slash is what used to escape, so it is what every case
+	// hides and what every assertion looks for.
+	const secret = "SECONDHALF"
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "plain token", url: "https://u:FIRSTHALF" + secret + "@github.com/onlyhost"},
+		{name: "slash inside the token", url: "https://u:FIRSTHALF/" + secret + "@github.com/o/r.git"},
+		{name: "slash early in the token", url: "https://u:x/" + secret + "@github.com/o/r.git"},
+		{name: "no password", url: "https://" + secret + "@github.com/onlyhost"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Path(tt.url)
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), secret, "the diagnostic carried the credential")
+		})
 	}
 }
 
@@ -335,22 +352,36 @@ func TestConfigRoundTrip(t *testing.T) {
 	// An unset key is an ordinary state, reported as "" rather than an error.
 	// git signals it by exiting 1, which has to be told apart from the 128 a
 	// directory that is not a repository exits with.
-	value, err := Config(t.Context(), dir, "core.hooksPath")
+	value, set, err := Config(t.Context(), dir, "core.hooksPath")
 	require.NoError(t, err)
 	assert.Empty(t, value)
+	assert.False(t, set)
 
 	require.NoError(t, SetConfig(t.Context(), dir, "core.hooksPath", ".devctl/hooks"))
 
-	value, err = Config(t.Context(), dir, "core.hooksPath")
+	value, set, err = Config(t.Context(), dir, "core.hooksPath")
 	require.NoError(t, err)
 	assert.Equal(t, ".devctl/hooks", value)
+	assert.True(t, set)
+
+	// The distinction the bool exists for: git answers an unset key and a key
+	// set to the empty string identically apart from its exit code, and for
+	// core.hooksPath they mean opposite things. Unset leaves git reading
+	// $GIT_DIR/hooks; set-to-empty makes it read no hooks at all.
+	require.NoError(t, SetConfig(t.Context(), dir, "core.hooksPath", ""))
+
+	value, set, err = Config(t.Context(), dir, "core.hooksPath")
+	require.NoError(t, err)
+	assert.Empty(t, value)
+	assert.True(t, set, "an empty value must not read as unset")
 
 	// `git config --get` needs no repository, so outside one this reads the
 	// global configuration rather than failing. Pinned because it is surprising:
 	// callers that mean the repository's own setting resolve Root first.
-	outside, err := Config(t.Context(), t.TempDir(), "core.hooksPath")
+	outside, set, err := Config(t.Context(), t.TempDir(), "core.hooksPath")
 	require.NoError(t, err)
 	assert.Empty(t, outside, "the hermetic global config sets nothing")
+	assert.False(t, set)
 }
 
 // resolve follows symlinks so an assertion does not depend on /var being a link

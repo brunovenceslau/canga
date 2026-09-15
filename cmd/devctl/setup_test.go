@@ -51,6 +51,63 @@ func TestSetupHooks_NothingToInstallIsARuntimeFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), hooks.SourceDir)
 }
 
+// TestSetupHooks_PartialInstallIsReported covers the half of the fix the
+// library tests cannot reach. Reverting the command back to returning the error
+// without printing the report leaves every other test green, so without this
+// the fix could be undone silently.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
+func TestSetupHooks_PartialInstallIsReported(t *testing.T) {
+	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+
+	source := filepath.Join(dir, filepath.FromSlash(hooks.SourceDir))
+	require.NoError(t, os.MkdirAll(source, 0o755))
+
+	for _, name := range []string{"pre-commit", "pre-push"} {
+		require.NoError(t, os.WriteFile(filepath.Join(source, name), []byte("#!/bin/sh\n"), 0o755))
+	}
+
+	gitHooks := filepath.Join(dir, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(gitHooks, 0o755))
+
+	// pre-commit is backed up and linked; pre-push then fails, because its
+	// backup slot is already taken.
+	require.NoError(t, os.WriteFile(filepath.Join(gitHooks, "pre-commit"), []byte("mine\n"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(gitHooks, "pre-push"), []byte("other\n"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(gitHooks, "pre-push.bak"), []byte("pristine\n"), 0o755))
+
+	stdout, stderr, err := executeSplit(t, "setup", "hooks", "-C", dir, "--symlink", "--force")
+	require.Error(t, err)
+
+	assert.Contains(t, stderr, "pre-commit.bak", "the rename already made must be reported")
+	assert.Contains(t, stderr, "stopped part way")
+	assert.Contains(t, stdout, "pre-commit", "what was installed belongs on stdout")
+	assert.NotContains(t, stdout, "stopped part way", "only records go to stdout")
+}
+
+// TestSetupHooks_RefusalClaimsNoChange: a plain refusal must not say the
+// repository was left half-changed, because nothing was touched at all.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
+func TestSetupHooks_RefusalClaimsNoChange(t *testing.T) {
+	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+
+	source := filepath.Join(dir, filepath.FromSlash(hooks.SourceDir))
+	require.NoError(t, os.MkdirAll(source, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "pre-commit"), []byte("#!/bin/sh\n"), 0o755))
+
+	gitHooks := filepath.Join(dir, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(gitHooks, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(gitHooks, "pre-commit"), []byte("mine\n"), 0o755))
+
+	stdout, stderr, err := executeSplit(t, "setup", "hooks", "-C", dir, "--symlink")
+	require.Error(t, err)
+	assert.Equal(t, exitUsage, exitCode(err), "a conflict is fixed by changing the command, not repeating it")
+	assert.NotContains(t, stderr, "stopped part way")
+	assert.NotContains(t, stderr, "installed via")
+	assert.Empty(t, stdout)
+}
+
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks_UsageErrors(t *testing.T) {
 	for _, args := range [][]string{

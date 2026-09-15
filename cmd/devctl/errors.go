@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 
+	"github.com/brunovenceslau/devctl/internal/hooks"
 	"github.com/brunovenceslau/devctl/internal/repo"
 	"github.com/brunovenceslau/devctl/internal/store"
 	"github.com/spf13/cobra"
@@ -70,7 +71,11 @@ func exitCode(err error) int {
 		// An id that is not one ordinary path segment is a typo on the command
 		// line. Exit 1 would tell a caller to retry, and retrying a typo never
 		// stops.
-		errors.Is(err, store.ErrInvalidID):
+		errors.Is(err, store.ErrInvalidID),
+		// A conflict is resolved by passing --force or moving a file, never by
+		// running the same command again, which is the same test that puts a
+		// malformed id here.
+		errors.Is(err, hooks.ErrConflict):
 		return exitUsage
 	default:
 		return exitFailure

@@ -35,8 +35,11 @@ func reportInstall(cmd *cobra.Command, report hooks.Report, failure error) {
 		fprintf(errOut, "devctl: moved aside to %s\n", backup)
 	}
 
-	// A zero report means nothing was touched, so there is nothing to summarize.
-	if report.Mode == "" {
+	// Nothing touched, nothing to summarize. Mode alone is not the test: it is
+	// stamped before any work happens, so a plain refusal would otherwise claim
+	// the repository was left half-changed when it was not touched at all.
+	changed := len(report.Installed) > 0 || len(report.BackedUp) > 0
+	if report.Mode == "" || (failure != nil && !changed) {
 		return
 	}
 

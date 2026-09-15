@@ -38,6 +38,24 @@ func execute(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
+// executeSplit is execute with the two streams kept apart, so a test can prove
+// the split rather than assume it: records belong on stdout and everything else
+// on stderr, which is what lets a listing be piped.
+func executeSplit(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+
+	var out, errOut bytes.Buffer
+
+	cmd := newRootCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs(args)
+
+	err = cmd.ExecuteContext(t.Context())
+
+	return out.String(), errOut.String(), err
+}
+
 // scratchRepo makes a git repository with a known origin, and points devctl's
 // store at a directory of this test's own.
 //

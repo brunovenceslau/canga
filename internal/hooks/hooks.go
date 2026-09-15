@@ -96,12 +96,12 @@ func Install(ctx context.Context, dir string, opts Options) (Report, error) {
 func installHooksPath(ctx context.Context, root string, names []string, opts Options) (Report, error) {
 	report := Report{Root: root, Mode: "core.hooksPath", Installed: names}
 
-	current, err := repo.Config(ctx, root, "core.hooksPath")
+	current, set, err := repo.Config(ctx, root, "core.hooksPath")
 	if err != nil {
 		return Report{}, err
 	}
 
-	if current != "" && current != SourceDir && !opts.Force {
+	if set && current != SourceDir && !opts.Force {
 		return Report{}, fmt.Errorf(
 			"%w: core.hooksPath is already %q, pass --force to replace it", ErrConflict, current)
 	}
@@ -131,33 +131,38 @@ func installHooksPath(ctx context.Context, root string, names []string, opts Opt
 func installLinks(ctx context.Context, root string, names []string, opts Options) (Report, error) {
 	report := Report{Root: root, Mode: "symlink"}
 
-	// git reads hooks from ONE directory. With core.hooksPath set, the directory
-	// these links go into is ignored entirely, so installing them would report
-	// success for hooks that can never run. The default mode warns about the
-	// symmetric case; this is the one where the install does not take effect at
-	// all, so it refuses instead.
-	current, err := repo.Config(ctx, root, "core.hooksPath")
-	if err != nil {
-		return Report{}, err
-	}
-
-	if current != "" {
-		if !opts.Force {
-			return Report{}, fmt.Errorf(
-				"%w: core.hooksPath is set to %q, so git ignores the directory these links go into;"+
-					" unset it, install without --symlink, or pass --force", ErrConflict, current)
-		}
-
-		report.Warnings = append(report.Warnings, fmt.Sprintf(
-			"core.hooksPath is set to %q, so git will ignore these links until it is unset", current))
-	}
-
 	commonDir, err := repo.CommonDir(ctx, root)
 	if err != nil {
 		return Report{}, err
 	}
 
 	hooksDir := filepath.Join(commonDir, "hooks")
+
+	// git reads hooks from ONE directory. If core.hooksPath points somewhere
+	// other than the directory these links go into, git never looks at them and
+	// installing would report success for hooks that can never run.
+	//
+	// The test is where it points, not whether it is set. `core.hooksPath =
+	// .git/hooks` is the standard way to neutralise a GLOBAL setting, and those
+	// hooks do run; refusing it would reject the very fix for the problem this
+	// check is about. The empty string is caught by the same comparison, since
+	// it resolves to the repository root rather than to the hooks directory,
+	// and git reads no hooks at all with it.
+	if pointsElsewhere, err := hooksPathElsewhere(ctx, root, hooksDir); err != nil {
+		return Report{}, err
+	} else if pointsElsewhere != "" {
+		if !opts.Force {
+			return Report{}, fmt.Errorf(
+				"%w: core.hooksPath is %s, so git ignores %s where these links go;"+
+					" point it at that directory, install without --symlink, or pass --force",
+				ErrConflict, pointsElsewhere, hooksDir)
+		}
+
+		report.Warnings = append(report.Warnings, fmt.Sprintf(
+			"core.hooksPath is %s, so git will ignore these links until it points at %s",
+			pointsElsewhere, hooksDir))
+	}
+
 	if err := os.MkdirAll(hooksDir, hooksDirPerm); err != nil {
 		return report, fmt.Errorf("create %s: %w", hooksDir, err)
 	}
@@ -201,6 +206,52 @@ func installLinks(ctx context.Context, root string, names []string, opts Options
 	}
 
 	return report, nil
+}
+
+// hooksPathElsewhere reports core.hooksPath, quoted for a message, when it is
+// set and resolves to something other than hooksDir. It returns "" when git
+// will read hooksDir, whether because the key is unset or because it points
+// there.
+//
+// A relative core.hooksPath is resolved against the repository's top level,
+// which is where git runs hooks from.
+func hooksPathElsewhere(ctx context.Context, root, hooksDir string) (string, error) {
+	current, set, err := repo.Config(ctx, root, "core.hooksPath")
+	if err != nil {
+		return "", err
+	}
+
+	if !set {
+		return "", nil
+	}
+
+	resolved := current
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(root, resolved)
+	}
+
+	if sameDir(resolved, hooksDir) {
+		return "", nil
+	}
+
+	if current == "" {
+		return "set to the empty string", nil
+	}
+
+	return fmt.Sprintf("set to %q", current), nil
+}
+
+// sameDir reports whether two paths name one directory, following symlinks
+// where they exist so /var and /private/var do not read as different on macOS.
+func sameDir(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+
+	resolvedA, errA := filepath.EvalSymlinks(a)
+	resolvedB, errB := filepath.EvalSymlinks(b)
+
+	return errA == nil && errB == nil && resolvedA == resolvedB
 }
 
 // clearTarget makes room for a symlink, and reports the backup it made.

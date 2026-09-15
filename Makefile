@@ -120,13 +120,19 @@ LICENSE_EXEMPT := go.sum LICENSE
 # Without this the header is aspiration rather than fact: it would vanish from
 # the first file added and nobody would notice. Driven by `git ls-files`, so a
 # file has to be tracked before it is judged.
+#
+# Two details it got wrong the first time. The match is anchored to the first
+# lines, because both this file and the README mention the tag in their own
+# prose and would otherwise vouch for themselves while untagged. And the list is
+# read NUL-delimited, because word-splitting `git ls-files` turns a filename
+# holding a space into two nonexistent files and reports both as untagged.
 license-check:
 	@missing=0; \
-	for f in $$(git ls-files); do \
+	while IFS= read -r -d '' f; do \
 	  case " $(LICENSE_EXEMPT) " in *" $$f "*) continue;; esac; \
-	  grep -q 'SPDX-License-Identifier:' "$$f" || { \
+	  head -5 "$$f" | grep -q 'SPDX-License-Identifier:' || { \
 	    echo "missing SPDX tag: $$f" >&2; missing=1; }; \
-	done; \
+	done < <(git ls-files -z); \
 	if [ $$missing -ne 0 ]; then \
 	  echo "every tracked file that can hold a comment must carry the SPDX tag" >&2; \
 	  exit 1; \

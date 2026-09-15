@@ -91,11 +91,16 @@ func CommonDir(ctx context.Context, dir string) (string, error) {
 	return git(ctx, dir, ErrNotARepository, "rev-parse", "--path-format=absolute", "--git-common-dir")
 }
 
-// Config reads one git configuration value, or "" if it is not set.
+// Config reads one git configuration value, and reports whether it is SET.
+//
+// The bool is not decoration. git answers an unset key by exiting 1 with no
+// output and a key set to the empty string by exiting 0 with no output, and
+// those mean opposite things for core.hooksPath: unset leaves git reading
+// $GIT_DIR/hooks, while set-to-empty makes it read nothing at all. Returning
+// only the value would collapse the two.
 //
 // It does not go through the shared helper, because it needs the exit code the
-// helper deliberately hides: git reports an unset key by exiting 1 with no
-// output, which is an ordinary state rather than a failure.
+// helper deliberately hides.
 //
 // Two things about what it returns. It is the EFFECTIVE value, so a key set
 // globally is reported even though the repository does not set it, which is
@@ -106,19 +111,19 @@ func CommonDir(ctx context.Context, dir string) (string, error) {
 //
 // SetConfig, by contrast, writes LOCALLY. Reading what git will obey and
 // writing only where devctl was invited are deliberately different scopes.
-func Config(ctx context.Context, dir, key string) (string, error) {
+func Config(ctx context.Context, dir, key string) (value string, set bool, err error) {
 	//nolint:gosec // the program name is a constant and every argument is passed
 	// separately, so no shell ever parses dir or key.
 	out, err := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", key).Output()
 	if err == nil {
-		return strings.TrimSpace(string(out)), nil
+		return strings.TrimSpace(string(out)), true, nil
 	}
 
 	if exit, ran := errors.AsType[*exec.ExitError](err); ran && exit.ExitCode() == 1 {
-		return "", nil
+		return "", false, nil
 	}
 
-	return "", classify(ctx, dir, ErrNotARepository, err)
+	return "", false, classify(ctx, dir, ErrNotARepository, err)
 }
 
 // SetConfig writes one git configuration value into the repository's own
@@ -223,9 +228,22 @@ func Path(rawURL string) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrBadURL, Redact(rawURL))
 	}
 
+	redacted := Redact(rawURL)
+
 	for _, segment := range segments {
 		if !isSafeSegment(segment) {
-			return "", fmt.Errorf("%w: refusing path segment %q in %s", ErrBadURL, segment, Redact(rawURL))
+			// The offending segment is a substring of the RAW url, so quoting it
+			// is only safe when nothing was redacted out of that url. A
+			// credential holding an unencoded "/" is split by `split` and its
+			// tail lands inside a segment: quoting that segment hands over the
+			// second half of the secret while the url beside it is redacted,
+			// which is worse than saying less. Measured on exactly the input the
+			// redaction exists for.
+			if redacted == rawURL {
+				return "", fmt.Errorf("%w: refusing path segment %q in %s", ErrBadURL, segment, redacted)
+			}
+
+			return "", fmt.Errorf("%w: refusing an unusable path segment in %s", ErrBadURL, redacted)
 		}
 	}
 
@@ -330,9 +348,10 @@ func EscapePath(path string) string {
 // on the one input where it matters most, because such a URL also fails to parse
 // and so is the very thing this gets asked to print.
 //
-// The cost is over-redaction when a PATH contains an "@", which loses a hostname
-// from a diagnostic. That trade is deliberate: a lost hostname is an
-// inconvenience, and a leaked token is not recoverable.
+// The cost is over-redaction when a PATH contains an "@", and it is not a lost
+// hostname but the whole url: "https://github.com/o/r@v2" redacts to
+// "https://v2". The trade is still the right one, because a diagnostic that
+// says too little is an inconvenience and a leaked token is not recoverable.
 func Redact(url string) string {
 	scheme := ""
 	if before, after, ok := strings.Cut(url, "://"); ok {

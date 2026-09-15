@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/brunovenceslau/devctl/internal/repo"
@@ -95,7 +96,7 @@ func TestInstall_HooksPath(t *testing.T) {
 		assert.Equal(t, []string{"commit-msg", preCommit}, report.Installed)
 		assert.Empty(t, report.Warnings)
 
-		value, err := repo.Config(t.Context(), root, "core.hooksPath")
+		value, _, err := repo.Config(t.Context(), root, "core.hooksPath")
 		require.NoError(t, err)
 		assert.Equal(t, SourceDir, value)
 	})
@@ -140,14 +141,14 @@ func TestInstall_HooksPath(t *testing.T) {
 		_, err := Install(t.Context(), root, Options{})
 		require.ErrorIs(t, err, ErrConflict)
 
-		value, err := repo.Config(t.Context(), root, "core.hooksPath")
+		value, _, err := repo.Config(t.Context(), root, "core.hooksPath")
 		require.NoError(t, err)
 		assert.Equal(t, "/somewhere/else", value, "a refusal must change nothing")
 
 		_, err = Install(t.Context(), root, Options{Force: true})
 		require.NoError(t, err)
 
-		value, err = repo.Config(t.Context(), root, "core.hooksPath")
+		value, _, err = repo.Config(t.Context(), root, "core.hooksPath")
 		require.NoError(t, err)
 		assert.Equal(t, SourceDir, value)
 	})
@@ -181,7 +182,7 @@ func TestInstall_Symlink(t *testing.T) {
 		assert.False(t, filepath.IsAbs(target), "an absolute link breaks when the repository moves")
 
 		// core.hooksPath is left alone in this mode, which is the point of it.
-		value, err := repo.Config(t.Context(), root, "core.hooksPath")
+		value, _, err := repo.Config(t.Context(), root, "core.hooksPath")
 		require.NoError(t, err)
 		assert.Empty(t, value)
 	})
@@ -222,26 +223,49 @@ func TestInstall_Symlink(t *testing.T) {
 
 	// The first .bak is the pristine one. Losing it to a second run would be the
 	// one unrecoverable mistake this code could make.
-	// git reads hooks from ONE directory. With core.hooksPath set, the directory
-	// these links go into is ignored, so a success here would be a lie: the
+	// git reads hooks from ONE directory. If core.hooksPath points elsewhere the
+	// directory these links go into is ignored, so a success would be a lie: the
 	// links exist and git never runs them.
-	t.Run("refuses when core.hooksPath makes the links dead", func(t *testing.T) {
-		root := scratchRepo(t, preCommit)
-		require.NoError(t, repo.SetConfig(t.Context(), root, "core.hooksPath", "/somewhere/else"))
+	//
+	// The EMPTY STRING is here because it is the case the first version of this
+	// check missed. `git config --get` answers an unset key and a key set to ""
+	// with the same empty output, so testing the value alone let a dead install
+	// through; git with an empty core.hooksPath reads no hooks at all.
+	for _, hooksPath := range []string{"/somewhere/else", "", "other-hooks"} {
+		t.Run("refuses when core.hooksPath is "+strconv.Quote(hooksPath), func(t *testing.T) {
+			root := scratchRepo(t, preCommit)
+			require.NoError(t, repo.SetConfig(t.Context(), root, "core.hooksPath", hooksPath))
 
-		_, err := Install(t.Context(), root, Options{Symlink: true})
-		require.ErrorIs(t, err, ErrConflict)
-		assert.Contains(t, err.Error(), "core.hooksPath")
+			_, err := Install(t.Context(), root, Options{Symlink: true})
+			require.ErrorIs(t, err, ErrConflict)
+			assert.Contains(t, err.Error(), "core.hooksPath")
 
-		assert.NoFileExists(t, filepath.Join(root, ".git", "hooks", preCommit),
-			"a refusal must not leave a dead link behind")
+			assert.NoFileExists(t, filepath.Join(root, ".git", "hooks", preCommit),
+				"a refusal must not leave a dead link behind")
 
-		// --force installs them anyway, but says they will not run.
-		report, err := Install(t.Context(), root, Options{Symlink: true, Force: true})
-		require.NoError(t, err)
-		require.Len(t, report.Warnings, 1)
-		assert.Contains(t, report.Warnings[0], "core.hooksPath")
-	})
+			// --force installs them anyway, but says they will not run.
+			report, err := Install(t.Context(), root, Options{Symlink: true, Force: true})
+			require.NoError(t, err)
+			require.Len(t, report.Warnings, 1)
+			assert.Contains(t, report.Warnings[0], "core.hooksPath")
+		})
+	}
+
+	// The mirror of the above, and the reason the check compares WHERE it points
+	// rather than whether it is set: `core.hooksPath = .git/hooks` is the
+	// standard way to neutralise a global setting, those hooks do run, and
+	// refusing it would reject the very fix for the problem the check is about.
+	for _, hooksPath := range []string{".git/hooks", "./.git/hooks"} {
+		t.Run("accepts core.hooksPath pointing at the hooks directory: "+hooksPath, func(t *testing.T) {
+			root := scratchRepo(t, preCommit)
+			require.NoError(t, repo.SetConfig(t.Context(), root, "core.hooksPath", hooksPath))
+
+			report, err := Install(t.Context(), root, Options{Symlink: true})
+			require.NoError(t, err)
+			assert.Empty(t, report.Warnings)
+			assert.Equal(t, []string{preCommit}, report.Installed)
+		})
+	}
 
 	// A run that moved a file aside and then failed has already changed the
 	// repository. Returning an empty report leaves the user hunting for a file
