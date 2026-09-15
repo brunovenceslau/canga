@@ -1,15 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Package repo derives the deterministic identity of a git working tree: the
-// URL of its origin remote, and the "<host>/<owner>/<repo>" path tail that
-// every per-repo artifact devctl owns is keyed by.
+// Package repo owns the git working trees devctl operates on: their
+// deterministic identity — the URL of the origin remote and the
+// "<host>/<owner>/<repo>" path tail every per-repo artifact is keyed by — and
+// the two operations that bring a tree into existence and advance it, Clone and
+// Sync.
 //
-// The tail MUST agree with what dotfiles-host's `dev clone` produces
-// (zsh/dev.zsh), because the same three segments address the clone on disk, the
-// reminder store, and the planned `dev open`. The two implementations are
-// cross-checked against the same cases as tests/dev_test.sh; they stop being
-// two once `clone`/`sync` move into this repo.
+// The tail is what makes the layout deterministic: the same three segments
+// address the clone on disk, the reminder store, and the planned `devctl open`,
+// whatever protocol the repository was cloned with.
+//
+// dotfiles-host still carries the original zsh implementation (zsh/dev.zsh),
+// which is retired there once a devctl release is installed on both machines.
+// Until then the derivation exists twice, and the two are cross-checked against
+// the same cases as its tests/dev_test.sh.
 package repo
 
 import (
@@ -126,76 +131,48 @@ func Config(ctx context.Context, dir, key string) (value string, set bool, err e
 	return "", false, classify(ctx, dir, ErrNotARepository, err)
 }
 
+// GlobalConfig reads one git configuration value from the user's GLOBAL config
+// alone, and answers an unset key with the empty string rather than an error.
+//
+// The scope is the point, which is why this exists beside Config rather than as
+// a flag on it. Config reads the EFFECTIVE value, so inside a repository it
+// reports that repository's own setting; this is asked for the identity of the
+// MACHINE — the signing key a new clone should inherit — and a repo-local key
+// belonging to whatever repository devctl happened to be invoked in is exactly
+// the wrong answer. Ported from zsh/dev.zsh, where the `--global` on those two
+// reads carries the same comment.
+func GlobalConfig(ctx context.Context, key string) (string, error) {
+	//nolint:gosec // the program name is a constant and the key is passed as its
+	// own argument, so no shell ever parses it.
+	out, err := exec.CommandContext(ctx, "git", "config", "--global", "--get", key).Output()
+	if err == nil {
+		return strings.TrimSpace(string(out)), nil
+	}
+
+	if exit, ran := errors.AsType[*exec.ExitError](err); ran {
+		// Exit 1 is git's answer for "no such key", which is not a failure here:
+		// most machines set neither of the two keys this reads, and the caller's
+		// contract is to leave a clone alone when they do not.
+		if exit.ExitCode() == 1 {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("reading %s from the global git config: git exited %d%s",
+			key, exit.ExitCode(), gitSaid(exit))
+	}
+
+	// Only a missing binary or a cancelled context can reach classify here, since
+	// every exit status was answered above — which is why the sentinel it is
+	// handed never appears in the message.
+	return "", classify(ctx, ".", ErrNotARepository, err)
+}
+
 // SetConfig writes one git configuration value into the repository's own
 // config, never a global or system one.
 func SetConfig(ctx context.Context, dir, key, value string) error {
 	_, err := git(ctx, dir, ErrNotARepository, "config", key, value)
 
 	return err
-}
-
-// git runs one git command in dir and returns its trimmed stdout.
-//
-// refused is the sentinel to report when git RAN and refused, which is the case
-// that means the caller pointed devctl somewhere wrong. A missing binary or a
-// cancelled context are classified separately; see classify.
-func git(ctx context.Context, dir string, refused error, args ...string) (string, error) {
-	full := append([]string{"-C", dir}, args...)
-
-	//nolint:gosec // the program name is a constant and every argument is passed
-	// separately, so no shell ever parses dir — which is the whole point of not
-	// building a command string.
-	out, err := exec.CommandContext(ctx, "git", full...).Output()
-	if err != nil {
-		return "", classify(ctx, dir, refused, err)
-	}
-
-	return strings.TrimSpace(string(out)), nil
-}
-
-// classify says what actually went wrong when git could not be asked.
-//
-// Collapsing every failure into ErrNoOrigin would answer a missing git binary,
-// or a Ctrl-C, with "no origin remote in <dir>" — which is not just misleading
-// but the wrong exit code, since those are runtime failures rather than the
-// caller having pointed devctl at the wrong directory.
-func classify(ctx context.Context, dir string, refused, err error) error {
-	// Operation-neutral: classify is shared by every git call, and naming one
-	// of them would report an operation that never ran. A Ctrl-C during
-	// `devctl setup hooks` used to say "reading the origin".
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return fmt.Errorf("running git in %s: %w", dir, ctxErr)
-	}
-
-	if errors.Is(err, exec.ErrNotFound) {
-		return fmt.Errorf("%w, so no repository can be identified", ErrGitMissing)
-	}
-
-	// git ran and refused: not a repository, no such remote, or a repository it
-	// will not read. All three are fixed by pointing devctl somewhere else or by
-	// changing git's configuration, never by running the same command again.
-	if exit, ran := errors.AsType[*exec.ExitError](err); ran {
-		return fmt.Errorf("%w: %s%s", refused, dir, gitSaid(exit))
-	}
-
-	return fmt.Errorf("running git in %s: %w", dir, err)
-}
-
-// gitSaid renders the first line of git's own diagnostic, which Output()
-// captures into Stderr and would otherwise discard.
-//
-// It matters most for the arrangement this tool exists for: a host repository
-// mounted into a sandbox trips git's dubious-ownership check, and without git's
-// own words the user is told only "no origin remote" and sent looking for a
-// remote that was never the problem. Only the first line travels, so a long
-// hint block cannot bury the command's own message.
-func gitSaid(exit *exec.ExitError) string {
-	first, _, _ := strings.Cut(strings.TrimSpace(string(exit.Stderr)), "\n")
-	if first == "" {
-		return ""
-	}
-
-	return ": " + first
 }
 
 // Path derives the "<host>/<owner>/<repo>" tail from a git remote URL.

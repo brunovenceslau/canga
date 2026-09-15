@@ -110,6 +110,81 @@ file it extracts, so the `devctl` it leaves next to the archive is quarantined
 and stays so when you move it. Extracting the same archive with `tar` on the
 command line does not.
 
+## `devctl clone`
+
+Clones a repository into the deterministic layout, so the same repository lands
+at the same path on every machine, whichever protocol you cloned it with.
+
+```sh
+devctl clone git@github.com:acme/widget.git
+# → ~/src/github.com/acme/widget
+
+cd "$(devctl clone https://github.com/acme/widget)"
+devctl clone https://github.com/acme/widget /tmp/scratch   # an explicit target
+```
+
+The resolved path is the only thing printed on stdout. git's progress and every
+diagnostic go to stderr, which is what makes the command substitution above
+safe.
+
+### Where a clone lands
+
+```
+${DEVCTL_BASE_DIR:-$HOME/src}/<host>/<owner>/<repo>
+```
+
+The three segments come from the URL, with the scheme, any userinfo, any port
+and any `.git` suffix removed. Nested owners are kept, so a GitLab subgroup
+lands at `gitlab.com/group/sub/proj`. The spelling is the repository's own: only
+the reminder store, which is shared between a case-folding and a case-sensitive
+filesystem, encodes case.
+
+| Variable | Default | What it sets |
+| --- | --- | --- |
+| `DEVCTL_BASE_DIR` | `$HOME/src` | Root of the layout. |
+| `DEVCTL_SIGNING_KEY` | `git config --global user.signingkey` | Key stamped into the clone. |
+| `DEVCTL_ALLOWED_SIGNERS` | `git config --global gpg.ssh.allowedSignersFile` | Allowed-signers file wired into the clone, so `git log --show-signature` works there. |
+| `CI` | unset | When set to anything, drops git's `\r` progress meter. |
+
+### What it refuses
+
+A target that already holds anything is refused, and exits 1. An existing empty
+directory is fine. Nothing here ever merges into, or writes over, a tree that is
+already there.
+
+A URL no path can be derived from is refused before anything is created, and
+exits 2. Any credential in it is stripped from the message first.
+
+### Transport hardening
+
+Every clone runs with four git options on the command line, where no repository
+or user configuration can override them:
+
+```
+-c protocol.ext.allow=never -c protocol.fd.allow=never
+-c transfer.fsckObjects=true -c fetch.fsckObjects=true
+```
+
+The `ext` and `fd` remote helpers run the rest of the URL as a command, so a URL
+such as `ext::sh -c …` is a command execution dressed as a repository. Turning
+them off on the command line means a machine whose git config sets
+`protocol.ext.allow=always` still refuses one. `file` is left at git's default,
+allowed, so local-path clones keep working. The two `fsckObjects` options make
+the fetch reject a malformed object graph rather than write it to disk first.
+
+### Signing
+
+After the clone, SSH signing is written into the new repository's **local**
+config: the allowed-signers file when one resolves, and `user.signingkey` plus
+`commit.gpgsign` and `tag.gpgsign` when a key resolves. The fallback reads the
+**global** git config rather than the effective one, so the key is the machine's
+identity and never the local key of whatever repository you ran the command in.
+Nothing global is written.
+
+When neither a key nor an allowed-signers file resolves, the clone is left
+alone, and `devctl` says so on stderr rather than pointing the repository at a
+file that does not exist.
+
 ## `devctl upgrade`
 
 Replaces the running binary with a published release, in place.
@@ -286,7 +361,7 @@ first line as the description.
 | Code | Meaning |
 | --- | --- |
 | `0` | success |
-| `1` | a runtime failure, or an id with nothing behind it |
+| `1` | a runtime failure, a clone target that already holds something, or an id with nothing behind it |
 | `2` | a bad invocation, a directory with no usable `origin`, or an upgrade with no release to work from |
 
 ## Development
