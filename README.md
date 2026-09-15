@@ -296,6 +296,7 @@ make tools   # install the pinned golangci-lint and govulncheck
 make fix     # apply every automatic fix: go fix, the formatters, --fix linters
 make ci      # lint + test + govulncheck — must be green before a push
 make race    # the multi-process store race gate, verbosely
+make release # attach the release artifacts to an existing GitHub release
 ```
 
 Every gate is a `make` target, and CI invokes the target rather than restating
@@ -304,6 +305,89 @@ it, so what CI runs is what a push was checked against locally.
 default is sized for CI. `make race RACE_STORE_DIR=/path` runs it against a
 filesystem of your choosing, which is how the store's invariants were checked
 over a virtiofs mount rather than assumed to hold there.
+
+### Releasing
+
+You create the release on GitHub. `make release` builds the artifacts and
+attaches them to it, and never edits the release or its notes. The split exists
+to keep GitHub's generated notes, which is the reason to create the release
+there in the first place.
+
+Two things have to be installed. `gh` you already have, since it is how devctl
+is installed. GoReleaser is pinned in the `Makefile` and installed once:
+
+```sh
+GOBIN="$HOME/.local/bin" make tool-release
+```
+
+`go install` writes to `$(go env GOPATH)/bin` by default, which is on neither
+mac's PATH. `GOBIN` puts the binary in a directory that is.
+
+To publish a version:
+
+1. Tag the commit and push the tag.
+
+   ```sh
+   git tag -a v0.2.0 -m v0.2.0
+   git push origin v0.2.0
+   ```
+
+2. Create the release on GitHub from that tag, and let it generate the notes.
+
+3. Build the artifacts and attach them.
+
+   ```sh
+   make release
+   ```
+
+The last line reports what landed:
+
+```
+release: v0.2.0 now carries 4 archives and checksums.txt
+```
+
+Run it again and it replaces those assets instead of failing, so building one
+tag twice is safe.
+
+Every condition below is checked before anything is compiled, so a mistake
+costs a second rather than a four-platform build:
+
+| It stops when | Do this |
+| --- | --- |
+| GoReleaser is not installed | `make tool-release` |
+| `gh` is not installed | install `gh` |
+| HEAD carries no tag | tag the commit you are releasing |
+| HEAD carries more than one tag | delete the tag you are not releasing |
+| The tag is not on the remote | `git push origin <tag>` |
+| The tag names a different commit on the remote | force-push the tag, or build from the commit the release already names |
+| The tag has no release on GitHub | create the release, step 2 above |
+| The working tree is dirty | commit or stash first. GoReleaser enforces this one |
+
+The three tag checks exist because the tag is resolved twice: `make release`
+reads it to pick the release to upload to, and GoReleaser reads it again to name
+the archives and stamp `main.version`. Two tags on one commit let those answers
+differ, which attaches archives named after one tag to the release of the other.
+A tag moved locally after being pushed attaches artifacts to a release that
+names a different commit.
+
+`make ci` then runs before the build. A release is the one build nobody
+re-checks afterwards, and while the Release workflow cannot start a job, `make
+ci` is the only gate between a broken tree and a published binary.
+
+This procedure assumes `.github/workflows/release.yml` is not running. That
+workflow triggers on a pushed `v*` tag and creates the release itself, so step 1
+would produce the release before step 2 gets to, with workflow notes rather than
+the ones you meant, and `make release` would then replace its artifacts with
+locally built ones. GitHub Actions currently cannot start a job on the account,
+which is why the two paths do not collide today. Whether to keep both, or retire
+the workflow now that the local path exists, is still open.
+
+`make release` calls GoReleaser rather than packaging with `tar` and `shasum`,
+so `.goreleaser.yml` stays the single definition of the artifact format. The
+reason is `devctl upgrade`: it finds its asset by the `_<os>_<arch>.tar.gz`
+suffix and reads `checksums.txt` by exact filename. A second packaging
+implementation that drifted from the first would break upgrading, for whoever
+ran it next, rather than releasing, for whoever changed it.
 
 ### Commit hook
 
