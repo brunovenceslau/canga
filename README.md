@@ -116,6 +116,7 @@ first line as the description.
 
 ```sh
 make tools   # install the pinned golangci-lint and govulncheck
+make fix     # apply every automatic fix: go fix, the formatters, --fix linters
 make ci      # lint + test + govulncheck — must be green before a push
 make race    # the multi-process store race gate, verbosely
 ```
@@ -123,7 +124,26 @@ make race    # the multi-process store race gate, verbosely
 Every gate is a `make` target, and CI invokes the target rather than restating
 it, so what CI runs is what a push was checked against locally.
 `make race RACE_PROCS=12` runs the store's concurrency gate at full size; the
-default is sized for CI.
+default is sized for CI. `make race RACE_STORE_DIR=/path` runs it against a
+filesystem of your choosing, which is how the store's invariants were checked
+over a virtiofs mount rather than assumed to hold there.
+
+### Commit hook
+
+`.devctl/hooks/pre-commit` runs `make pre-commit`, which applies every fix a
+tool can apply on its own, and then refuses the commit if anything changed. It
+refuses rather than amending on purpose: a hook that rewrites files and lets the
+commit through commits something you never read.
+
+Install it:
+
+```sh
+git config core.hooksPath .devctl/hooks
+```
+
+`make pre-commit` is deliberately a fast subset rather than `make ci`. A hook
+slow enough to be annoying is a hook that gets `--no-verify`d, and then it
+guards nothing.
 
 ## License
 

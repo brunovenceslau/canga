@@ -19,14 +19,22 @@ LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 # default; RACE_PROCS raises it for a local soak run without editing the test.
 RACE_PROCS ?=
 
+# RACE_STORE_DIR points the gates at a filesystem of the caller's choosing. The
+# invariants the store rests on are the FILESYSTEM's, not Go's, so being able to
+# aim them at a virtiofs mount is the difference between measuring the claim and
+# assuming it.
+RACE_STORE_DIR ?=
+
 .DEFAULT_GOAL := help
-.PHONY: help build install fmt lint test race vuln ci tools tool-lint tool-vuln clean
+.PHONY: help build install fmt fix pre-commit lint test race vuln ci tools tool-lint tool-vuln clean
 
 help:
 	@echo "Targets:"
 	@echo "  make build    build $(BIN) with version/commit stamped in"
 	@echo "  make install  go install devctl into GOBIN"
 	@echo "  make fmt      apply the configured formatters (gofumpt + goimports)"
+	@echo "  make fix      apply every automatic fix: go fix, the formatters, --fix linters"
+	@echo "  make pre-commit  the fast subset a commit hook runs"
 	@echo "  make lint     go vet + golangci-lint over the tree"
 	@echo "  make test     go test -race -shuffle=on ./... with coverage"
 	@echo "  make race     the multi-process store race gate, verbosely"
@@ -43,6 +51,24 @@ install:
 fmt:
 	golangci-lint fmt ./...
 
+# Every fix a tool can apply on its own. `go fix` is a real analyzer-driven
+# rewriter since Go 1.27, not the legacy API updater it used to be, so it earns
+# its place beside the formatters.
+fix:
+	go fix ./...
+	golangci-lint fmt ./...
+	golangci-lint run --fix ./...
+
+# What a commit hook runs. Deliberately NOT `make ci`: a hook slow enough to be
+# annoying is a hook that gets --no-verify'd, and then it guards nothing.
+# golangci-lint's full run belongs in `make lint`, which is a gate, not a hook.
+pre-commit:
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+	  echo "golangci-lint is not installed; run 'make tool-lint'" >&2; exit 1; }
+	go fix ./...
+	golangci-lint fmt ./...
+	go vet ./...
+
 # go vet runs separately from golangci-lint: it is the one static check that
 # needs no third-party binary, so it still reports something useful on a machine
 # where golangci-lint is missing.
@@ -58,7 +84,10 @@ test:
 # -args MUST come after the package list: everything following it is handed to
 # the test binary, so a package named after it is read as a test flag.
 race:
-	go test -race -count=1 -run 'TestStore_.*Concurrent' -v ./internal/store $(if $(RACE_PROCS),-args -race-procs=$(RACE_PROCS),)
+	go test -race -count=1 -run 'TestStore_.*Concurrent' -v ./internal/store \
+	  $(if $(RACE_PROCS)$(RACE_STORE_DIR),-args,) \
+	  $(if $(RACE_PROCS),-race-procs=$(RACE_PROCS),) \
+	  $(if $(RACE_STORE_DIR),-race-store-dir=$(RACE_STORE_DIR),)
 
 vuln:
 	govulncheck ./...
