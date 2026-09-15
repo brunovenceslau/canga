@@ -15,12 +15,72 @@ derived from its `origin` remote. The derivation is deterministic, so
 
 ## Install
 
+devctl lives in a private repository. Both paths below need a GitHub account
+with access to it: `go install` authenticates through git, and `gh` through your
+`gh auth login` token.
+
+### Build from source
+
 ```sh
-go install github.com/brunovenceslau/devctl/cmd/devctl@latest
+GOPRIVATE='github.com/brunovenceslau/*' GOBIN="$HOME/.local/bin" \
+  go install github.com/brunovenceslau/devctl/cmd/devctl@latest
 ```
 
-Or download a release archive for `darwin`/`linux` on `amd64`/`arm64` from the
-[releases page](https://github.com/brunovenceslau/devctl/releases).
+`GOPRIVATE` keeps the request away from `proxy.golang.org` and the checksum
+database, neither of which can read a private repository. `GOBIN` puts the
+binary in a directory on your PATH, because the default, `$(go env GOPATH)/bin`,
+is not on it.
+
+A build from source reports its version as `dev`. The tag is stamped in by the
+release build, and `go install` applies no ldflags.
+
+### Install a release binary
+
+Download with `gh`, verify against the published checksums, then extract:
+
+```sh
+tag=v0.1.0
+asset=devctl_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64, linux_amd64, linux_arm64
+
+gh release download "$tag" -R brunovenceslau/devctl -p "$asset" -p checksums.txt
+grep "  $asset\$" checksums.txt | shasum -a 256 -c -
+mkdir -p "$HOME/.local/bin"
+tar -xzf "$asset" -C "$HOME/.local/bin" devctl
+```
+
+The archive also carries `LICENSE` and `README.md`. Naming `devctl` in the `tar`
+command extracts the binary alone.
+
+Confirm the result:
+
+```sh
+devctl --version
+```
+
+### macOS reports "Apple could not verify devctl is free of malware"
+
+macOS prints that when Gatekeeper evaluates a binary Apple has not notarized.
+devctl is not notarized. Notarization requires a paid Apple Developer Program
+membership, which this tool does not have.
+
+Gatekeeper only evaluates a file carrying the `com.apple.quarantine` extended
+attribute, and that attribute is not part of the download. The program that
+fetched the file decides whether to attach it. A web browser always attaches it.
+`gh`, `curl`, `wget`, and `go install` never do, so the commands above produce a
+binary that runs without a prompt.
+
+To repair a binary already downloaded through a browser, strip the attribute:
+
+```sh
+xattr -d com.apple.quarantine "$HOME/.local/bin/devctl"
+```
+
+`xattr -l <file>` prints what a file carries. Empty output means Gatekeeper
+leaves it alone.
+
+Double-clicking a quarantined archive in Finder copies the attribute onto every
+file it extracts. Extracting the same archive with `tar` on the command line
+does not.
 
 ## `devctl reminders`
 
