@@ -29,7 +29,7 @@ raised mid-task, on a topic unrelated to the work at hand, is otherwise lost
 when the session ends.
 
 ```sh
-devctl reminders add wire the store into the uninstall purge warning
+devctl reminders add drop the temporary debug flag from the parser
 devctl reminders list
 devctl reminders reorder 20260915T142233.482913Z-9f3a1c   # bump one to the top
 devctl reminders path                                     # where they live
