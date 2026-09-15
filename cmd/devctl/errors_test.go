@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"testing"
 
+	"github.com/brunovenceslau/devctl/internal/repo"
+	"github.com/brunovenceslau/devctl/internal/store"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -23,6 +26,14 @@ func TestExitCode(t *testing.T) {
 		{name: "success", err: nil, want: exitOK},
 		{name: "usage", err: errUsage(errors.New("unknown flag")), want: exitUsage},
 		{name: "wrapped usage", err: fmt.Errorf("outer: %w", errUsage(errors.New("bad"))), want: exitUsage},
+		{name: "no origin", err: fmt.Errorf("x: %w", repo.ErrNoOrigin), want: exitUsage},
+		{name: "unparseable url", err: fmt.Errorf("x: %w", repo.ErrBadURL), want: exitUsage},
+		{name: "id not found", err: fmt.Errorf("x: %w", store.ErrNotFound), want: exitFailure},
+		// A missing git binary is a runtime failure, not a bad invocation: the
+		// command was right, the machine is not set up.
+		{name: "git missing", err: fmt.Errorf("x: %w", repo.ErrGitMissing), want: exitFailure},
+		{name: "interrupted", err: fmt.Errorf("x: %w", context.Canceled), want: exitFailure},
+		{name: "no store", err: fmt.Errorf("x: %w", store.ErrNoStore), want: exitFailure},
 		{name: "runtime failure", err: fs.ErrPermission, want: exitFailure},
 	}
 
