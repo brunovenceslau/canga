@@ -9,6 +9,7 @@ import (
 	"github.com/brunovenceslau/devctl/internal/hooks"
 	"github.com/brunovenceslau/devctl/internal/repo"
 	"github.com/brunovenceslau/devctl/internal/store"
+	"github.com/brunovenceslau/devctl/internal/upgrade"
 	"github.com/spf13/cobra"
 )
 
@@ -75,7 +76,12 @@ func exitCode(err error) int {
 		// A conflict is resolved by passing --force or moving a file, never by
 		// running the same command again, which is the same test that puts a
 		// malformed id here.
-		errors.Is(err, hooks.ErrConflict):
+		errors.Is(err, hooks.ErrConflict),
+		// An upgrade that cannot tell which release the running binary came
+		// from, and a --tag that is not a version, are both answered by naming
+		// a release on the command line. Same test again: nothing to retry.
+		errors.Is(err, upgrade.ErrNotRelease),
+		errors.Is(err, upgrade.ErrBadTag):
 		return exitUsage
 	default:
 		return exitFailure

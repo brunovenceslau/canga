@@ -8,6 +8,7 @@ go 1.27.0
 require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
+	golang.org/x/mod v0.41.0
 )
 
 require (

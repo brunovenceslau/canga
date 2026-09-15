@@ -57,7 +57,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVarP(&a.repoDir, "repo", "C", ".",
 		"git repository whose reminders to operate on")
 
-	root.AddCommand(newRemindersCmd(a), newSetupCmd(a))
+	root.AddCommand(newRemindersCmd(a), newSetupCmd(a), newUpgradeCmd())
 
 	return root
 }
