@@ -1,0 +1,33 @@
+# GoReleaser — cross-compiled binaries attached to a GitHub release on a v* tag.
+version: 2
+
+project_name: devctl
+
+builds:
+  - id: devctl
+    main: ./cmd/devctl
+    binary: devctl
+    env:
+      - CGO_ENABLED=0
+    # The macs are darwin/{arm64,amd64}; the agent sandboxes are linux VMs, and
+    # devctl runs INSIDE them too, so linux is not optional here.
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs", "^test", "^ci", "^chore", "^style"]

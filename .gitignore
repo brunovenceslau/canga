@@ -1,0 +1,14 @@
+# Build output. `make build` writes here; GoReleaser writes dist/.
+/bin/
+/dist/
+
+# `go test -c` binaries and coverage profiles.
+*.test
+/coverage.out
+/coverage.html
+
+# Editor and OS droppings.
+.idea/
+.vscode/
+*.swp
+.DS_Store
