@@ -296,6 +296,7 @@ make tools   # install the pinned golangci-lint and govulncheck
 make fix     # apply every automatic fix: go fix, the formatters, --fix linters
 make ci      # lint + test + govulncheck — must be green before a push
 make race    # the multi-process store race gate, verbosely
+make release # attach the release artifacts to an existing GitHub release
 ```
 
 Every gate is a `make` target, and CI invokes the target rather than restating
@@ -304,6 +305,53 @@ it, so what CI runs is what a push was checked against locally.
 default is sized for CI. `make race RACE_STORE_DIR=/path` runs it against a
 filesystem of your choosing, which is how the store's invariants were checked
 over a virtiofs mount rather than assumed to hold there.
+
+### Releasing
+
+The release itself is created by hand on GitHub, because its auto-generated
+notes are the reason to do it there. `make release` builds the artifacts and
+attaches them to it. It never edits the release or its notes.
+
+Install the pinned GoReleaser once:
+
+```sh
+make tool-release
+```
+
+`go install` puts it in `$(go env GOPATH)/bin`, which is not on PATH on either
+mac. Prefix it with `GOBIN="$HOME/.local/bin"`, or add that directory to PATH.
+
+Then, in order:
+
+1. Tag the commit and push the tag.
+
+   ```sh
+   git tag -a v0.2.0 -m "v0.2.0"
+   git push origin v0.2.0
+   ```
+
+2. Create the release on GitHub from that tag, and let it generate the notes.
+
+3. Build and attach the artifacts:
+
+   ```sh
+   make release
+   ```
+
+It refuses, in under a second, if GoReleaser or `gh` is missing, if HEAD carries
+no tag, or if that tag has no release to attach to. It then runs `make ci`,
+because a release is the one build nobody re-checks afterwards. GoReleaser
+itself refuses a dirty working tree.
+
+Re-running it replaces the assets rather than failing, so a release built twice
+from one tag is fine.
+
+The artifact format has one definition, `.goreleaser.yml`, and `make release`
+invokes GoReleaser rather than restating it. That matters beyond tidiness:
+`devctl upgrade` finds its asset by the `_<os>_<arch>.tar.gz` suffix and reads
+`checksums.txt` by exact filename, so a second packaging implementation that
+drifted would break upgrading rather than releasing, and only for whoever ran it
+next.
 
 ### Commit hook
 
