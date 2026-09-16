@@ -55,8 +55,8 @@ var (
 	// ErrForbidden reports a request GitHub refused, including a rate limit.
 	ErrForbidden = errors.New("github refused the request")
 
-	// ErrNoRelease reports a release GitHub does not serve. The repository is
-	// public, so this means what it says: no release carries that tag.
+	// ErrNoRelease reports a release GitHub does not serve: no release carries
+	// that tag, and the message names the repository it asked.
 	ErrNoRelease = errors.New("no such release")
 
 	// ErrNoAsset reports a release carrying nothing for this platform.
@@ -285,10 +285,11 @@ func githubSaid(body io.Reader) string {
 
 // Token finds a GitHub credential for the API, or returns the empty string.
 //
-// A credential is OPTIONAL: the repository is public, so an unauthenticated
-// request reads a release perfectly well. What a token buys is GitHub's
-// authenticated rate limit, 5000 requests an hour against 60 for an anonymous
-// client sharing one outbound address with everything else behind it.
+// A credential is OPTIONAL, and that rests on one assumption: that a release
+// can be read without one. What a token buys is GitHub's authenticated rate
+// limit, 5000 requests an hour against 60 for an anonymous client sharing one
+// outbound address with everything else behind it. If releases ever stop being
+// readable anonymously, this is the function that has to start refusing again.
 //
 // Not finding one is therefore not a failure, and this reports none. The
 // environment comes first, in gh's own precedence order, because that is how a

@@ -15,8 +15,7 @@ derived from its `origin` remote. The derivation is deterministic, so
 
 ## Install
 
-The repository is public, so neither path below needs a GitHub account or a
-credential of any kind.
+Neither path below needs a GitHub account or a credential.
 
 ### Build from source
 
@@ -302,10 +301,10 @@ restored unconditionally, since an install you cannot run is not one.
 
 ### The token
 
-A GitHub credential is optional. The repository is public, so an unauthenticated
-request reads a release perfectly well. What a token buys is GitHub's
-authenticated rate limit, 5000 requests an hour against 60 for an anonymous
-client, which one shared outbound address can exhaust on its own.
+A GitHub token is optional: with none, `devctl upgrade` reads the release
+anonymously. What a token buys is GitHub's authenticated rate limit, 5000
+requests an hour against 60 for an anonymous client, which one shared outbound
+address can exhaust on its own.
 
 `GH_TOKEN` is read first, then `GITHUB_TOKEN`, and failing both, whatever `gh
 auth token` answers. That last one is why a token you never exported is still

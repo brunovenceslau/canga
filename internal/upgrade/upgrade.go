@@ -50,8 +50,8 @@ type Options struct {
 	// determined by its arguments.
 	Current string
 
-	// Token authenticates against the GitHub API. It is OPTIONAL: the
-	// repository is public, and a token only raises the rate limit. See Token.
+	// Token authenticates against the GitHub API. It is OPTIONAL: a release
+	// reads without one, and a token only raises the rate limit. See Token.
 	Token string
 
 	// Tag installs that exact release instead of the newest one. It is the only
