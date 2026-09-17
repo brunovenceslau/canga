@@ -49,21 +49,14 @@ const httpTimeout = 2 * time.Minute
 const tokenTimeout = 10 * time.Second
 
 var (
-	// ErrNoToken reports that no GitHub credential could be found. devctl's
-	// repository is private, so an unauthenticated request cannot even see that
-	// a release exists.
-	ErrNoToken = errors.New("no github token")
-
 	// ErrUnauthorized reports a token GitHub rejected outright.
 	ErrUnauthorized = errors.New("github rejected the token")
 
 	// ErrForbidden reports a request GitHub refused, including a rate limit.
 	ErrForbidden = errors.New("github refused the request")
 
-	// ErrNoRelease reports a release GitHub does not serve. On a private
-	// repository this is also what a token without access looks like: the API
-	// answers 404 rather than 403 so that it does not confirm the repository
-	// exists, and the two cases are genuinely indistinguishable from here.
+	// ErrNoRelease reports a release GitHub does not serve: no release carries
+	// that tag, and the message names the repository it asked.
 	ErrNoRelease = errors.New("no such release")
 
 	// ErrNoAsset reports a release carrying nothing for this platform.
@@ -75,8 +68,8 @@ var (
 	ErrTooLarge = errors.New("release artifact is larger than expected")
 )
 
-// asset is one file attached to a release. The id, not the browser URL, is what
-// a private repository is read through.
+// asset is one file attached to a release. The id is what the API serves it by;
+// see download for why that path is used rather than the browser URL.
 type asset struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
@@ -148,8 +141,9 @@ func (c *client) releaseAt(ctx context.Context, path string) (release, error) {
 // a single cap generous enough for the archive is no cap at all for the text
 // file beside it.
 //
-// The request goes to the API, not to the browser download URL, because a
-// private repository's assets are only readable that way. GitHub answers with a
+// The request goes to the API, not to the browser download URL, so that one
+// code path serves the release whatever the repository's visibility and whether
+// or not a token was supplied. GitHub answers with a
 // redirect to a signed URL on another host, which the http.Client follows and —
 // as net/http.Client documents — does NOT carry the Authorization header to,
 // since it is not a subdomain match. That is load-bearing rather than
@@ -173,10 +167,34 @@ func (c *client) download(ctx context.Context, want asset, limit int64) ([]byte,
 	return body, nil
 }
 
-// fetch performs one request and returns at most limit bytes of its body. It
-// owns the response from end to end — no caller has to remember to close it,
-// and no partially read body escapes.
+// fetch performs one request and returns at most limit bytes of its body.
+//
+// A token GitHub rejects is dropped and the request retried anonymously, once.
+// The token is optional, so a stale one (expired, revoked, or a sandbox secret
+// that outlived its purpose) must not refuse an upgrade that works without it.
+// The client forgets the token for every later request too, rather than paying
+// a 401 per asset. When the anonymous retry fails as well, both failures are
+// reported, so a rate limit hit without the token still names the token as the
+// thing to fix.
 func (c *client) fetch(ctx context.Context, path, accept string, limit int64) ([]byte, error) {
+	body, err := c.fetchOnce(ctx, path, accept, limit)
+	if !errors.Is(err, ErrUnauthorized) || c.token == "" {
+		return body, err
+	}
+
+	c.token = ""
+
+	body, retryErr := c.fetchOnce(ctx, path, accept, limit)
+	if retryErr != nil {
+		return nil, fmt.Errorf("%w; retried without the token: %w", err, retryErr)
+	}
+
+	return body, nil
+}
+
+// fetchOnce performs one request. It owns the response from end to end — no
+// caller has to remember to close it, and no partially read body escapes.
+func (c *client) fetchOnce(ctx context.Context, path, accept string, limit int64) ([]byte, error) {
 	url := c.baseURL + "/repos/" + apiOwner + "/" + apiRepo + path
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -236,7 +254,7 @@ func statusError(resp *http.Response) error {
 
 		return fmt.Errorf("%w%s", ErrForbidden, said)
 	case http.StatusNotFound:
-		return fmt.Errorf("%w, or the token cannot see %s/%s%s", ErrNoRelease, apiOwner, apiRepo, said)
+		return fmt.Errorf("%w in %s/%s%s", ErrNoRelease, apiOwner, apiRepo, said)
 	default:
 		return fmt.Errorf("github answered %s%s", resp.Status, said)
 	}
@@ -289,21 +307,27 @@ func githubSaid(body io.Reader) string {
 	return ": " + said.Message
 }
 
-// Token finds a GitHub credential for the API.
+// Token finds a GitHub credential for the API, or returns the empty string.
 //
-// The environment comes first, in gh's own precedence order, because that is
-// how a sandbox is handed one. `gh auth token` is the fallback for the mac,
-// where the token lives in the keychain and never reaches the environment:
-// without it `devctl upgrade` would simply not work on the host it is for. gh
-// is therefore an OPTIONAL dependency — a missing gh is reported as a missing
-// token, with both ways to supply one.
+// A credential is OPTIONAL, and that rests on one assumption: that a release
+// can be read without one. What a token buys is GitHub's authenticated rate
+// limit, 5000 requests an hour against 60 for an anonymous client sharing one
+// outbound address with everything else behind it. If releases ever stop being
+// readable anonymously, this is the function that has to start refusing again.
 //
-// The token never appears in an error: a credential that reaches a terminal
-// scrollback or a CI log is not recoverable.
-func Token(ctx context.Context) (string, error) {
+// Not finding one is therefore not a failure, and this reports none. Nor is
+// finding a bad one: a token GitHub rejects is dropped, see fetch. The
+// environment comes first, in gh's own precedence order, because that is how a
+// sandbox is handed one; `gh auth token` is the fallback for the mac, where the
+// token lives in the keychain and never reaches the environment. gh stays an
+// optional dependency.
+//
+// The token never appears in an error, here or anywhere below: a credential
+// that reaches a terminal scrollback or a CI log is not recoverable.
+func Token(ctx context.Context) string {
 	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
 		if token := strings.TrimSpace(os.Getenv(name)); token != "" {
-			return token, nil
+			return token
 		}
 	}
 
@@ -313,14 +337,8 @@ func Token(ctx context.Context) (string, error) {
 	// literals, so nothing the caller controls is ever parsed as a command.
 	out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output()
 	if err != nil {
-		return "", fmt.Errorf(
-			"%w: set GH_TOKEN, or run `gh auth login` so `gh auth token` can answer", ErrNoToken)
+		return ""
 	}
 
-	token := strings.TrimSpace(string(out))
-	if token == "" {
-		return "", fmt.Errorf("%w: `gh auth token` returned nothing", ErrNoToken)
-	}
-
-	return token, nil
+	return strings.TrimSpace(string(out))
 }

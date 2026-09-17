@@ -55,9 +55,17 @@ func newRootCmd() *cobra.Command {
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return errUsage(err) })
 
 	root.PersistentFlags().StringVarP(&a.repoDir, "repo", "C", ".",
-		"git repository whose reminders to operate on")
+		"git repository to operate on")
 
-	root.AddCommand(newRemindersCmd(a), newSetupCmd(a), newUpgradeCmd())
+	// A repository is a directory, so file completion on this flag offers mostly
+	// wrong answers. Registration cannot fail for a flag declared one line above,
+	// which is the only error this returns.
+	_ = root.RegisterFlagCompletionFunc("repo",
+		func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+			return nil, cobra.ShellCompDirectiveFilterDirs
+		})
+
+	root.AddCommand(newCloneCmd(), newRemindersCmd(a), newSetupCmd(a), newSyncCmd(a), newUpgradeCmd())
 
 	return root
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,9 +47,7 @@ func TestToken(t *testing.T) {
 		t.Setenv("GH_TOKEN", "from-gh-token")
 		t.Setenv("GITHUB_TOKEN", "from-github-token")
 
-		token, err := Token(t.Context())
-		require.NoError(t, err)
-		assert.Equal(t, "from-gh-token", token)
+		assert.Equal(t, "from-gh-token", Token(t.Context()))
 	})
 
 	t.Run("GITHUB_TOKEN is the second look", func(t *testing.T) {
@@ -56,9 +55,8 @@ func TestToken(t *testing.T) {
 		t.Setenv("GH_TOKEN", "")
 		t.Setenv("GITHUB_TOKEN", "  from-github-token\n")
 
-		token, err := Token(t.Context())
-		require.NoError(t, err)
-		assert.Equal(t, "from-github-token", token, "surrounding whitespace never reaches a header")
+		assert.Equal(t, "from-github-token", Token(t.Context()),
+			"surrounding whitespace never reaches a header")
 	})
 
 	// The reason the fallback exists: on the mac the token is in the keychain
@@ -69,20 +67,17 @@ func TestToken(t *testing.T) {
 		t.Setenv("GITHUB_TOKEN", "")
 		fakeGH(t, "from-the-keychain")
 
-		token, err := Token(t.Context())
-		require.NoError(t, err)
-		assert.Equal(t, "from-the-keychain", token)
+		assert.Equal(t, "from-the-keychain", Token(t.Context()))
 	})
 
+	// Finding nothing is not a failure. The repository is public, so the empty
+	// string is a usable answer: the request goes out unauthenticated.
 	t.Run("no gh and no environment", func(t *testing.T) {
 		noToolsPath(t)
 		t.Setenv("GH_TOKEN", "")
 		t.Setenv("GITHUB_TOKEN", "")
 
-		_, err := Token(t.Context())
-		require.ErrorIs(t, err, ErrNoToken)
-		require.ErrorContains(t, err, "GH_TOKEN", "the refusal has to name both ways to supply one")
-		require.ErrorContains(t, err, "gh auth login")
+		assert.Empty(t, Token(t.Context()))
 	})
 
 	t.Run("gh present but signed out", func(t *testing.T) {
@@ -90,8 +85,7 @@ func TestToken(t *testing.T) {
 		t.Setenv("GITHUB_TOKEN", "")
 		fakeGH(t, "")
 
-		_, err := Token(t.Context())
-		require.ErrorIs(t, err, ErrNoToken)
+		assert.Empty(t, Token(t.Context()))
 	})
 }
 
@@ -125,13 +119,13 @@ func TestClientStatusErrors(t *testing.T) {
 			mustState: "rate limit",
 		},
 		{
-			// On a private repository these are one answer, and the message has
-			// to say so: 404 is also what a token with no access is told, so
-			// that the API does not confirm the repository exists.
-			name:      "no release, or no access",
+			// The repository is public, so 404 means what it says. The message
+			// names the repository it asked, because a devctl built from a fork
+			// still reads releases from this one.
+			name:      "no such release",
 			status:    http.StatusNotFound,
 			expected:  ErrNoRelease,
-			mustState: "cannot see",
+			mustState: "brunovenceslau/devctl",
 		},
 		{
 			name:      "something else entirely",
@@ -189,6 +183,73 @@ func TestClientLatestSendsWhatGitHubExpects(t *testing.T) {
 	assert.Equal(t, "application/vnd.github+json", got.Header.Get("Accept"))
 	assert.Equal(t, apiVersion, got.Header.Get("X-GitHub-Api-Version"))
 	assert.Equal(t, "devctl/v0.1.0", got.Header.Get("User-Agent"))
+}
+
+// A token is optional, so one GitHub rejects must not refuse an upgrade that
+// works without it. The retry is anonymous, and so is every request after it.
+func TestClientRetriesAnonymouslyWhenTheTokenIsRejected(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu    sync.Mutex
+		auths []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+
+		auths = append(auths, r.Header.Get("Authorization"))
+
+		mu.Unlock()
+
+		if r.Header.Get("Authorization") != "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
+
+			return
+		}
+
+		_, _ = w.Write([]byte(`{"tag_name":"v0.2.0","assets":[]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	api := newClient("expired", server.URL, installedVersion)
+
+	found, err := api.latest(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, newerVersion, found.Tag)
+
+	_, err = api.byTag(t.Context(), newerVersion)
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	assert.Equal(t, []string{"Bearer expired", "", ""}, auths,
+		"one rejected request, then anonymous from there on")
+}
+
+// When the anonymous retry fails too, the rejected token is still named: it is
+// the thing the user can fix.
+func TestClientReportsBothFailuresWhenTheRetryFails(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			w.WriteHeader(http.StatusUnauthorized)
+
+			return
+		}
+
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := newClient("expired", server.URL, installedVersion).latest(t.Context())
+	require.ErrorIs(t, err, ErrUnauthorized)
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.ErrorContains(t, err, "retried without the token")
 }
 
 func TestClientRejectsAReleaseWithNoTag(t *testing.T) {

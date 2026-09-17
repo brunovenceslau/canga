@@ -15,23 +15,16 @@ derived from its `origin` remote. The derivation is deterministic, so
 
 ## Install
 
-devctl lives in a private repository. Both paths below need a GitHub account
-with access to it. `gh` uses your `gh auth login` token. `go install` reaches
-the repository through git instead, so git needs a credential of its own: run
-`gh auth setup-git` once, or configure an SSH `insteadOf` rewrite. Authenticating
-`gh` alone leaves `go install` unable to fetch the module.
+Neither path below needs a GitHub account or a credential.
 
 ### Build from source
 
 ```sh
-GOPRIVATE='github.com/brunovenceslau/*' GOBIN="$HOME/.local/bin" \
-  go install github.com/brunovenceslau/devctl/cmd/devctl@latest
+GOBIN="$HOME/.local/bin" go install github.com/brunovenceslau/devctl/cmd/devctl@latest
 ```
 
-`GOPRIVATE` keeps the request away from `proxy.golang.org` and the checksum
-database, neither of which can read a private repository. `GOBIN` puts the
-binary in a directory on your PATH, because the default, `$(go env GOPATH)/bin`,
-is not on it.
+`GOBIN` puts the binary in a directory on your PATH, because the default,
+`$(go env GOPATH)/bin`, is not on it.
 
 `go install` on a module path applies no ldflags, so a binary built this way
 reports its version as `dev`. To stamp the git description in, build from a
@@ -39,17 +32,22 @@ checkout with `make install` instead.
 
 ### Install a release binary
 
-Download with `gh`, verify against the published checksums, then extract:
+Download, verify against the published checksums, then extract:
 
 ```sh
-tag=$(gh release view -R brunovenceslau/devctl --json tagName -q .tagName)
+releases=https://github.com/brunovenceslau/devctl/releases
+tag=$(basename "$(curl -fsS -o /dev/null -w '%{url_effective}' "$releases/latest")")
 asset=devctl_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64, linux_amd64, linux_arm64
 
-gh release download "$tag" -R brunovenceslau/devctl -p "$asset" -p checksums.txt --clobber
+curl -fsSLO "$releases/download/$tag/$asset"
+curl -fsSLO "$releases/download/$tag/checksums.txt"
 mkdir -p "$HOME/.local/bin"
 awk -v a="$asset" '$2 == a' checksums.txt | shasum -a 256 -c - \
   && tar -xzf "$asset" -C "$HOME/.local/bin" devctl
 ```
+
+`$releases/latest` redirects to the newest release, so `%{url_effective}` names
+its tag without parsing any JSON.
 
 Read the last two lines as one command. `&&` is what makes the checksum a gate:
 without it a pasted block runs every line in turn, and a `FAILED` verification is
@@ -60,9 +58,8 @@ filename field for equality. `grep` would read the dots in the filename as
 wildcards. An asset absent from `checksums.txt` yields no line, and `shasum`
 rejects empty input rather than reporting success.
 
-`--clobber` lets you run the block again in a directory that already holds an
-earlier download. Without it `gh` refuses the whole command rather than replace
-a file.
+Running the block again in a directory that already holds an earlier download
+overwrites it: `curl -O` replaces a file rather than refusing.
 
 The archive also carries `LICENSE` and `README.md`. Naming `devctl` in the `tar`
 command extracts the binary alone.
@@ -109,6 +106,152 @@ Double-clicking a quarantined archive in Finder copies the attribute onto every
 file it extracts, so the `devctl` it leaves next to the archive is quarantined
 and stays so when you move it. Extracting the same archive with `tar` on the
 command line does not.
+
+## `devctl clone`
+
+Clones a repository into the deterministic layout, so the same repository lands
+at the same path on every machine, whichever protocol you cloned it with.
+
+```sh
+devctl clone git@github.com:acme/widget.git
+# → ~/src/github.com/acme/widget
+
+cd "$(devctl clone https://github.com/acme/widget)"
+devctl clone https://github.com/acme/widget /tmp/scratch   # an explicit target
+```
+
+The resolved path is the only thing printed on stdout. git's progress and every
+diagnostic go to stderr, which is what makes the command substitution above
+safe.
+
+### Where a clone lands
+
+```
+${DEVCTL_BASE_DIR:-$HOME/src}/<host>/<owner>/<repo>
+```
+
+The three segments come from the URL, with the scheme, any userinfo, any port
+and any `.git` suffix removed. Nested owners are kept, so a GitLab subgroup
+lands at `gitlab.com/group/sub/proj`. The spelling is the repository's own: only
+the reminder store, which is shared between a case-folding and a case-sensitive
+filesystem, encodes case.
+
+| Variable | Default | What it sets |
+| --- | --- | --- |
+| `DEVCTL_BASE_DIR` | `$HOME/src` | Root of the layout. |
+| `DEVCTL_SIGNING_KEY` | `git config --global user.signingkey` | Key stamped into the clone. |
+| `DEVCTL_ALLOWED_SIGNERS` | `git config --global gpg.ssh.allowedSignersFile` | Allowed-signers file wired into the clone, so `git log --show-signature` works there. |
+| `CI` | unset | When set to anything, drops git's `\r` progress meter. |
+
+### What it refuses
+
+A target that already holds anything is refused, and exits 1. An existing empty
+directory is fine. Nothing here ever merges into, or writes over, a tree that is
+already there.
+
+A URL no path can be derived from is refused before anything is created, and
+exits 2. Any credential in it is stripped from the message first.
+
+### Transport hardening
+
+Every clone runs with four git options on the command line, where no repository
+or user configuration can override them:
+
+```
+-c protocol.ext.allow=never -c protocol.fd.allow=never
+-c transfer.fsckObjects=true -c fetch.fsckObjects=true
+```
+
+The `ext` and `fd` remote helpers run the rest of the URL as a command, so a URL
+such as `ext::sh -c …` is a command execution dressed as a repository. Turning
+them off on the command line means a machine whose git config sets
+`protocol.ext.allow=always` still refuses one.
+
+One setting outranks a `-c` option: the `GIT_ALLOW_PROTOCOL` environment
+variable, which replaces git's protocol policy when it is set. devctl removes
+`ext` and `fd` from it before running git and keeps every other entry, so an
+allow-list such as `https:ssh` still restricts what it restricted. A list that
+named only `ext` is left empty, which allows nothing. `file` is left at git's default,
+allowed, so local-path clones keep working. The two `fsckObjects` options make
+the fetch reject a malformed object graph rather than write it to disk first.
+
+### Signing
+
+After the clone, SSH signing is written into the new repository's **local**
+config: the allowed-signers file when one resolves, and `gpg.format=ssh`,
+`user.signingkey`, `commit.gpgsign` and `tag.gpgsign` when a key resolves.
+
+`gpg.format` is written rather than inherited. git's default format is openpgp,
+so on a machine that does not set `gpg.format=ssh` globally, a stamped SSH key
+would fail every commit with `gpg: skipped "…": No secret key`. The consequence
+is deliberate: a clone made by `devctl clone` signs with SSH, so do not hand a
+GPG key to `DEVCTL_SIGNING_KEY` or leave one in the global `user.signingkey` and
+expect it to be used here.
+
+The key fallback reads the **global** git config rather than the effective one,
+so the key is the machine's identity and never the local key of whatever
+repository you ran the command in. Nothing global is written.
+
+When neither a key nor an allowed-signers file resolves, the clone is left
+alone rather than pointed at a file that does not exist. `devctl` then reports
+on stderr whether the clone signs anyway, because git configuration outside it
+turns `commit.gpgsign` on. A sandbox is that case: its `/etc/gitconfig` carries
+the format, the flag and a key command, and no `user.signingkey`. Otherwise it
+reports `signing OFF` and names what to set.
+
+## `devctl sync`
+
+Fetches every remote with `--prune` and `--tags`, then fast-forwards each local
+branch that tracks an upstream.
+
+```sh
+devctl sync                                  # the repository you are standing in
+devctl sync -C ~/src/github.com/acme/widget  # or any other
+
+# a sweep across every clone in the layout
+find ~/src -name .git -maxdepth 4 -type d -exec dirname {} \; | while read -r r; do
+  devctl sync -C "$r"
+done
+```
+
+A branch that MOVED is printed on stdout as `<branch><TAB><upstream>`, one per
+line, so a sweep pipes and the output is a change log rather than an inventory.
+A branch with nothing to bring in prints nothing at all. Refusals and the
+dirty-tree notice go to stderr.
+
+### What it never does
+
+It never resets, forces, merges non-linearly or deletes anything. Every outcome
+is therefore recoverable, which is what makes it safe to run across every
+repository on a machine without reading them first.
+
+| Situation | What happens |
+| --- | --- |
+| Modified tracked files | The run stops before any branch is touched, and says so. Exit 0. |
+| Untracked files only | The tree does not count as dirty, and the sync proceeds. |
+| Branch already level with, or ahead of, its upstream | Nothing to bring in, and nothing printed. |
+| Branch diverged from its upstream | Reported on stderr in git's own words, and left exactly where it is. Exit 0. |
+| Branch git refuses for another reason | Same: git's words are printed rather than a guess at them. A branch checked out in a linked worktree, a rebase in progress, or an incoming commit that would overwrite an untracked file all land here. |
+| Branch with no upstream | Left out of the report. Nothing was ever asked of it. |
+| Branch whose upstream was deleted | Reported on stderr as `upstream <remote>/<branch> is gone`, and left where it is. It may hold commits that were never pushed. Exit 0. |
+| Detached HEAD | Not an error. Every branch is updated without a checkout. |
+| Fetch failed | Exit 1. Deciding branch states against a stale view of the remote would be guessing. |
+| Interrupted with Ctrl-C | Exit 1, naming the cancellation. A branch that was never asked about is never reported as refused. |
+| Bare repository, or not a repository | Exit 2. Both arms below need a working tree. |
+
+Each branch is asked first whether its upstream is already an ancestor of it. If
+it is, there is nothing to fast-forward and nothing is run. That question is not
+an optimization: without it the two arms below disagree about the same
+repository, because `merge --ff-only` answers "Already up to date" for a branch
+that is ahead of its upstream while `fetch` refuses the same state.
+
+The checked-out branch then advances with `git merge --ff-only`, which refuses
+rather than touch a working tree it would have to change. Every other branch
+advances with `git fetch . <upstream>:<branch>`, and the missing `+` in front of
+that refspec is the safety property itself: without it git refuses a non
+fast-forward update instead of overwriting the branch.
+
+The fetch carries the same transport hardening as `devctl clone`.
 
 ## `devctl upgrade`
 
@@ -168,19 +311,21 @@ restored unconditionally, since an install you cannot run is not one.
 
 ### The token
 
-The repository is private, so a GitHub credential is required — an
-unauthenticated request cannot see that a release exists at all. `GH_TOKEN` is
-read first, then `GITHUB_TOKEN`, and failing both, whatever `gh auth token`
-answers.
+A GitHub token is optional: with none, `devctl upgrade` reads the release
+anonymously. What a token buys is GitHub's authenticated rate limit, 5000
+requests an hour against 60 for an anonymous client, which one shared outbound
+address can exhaust on its own.
 
-That last one is why `devctl upgrade` works on a mac with no token in the
-environment: `gh` keeps it in the keychain. `gh` is optional, not required —
-export `GH_TOKEN` and it is never consulted.
+`GH_TOKEN` is read first, then `GITHUB_TOKEN`, and failing both, whatever `gh
+auth token` answers. That last one is why a token you never exported is still
+used on a mac: `gh` keeps it in the keychain. `gh` is optional — export
+`GH_TOKEN` and it is never consulted, install neither and the upgrade still
+runs.
 
-A private repository answers 404 both for a release that does not exist and for
-a token that cannot see the repository, deliberately, so that it does not
-confirm the repository exists. The two are indistinguishable from here and the
-error says so.
+A token GitHub rejects, such as an expired or revoked one, does not stop the
+upgrade. devctl retries that request without it and makes every later request
+anonymously. If the anonymous request fails too, the error names both failures,
+so the stale token is still reported.
 
 ### When it refuses to guess
 
@@ -281,13 +426,18 @@ generator on the shell startup path.
 `rm` and `reorder` complete **real stored ids**, each shown with its reminder's
 first line as the description.
 
+`-C` and `clone`'s optional target complete directories only. `clone`'s URL
+position completes nothing: a half-typed URL is not a path, and a shell that
+fell back to file completion there would offer the current directory's
+contents.
+
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | success |
-| `1` | a runtime failure, or an id with nothing behind it |
-| `2` | a bad invocation, a directory with no usable `origin`, or an upgrade with no release to work from |
+| `1` | a runtime failure, a clone target that already holds something, or an id with nothing behind it |
+| `2` | a bad invocation, a directory that is not a repository or has no usable `origin`, or an upgrade with no release to work from |
 
 ## Development
 

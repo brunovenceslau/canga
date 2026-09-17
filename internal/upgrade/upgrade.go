@@ -50,8 +50,8 @@ type Options struct {
 	// determined by its arguments.
 	Current string
 
-	// Token authenticates against the GitHub API. devctl's repository is
-	// private, so there is no unauthenticated path; see Token.
+	// Token authenticates against the GitHub API. It is OPTIONAL: a release
+	// reads without one, and a token only raises the rate limit. See Token.
 	Token string
 
 	// Tag installs that exact release instead of the newest one. It is the only
@@ -89,10 +89,6 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	wanted, err := wantedTag(opts)
 	if err != nil {
 		return Result{}, err
-	}
-
-	if opts.Token == "" {
-		return Result{}, fmt.Errorf("%w", ErrNoToken)
 	}
 
 	result := Result{Current: normalizeTag(opts.Current)}

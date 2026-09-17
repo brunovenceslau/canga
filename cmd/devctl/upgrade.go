@@ -25,17 +25,13 @@ func newUpgradeCmd() *cobra.Command {
 			"confirm it reports the version it was downloaded as, and only then\n" +
 			"renamed over it, so an interrupted upgrade leaves the working binary\n" +
 			"untouched.\n\n" +
-			"The repository is private, so a GitHub token is required: GH_TOKEN or\n" +
-			"GITHUB_TOKEN, or whatever `gh auth token` answers.",
+			"A GitHub token is optional. GH_TOKEN, GITHUB_TOKEN or whatever `gh\n" +
+			"auth token` answers is used when one is there, which raises GitHub's\n" +
+			"rate limit; without one the release is read anonymously.",
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			token, err := upgrade.Token(cmd.Context())
-			if err != nil {
-				return err
-			}
-
 			options.Current = version
-			options.Token = token
+			options.Token = upgrade.Token(cmd.Context())
 
 			result, err := upgrade.Run(cmd.Context(), options)
 
