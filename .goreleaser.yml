@@ -12,8 +12,9 @@ builds:
     binary: devctl
     env:
       - CGO_ENABLED=0
-    # The macs are darwin/{arm64,amd64}; the agent sandboxes are linux VMs, and
-    # devctl runs INSIDE them too, so linux is not optional here.
+    # The macs are darwin/{arm64,amd64}. linux stays because the tests and the
+    # cross-compile gate run there, and a release that builds for it proves
+    # nothing platform-specific crept into the host tool.
     goos: [darwin, linux]
     goarch: [amd64, arm64]
     flags:
@@ -28,9 +29,40 @@ builds:
       - -X main.version={{.Tag}}
       - -X main.commit={{.Commit}}
 
+  # agtctl is the binary the agent sandboxes get. They are linux VMs, so linux
+  # is the whole platform list.
+  #
+  # devctl <= v0.3.0 picks an archive by platform suffix alone. On a mac the
+  # suffix still names exactly one file, because there is no darwin agtctl, so
+  # those versions keep upgrading there. On linux it names two, and a linux
+  # devctl <= v0.3.0 refuses the upgrade; the README's upgrade section says how
+  # to recover. Shipping agtctl for darwin would extend that to the macs.
+  - id: agtctl
+    main: ./cmd/agtctl
+    binary: agtctl
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Tag}}
+      - -X main.commit={{.Commit}}
+
+# One archive per binary. The binary's name leads each archive name, and
+# `devctl upgrade` selects its archive by that prefix, so the templates below
+# are part of that contract rather than cosmetics.
 archives:
-  - formats: [tar.gz]
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: devctl
+    ids: [devctl]
+    formats: [tar.gz]
+    name_template: "devctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: agtctl
+    ids: [agtctl]
+    formats: [tar.gz]
+    name_template: "agtctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt
