@@ -72,7 +72,7 @@ func RemindersList(a *App) *cobra.Command {
 		Short:   "List this repository's reminders",
 		Long: "list prints one <id><TAB><text> record per line, ordered items first.\n" +
 			"The text is the reminder's FIRST LINE: a multi-line reminder keeps the\n" +
-			"rest in its file, which `devctl reminders path <id>` points at.\n\n" +
+			"rest in its file.\n\n" +
 			"A repository with no store yet lists nothing and succeeds — having\n" +
 			"recorded nothing is not an error.",
 		Args: UsageArgs(cobra.NoArgs),
