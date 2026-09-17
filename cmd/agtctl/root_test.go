@@ -6,10 +6,11 @@ package main
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brunovenceslau/devctl/internal/testrepo"
 
 	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/stretchr/testify/assert"
@@ -33,35 +34,9 @@ func execute(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	return out.String(), errOut.String(), err
 }
 
-// scratchRepo makes a git repository with a known origin, and points the store
-// at a directory of this test's own. It calls t.Setenv, so a test using it
-// cannot be parallel; the alternative is reading real reminders.
-func scratchRepo(t *testing.T, origin string) string {
-	t.Helper()
-
-	global := filepath.Join(t.TempDir(), "gitconfig")
-	require.NoError(t, os.WriteFile(global, nil, 0o600))
-
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
-	t.Setenv("GIT_CONFIG_GLOBAL", global)
-	t.Setenv("DEVCTL_REMINDERS_DIR", filepath.Join(t.TempDir(), "reminders"))
-
-	dir := filepath.Join(t.TempDir(), "repo")
-
-	for _, args := range [][]string{
-		{"init", "-q", "-b", "main", dir},
-		{"-C", dir, "remote", "add", "origin", origin},
-	} {
-		out, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput()
-		require.NoErrorf(t, err, "git %v: %s", args, out)
-	}
-
-	return dir
-}
-
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestAgtctl_AddThenList(t *testing.T) {
-	dir := scratchRepo(t, "https://github.com/acme/widget.git")
+	dir := testrepo.New(t, "https://github.com/acme/widget.git")
 
 	out, _, err := execute(t, "reminders", "list", "-C", dir)
 	require.NoError(t, err, "a repository with no store yet lists nothing and succeeds")
@@ -86,7 +61,7 @@ func TestAgtctl_AddThenList(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestAgtctl_SharesDevctlsStore(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:Acme/Widget.git")
+	dir := testrepo.New(t, "git@github.com:Acme/Widget.git")
 
 	_, _, err := execute(t, "reminders", "add", "-C", dir, "shared")
 	require.NoError(t, err)
@@ -105,7 +80,7 @@ func TestAgtctl_SharesDevctlsStore(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestAgtctl_ExposesOnlyListAndAdd(t *testing.T) {
-	dir := scratchRepo(t, "https://github.com/acme/widget.git")
+	dir := testrepo.New(t, "https://github.com/acme/widget.git")
 
 	tests := [][]string{
 		{"reminders", "rm", "-C", dir, "x"},
@@ -133,7 +108,7 @@ func TestAgtctl_ExposesOnlyListAndAdd(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestAgtctl_OutsideARepository(t *testing.T) {
-	scratchRepo(t, "https://github.com/acme/widget.git")
+	testrepo.New(t, "https://github.com/acme/widget.git")
 
 	_, _, err := execute(t, "reminders", "list", "-C", t.TempDir())
 	require.Error(t, err)

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brunovenceslau/devctl/internal/testrepo"
+
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -74,7 +76,7 @@ func TestNewRemindersCmd_RegistersOnlyTheVerbsGiven(t *testing.T) {
 
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestReminders_AddListRemove(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	out, err := execute(t, "list", "-C", dir)
 	require.NoError(t, err, "a repository with no store yet lists nothing and succeeds")
@@ -109,7 +111,7 @@ func TestReminders_AddListRemove(t *testing.T) {
 
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestReminders_RmReportsEveryFailure(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	out, err := execute(t, "add", "-C", dir, "keep me")
 	require.NoError(t, err)
@@ -134,7 +136,7 @@ func TestReminders_RmReportsEveryFailure(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestReminders_PathCreatesNothing(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	out, err := execute(t, "path", "-C", dir)
 	require.NoError(t, err)
@@ -155,7 +157,7 @@ func TestReminders_PathCreatesNothing(t *testing.T) {
 
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestReminders_Reorder(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	ids := make([]string, 0, 3)
 
@@ -186,7 +188,7 @@ func TestReminders_Reorder(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestCompleteIDs(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 	application := &App{RepoDir: dir}
 
 	cmd := &cobra.Command{}

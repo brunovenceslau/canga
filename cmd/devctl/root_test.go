@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/brunovenceslau/devctl/internal/testrepo"
+
 	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,34 +59,6 @@ func executeSplit(t *testing.T, args ...string) (stdout, stderr string, err erro
 	return out.String(), errOut.String(), err
 }
 
-// scratchRepo makes a git repository with a known origin, and points devctl's
-// store at a directory of this test's own.
-//
-// It calls t.Setenv, so a test using it cannot be parallel. That is deliberate:
-// the alternative is reading the developer's real reminders.
-func scratchRepo(t *testing.T, origin string) string {
-	t.Helper()
-
-	global := filepath.Join(t.TempDir(), "gitconfig")
-	require.NoError(t, os.WriteFile(global, nil, 0o600))
-
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
-	t.Setenv("GIT_CONFIG_GLOBAL", global)
-	t.Setenv("DEVCTL_REMINDERS_DIR", filepath.Join(t.TempDir(), "reminders"))
-
-	dir := filepath.Join(t.TempDir(), "repo")
-
-	run := func(args ...string) {
-		out, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput()
-		require.NoErrorf(t, err, "git %v: %s", args, out)
-	}
-
-	run("init", "-q", "-b", "main", dir)
-	run("-C", dir, "remote", "add", "origin", origin)
-
-	return dir
-}
-
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestRoot_UsageErrors(t *testing.T) {
 	tests := []struct {
@@ -113,7 +87,7 @@ func TestRoot_UsageErrors(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestRoot_OutsideARepository(t *testing.T) {
-	scratchRepo(t, "git@github.com:acme/widget.git")
+	testrepo.New(t, "git@github.com:acme/widget.git")
 
 	_, err := execute(t, remindersCmd, "list", "-C", t.TempDir())
 	require.Error(t, err)

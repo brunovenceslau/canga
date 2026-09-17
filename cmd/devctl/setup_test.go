@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brunovenceslau/devctl/internal/testrepo"
+
 	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/brunovenceslau/devctl/internal/hooks"
 	"github.com/stretchr/testify/assert"
@@ -21,7 +23,7 @@ import (
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	source := filepath.Join(dir, filepath.FromSlash(hooks.SourceDir))
 	require.NoError(t, os.MkdirAll(source, 0o755))
@@ -34,7 +36,7 @@ func TestSetupHooks(t *testing.T) {
 
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks_OutsideARepositoryIsAUsageError(t *testing.T) {
-	scratchRepo(t, "git@github.com:acme/widget.git")
+	testrepo.New(t, "git@github.com:acme/widget.git")
 
 	_, err := execute(t, "setup", "hooks", "-C", t.TempDir())
 	require.Error(t, err)
@@ -44,7 +46,7 @@ func TestSetupHooks_OutsideARepositoryIsAUsageError(t *testing.T) {
 
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks_NothingToInstallIsARuntimeFailure(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	_, err := execute(t, "setup", "hooks", "-C", dir)
 	require.Error(t, err)
@@ -59,7 +61,7 @@ func TestSetupHooks_NothingToInstallIsARuntimeFailure(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks_PartialInstallIsReported(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	source := filepath.Join(dir, filepath.FromSlash(hooks.SourceDir))
 	require.NoError(t, os.MkdirAll(source, 0o755))
@@ -91,7 +93,7 @@ func TestSetupHooks_PartialInstallIsReported(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks_RefusalClaimsNoChange(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	source := filepath.Join(dir, filepath.FromSlash(hooks.SourceDir))
 	require.NoError(t, os.MkdirAll(source, 0o755))

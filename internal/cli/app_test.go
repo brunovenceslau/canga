@@ -5,41 +5,14 @@ package cli
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/brunovenceslau/devctl/internal/testrepo"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// scratchRepo makes a git repository with a known origin, and points the store
-// at a directory of this test's own.
-//
-// It calls t.Setenv, so a test using it cannot be parallel. That is deliberate:
-// the alternative is reading the developer's real reminders.
-func scratchRepo(t *testing.T, origin string) string {
-	t.Helper()
-
-	global := filepath.Join(t.TempDir(), "gitconfig")
-	require.NoError(t, os.WriteFile(global, nil, 0o600))
-
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
-	t.Setenv("GIT_CONFIG_GLOBAL", global)
-	t.Setenv("DEVCTL_REMINDERS_DIR", filepath.Join(t.TempDir(), "reminders"))
-
-	dir := filepath.Join(t.TempDir(), "repo")
-
-	run := func(args ...string) {
-		out, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput()
-		require.NoErrorf(t, err, "git %v: %s", args, out)
-	}
-
-	run("init", "-q", "-b", "main", dir)
-	run("-C", dir, "remote", "add", "origin", origin)
-
-	return dir
-}
 
 // TestConfig_KeysTheStoreByTheRepository is the join between the two packages:
 // the store directory a command resolves must be the origin-derived path, not
@@ -47,7 +20,7 @@ func scratchRepo(t *testing.T, origin string) string {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestConfig_KeysTheStoreByTheRepository(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	cfg, err := (&App{RepoDir: dir}).Config(t.Context())
 	require.NoError(t, err)
@@ -66,7 +39,7 @@ func TestConfig_KeysTheStoreByTheRepository(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestConfig_EncodesCaseInTheDirectory(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:Acme/Widget.git")
+	dir := testrepo.New(t, "git@github.com:Acme/Widget.git")
 
 	cfg, err := (&App{RepoDir: dir}).Config(t.Context())
 	require.NoError(t, err)
