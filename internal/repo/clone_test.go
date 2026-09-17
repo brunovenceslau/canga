@@ -242,7 +242,7 @@ func TestTransportFlags(t *testing.T) {
 		"-c", "protocol.fd.allow=never",
 		"-c", "transfer.fsckObjects=true",
 		"-c", "fetch.fsckObjects=true",
-	}, transportFlags)
+	}, transportFlags())
 }
 
 func TestGitArgs(t *testing.T) {

@@ -91,7 +91,7 @@ func Clone(ctx context.Context, url string, opts CloneOptions) (CloneResult, err
 	args = append(args, "--", url, target)
 
 	// No -C: the target does not exist yet, and there is no repository to run in.
-	if err := streamGit(ctx, "", transportFlags, opts.Out, opts.Err, args...); err != nil {
+	if err := streamGit(ctx, "", transportFlags(), opts.Out, opts.Err, args...); err != nil {
 		return CloneResult{}, err
 	}
 

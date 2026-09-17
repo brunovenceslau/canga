@@ -316,7 +316,7 @@ func TestSync_Refusals(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		_, err := advance(ctx, local, mainBranch, "origin/"+mainBranch, true)
+		_, err := advance(ctx, local, mainBranch, "origin/"+mainBranch, mainBranch)
 		require.ErrorIs(t, err, context.Canceled)
 
 		_, err = currentBranch(ctx, local)
@@ -333,6 +333,16 @@ func TestSync_Refusals(t *testing.T) {
 	})
 }
 
+// A result whose State was never assigned must not pass for one that was: the
+// up-to-date state prints nothing, so a missed assignment would disappear.
+func TestBranchState_ZeroIsNoState(t *testing.T) {
+	t.Parallel()
+
+	var unset BranchState
+
+	assert.NotContains(t, []BranchState{BranchUpToDate, BranchAdvanced, BranchRefused}, unset)
+}
+
 // stateOf reports what a run did to one named branch.
 func stateOf(t *testing.T, result SyncResult, branch string) BranchState {
 	t.Helper()
@@ -345,5 +355,5 @@ func stateOf(t *testing.T, result SyncResult, branch string) BranchState {
 
 	t.Fatalf("branch %q is not in the result", branch)
 
-	return BranchUpToDate
+	return 0
 }

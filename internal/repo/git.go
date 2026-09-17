@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// transportFlags make the transport and object-integrity guarantees of a clone
+// transportFlags returns the options that make the transport and object-integrity guarantees of a clone
 // or a fetch SELF-CONTAINED instead of borrowed from whatever git configuration
 // the machine happens to carry.
 //
@@ -29,11 +29,16 @@ import (
 // Ported verbatim from dotfiles-host's zsh/dev.zsh `_dev_git_safe`. The list is
 // on that repo's ask-first security list: change it with the user, not in
 // passing.
-var transportFlags = []string{
-	"-c", "protocol.ext.allow=never",
-	"-c", "protocol.fd.allow=never",
-	"-c", "transfer.fsckObjects=true",
-	"-c", "fetch.fsckObjects=true",
+//
+// A function rather than a package variable, so no caller can append to or
+// overwrite the security list: each call builds a fresh slice.
+func transportFlags() []string {
+	return []string{
+		"-c", "protocol.ext.allow=never",
+		"-c", "protocol.fd.allow=never",
+		"-c", "transfer.fsckObjects=true",
+		"-c", "fetch.fsckObjects=true",
+	}
 }
 
 // git runs one git command in dir and returns its trimmed stdout.
@@ -46,7 +51,13 @@ func git(ctx context.Context, dir string, refused error, args ...string) (string
 }
 
 // gitWith is git, with git-level `-c` options in front of the subcommand.
-func gitWith(ctx context.Context, dir string, flags []string, refused error, args []string) (string, error) {
+func gitWith(
+	ctx context.Context,
+	dir string,
+	flags []string,
+	refused error,
+	args []string,
+) (string, error) {
 	//nolint:gosec // the program name is a constant and every argument is passed
 	// separately, so no shell ever parses dir — which is the whole point of not
 	// building a command string.

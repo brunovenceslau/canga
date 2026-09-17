@@ -27,13 +27,18 @@ var (
 )
 
 // BranchState is what a sync did to one branch.
+//
+// The states start at one, so the zero value names none of them. A result whose
+// State was never assigned must not read as BranchUpToDate: that state prints
+// nothing, and a missed assignment would vanish from the report instead of
+// failing a test.
 type BranchState int
 
 const (
 	// BranchUpToDate means the upstream was already an ancestor, so there was
 	// nothing to bring in. It covers a branch level with its upstream and one
 	// that is ahead of it: neither has anything to fast-forward.
-	BranchUpToDate BranchState = iota
+	BranchUpToDate BranchState = iota + 1
 
 	// BranchAdvanced means the branch was fast-forwarded onto its upstream. It
 	// is only ever reported when the upstream was NOT already an ancestor, so
@@ -96,7 +101,7 @@ func Sync(ctx context.Context, dir string) (SyncResult, error) {
 	// --prune drops remote-tracking refs for branches deleted upstream; --tags
 	// brings tags that no fetched branch reaches. The transport hardening
 	// applies here because this is the call that talks to a remote.
-	_, err := gitWith(ctx, dir, transportFlags, ErrFetchFailed,
+	_, err := gitWith(ctx, dir, transportFlags(), ErrFetchFailed,
 		[]string{"fetch", "--all", "--prune", "--tags"})
 	if err != nil {
 		return SyncResult{}, err
@@ -139,7 +144,7 @@ func syncBranches(ctx context.Context, dir string) (SyncResult, error) {
 			continue
 		}
 
-		advanced, err := advance(ctx, dir, branch, upstream, branch == current)
+		advanced, err := advance(ctx, dir, branch, upstream, current)
 		if err != nil {
 			// A failure to ASK is not an answer. Returning here is what stops a
 			// Ctrl-C from being reported as a dozen branches that would not
@@ -162,6 +167,10 @@ func syncBranches(ctx context.Context, dir string) (SyncResult, error) {
 // reported as advanced or as refused depending only on which branch happened to
 // be checked out.
 //
+// current is the checked-out branch, empty under a detached HEAD. It is the
+// name rather than a bool, so the call reads `advance(…, current)` instead of a
+// bare `true` whose meaning lives only in the signature.
+//
 // The two arms exist because a CHECKED-OUT branch cannot be updated by writing
 // its ref: the working tree and the index have to move with it, which is what
 // `merge --ff-only` does and what makes it refuse rather than touch a tree it
@@ -179,8 +188,7 @@ func syncBranches(ctx context.Context, dir string) (SyncResult, error) {
 // git declined to move and a branch nobody ever managed to ask about.
 func advance(
 	ctx context.Context,
-	dir, branch, upstream string,
-	checkedOut bool,
+	dir, branch, upstream, current string,
 ) (BranchResult, error) {
 	result := BranchResult{Branch: branch, Upstream: upstream, State: BranchUpToDate}
 
@@ -194,7 +202,7 @@ func advance(
 	}
 
 	args := []string{"fetch", "--quiet", ".", upstream + ":" + branch}
-	if checkedOut {
+	if branch == current {
 		args = []string{"merge", "--ff-only", "--quiet", upstream}
 	}
 
@@ -238,7 +246,8 @@ func isDirty(ctx context.Context, dir string) (bool, error) {
 
 // localBranches lists the repository's own branches, in git's order.
 func localBranches(ctx context.Context, dir string) ([]string, error) {
-	out, err := git(ctx, dir, ErrGitRefused, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	out, err := git(ctx, dir, ErrGitRefused,
+		"for-each-ref", "--format=%(refname:short)", "refs/heads")
 	if err != nil {
 		return nil, err
 	}
