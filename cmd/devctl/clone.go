@@ -24,12 +24,13 @@ func newCloneCmd() *cobra.Command {
 			"anything, and never merges into or overwrites an existing tree.\n\n" +
 			"The clone is hardened at the transport level: the ext and fd remote\n" +
 			"helpers, which run a command, are turned off on the command line, so no\n" +
-			"git configuration can turn them back on, and objects are checked on both\n" +
-			"sides of the fetch.\n\n" +
+			"git configuration can turn them back on, and are removed from\n" +
+			"GIT_ALLOW_PROTOCOL, which would otherwise outrank that. Objects are\n" +
+			"checked on both sides of the fetch.\n\n" +
 			"Afterwards SSH signing is written into the clone's own config, from\n" +
 			"DEVCTL_SIGNING_KEY and DEVCTL_ALLOWED_SIGNERS, or from the machine's\n" +
-			"global git config. A clone where neither resolves is left unsigned and\n" +
-			"says so.",
+			"global git config. When neither resolves nothing is stamped, and the\n" +
+			"command says whether git configuration outside the clone signs anyway.",
 		Args:              usageArgs(cobra.RangeArgs(1, 2)),
 		ValidArgsFunction: completeCloneArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -78,8 +79,15 @@ func reportSigning(cmd *cobra.Command, result repo.CloneResult) {
 		return
 	}
 
-	if result.Signing.On() {
+	if result.Signing.Key != "" {
 		fprintf(errOut, "devctl: signing on (commit.gpgsign=true)\n")
+
+		return
+	}
+
+	if result.Signing.Inherited {
+		fprintf(errOut, "devctl: signing on (commit.gpgsign=true, inherited from git config "+
+			"outside the clone)\n")
 
 		return
 	}

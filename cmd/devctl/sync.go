@@ -65,6 +65,11 @@ func reportSync(cmd *cobra.Command, dir string, result repo.SyncResult) {
 			// something that is not there.
 			fprintf(errOut, "devctl: skip %s: %v\n", branch.Branch, branch.Refusal)
 
+		case repo.BranchUpstreamGone:
+			// Reported, not dropped: the upstream was usually deleted after a
+			// merge, and the branch may still hold commits that were not.
+			fprintf(errOut, "devctl: skip %s: upstream %s is gone\n", branch.Branch, branch.Upstream)
+
 		case repo.BranchUpToDate:
 			// Silent on purpose: a branch with nothing to bring in is the
 			// common case, and a sweep across a machine would be all noise.

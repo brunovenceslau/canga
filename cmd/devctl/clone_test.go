@@ -89,6 +89,26 @@ func TestCloneCmd_SaysWhenSigningIsOff(t *testing.T) {
 		"the message must name what to set to fix it")
 }
 
+// A sandbox signs through /etc/gitconfig with no user.signingkey to find. The
+// clone must not be reported as unsigned, which would send the user to fix
+// something that works.
+func TestCloneCmd_SaysWhenSigningIsInherited(t *testing.T) {
+	source := cloneSource(t)
+	target := filepath.Join(t.TempDir(), "clone")
+
+	system := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(system, []byte("[commit]\n\tgpgSign = true\n"), 0o600))
+	t.Setenv("GIT_CONFIG_SYSTEM", system)
+	t.Setenv("DEVCTL_SIGNING_KEY", "")
+	t.Setenv("DEVCTL_ALLOWED_SIGNERS", "")
+
+	_, stderr, err := executeSplit(t, "clone", source, target)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "signing on")
+	assert.Contains(t, stderr, "inherited")
+	assert.NotContains(t, stderr, "signing OFF")
+}
+
 // The two refusals exit differently, and the difference is the contract: a
 // non-empty target is a runtime failure the user resolves, an unparseable URL
 // is a typo on the command line.

@@ -8,18 +8,26 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"slices"
 	"strings"
 )
 
-// transportFlags returns the options that make the transport and object-integrity guarantees of a clone
-// or a fetch SELF-CONTAINED instead of borrowed from whatever git configuration
-// the machine happens to carry.
+// envAllowProtocol is git's protocol allow-list variable. When it is set, git
+// consults it INSTEAD of every protocol.<name>.allow setting, command-line `-c`
+// options included, so it is the one thing that can undo transportFlags.
+const envAllowProtocol = "GIT_ALLOW_PROTOCOL"
+
+// transportFlags returns the options that make the transport and
+// object-integrity guarantees of a clone or a fetch SELF-CONTAINED instead of
+// borrowed from whatever git configuration the machine happens to carry.
 //
 // They are passed as command-line `-c` options, and that is the whole point: a
 // -c option overrides even a config file setting `protocol.ext.allow=always`, so
-// `devctl clone ext::…` can never reach the remote-helper transport — which
-// executes a shell command — regardless of how the host is configured. Only the
+// `devctl clone ext::…` cannot reach the remote-helper transport — which
+// executes a shell command — however the host's git config is written. The one
+// environment variable that outranks them is handled by gitEnv. Only the
 // documented schemes (ssh, https, scp-like) are meant to travel. `file` is
 // deliberately left at git's default (allowed) so local-path clones still work.
 //
@@ -41,13 +49,57 @@ func transportFlags() []string {
 	}
 }
 
+// gitCommand builds one git invocation with the hardened environment. Every git
+// process this package starts goes through it, so no call site can forget.
+func gitCommand(ctx context.Context, dir string, flags, args []string) *exec.Cmd {
+	//nolint:gosec // the program name is a constant and every argument is passed
+	// separately, so no shell ever parses dir — which is the whole point of not
+	// building a command string.
+	cmd := exec.CommandContext(ctx, "git", gitArgs(dir, flags, args)...)
+	cmd.Env = gitEnv(os.Environ())
+
+	return cmd
+}
+
+// gitEnv returns environ with ext and fd removed from GIT_ALLOW_PROTOCOL.
+//
+// Set, that variable replaces git's protocol policy wholesale: measured on git
+// 2.53, `GIT_ALLOW_PROTOCOL=ext git -c protocol.ext.allow=never clone ext::…`
+// runs the command. A CI job or an inherited shell is enough to set it.
+//
+// The entries are filtered rather than the variable dropped, because the list
+// is also a RESTRICTION: a machine that allows only `https:ssh` keeps exactly
+// that, minus nothing it had. An allow-list left empty allows nothing, which is
+// the strictest reading of what was asked for, and git's own.
+func gitEnv(environ []string) []string {
+	hardened := make([]string, 0, len(environ))
+
+	for _, entry := range environ {
+		name, value, _ := strings.Cut(entry, "=")
+		if name != envAllowProtocol {
+			hardened = append(hardened, entry)
+
+			continue
+		}
+
+		// ext and fd are the remote helpers that run the rest of the URL as a
+		// command, the two transportFlags turns off.
+		allowed := slices.DeleteFunc(strings.Split(value, ":"), func(protocol string) bool {
+			return protocol == "ext" || protocol == "fd"
+		})
+		hardened = append(hardened, envAllowProtocol+"="+strings.Join(allowed, ":"))
+	}
+
+	return hardened
+}
+
 // git runs one git command in dir and returns its trimmed stdout.
 //
 // refused is the sentinel to report when git RAN and refused, which is the case
 // that means the caller pointed devctl somewhere wrong. A missing binary or a
 // cancelled context are classified separately; see classify.
 func git(ctx context.Context, dir string, refused error, args ...string) (string, error) {
-	return gitWith(ctx, dir, nil, refused, args)
+	return gitWith(ctx, dir, nil, refused, args...)
 }
 
 // gitWith is git, with git-level `-c` options in front of the subcommand.
@@ -56,12 +108,9 @@ func gitWith(
 	dir string,
 	flags []string,
 	refused error,
-	args []string,
+	args ...string,
 ) (string, error) {
-	//nolint:gosec // the program name is a constant and every argument is passed
-	// separately, so no shell ever parses dir — which is the whole point of not
-	// building a command string.
-	out, err := exec.CommandContext(ctx, "git", gitArgs(dir, flags, args)...).Output()
+	out, err := gitCommand(ctx, dir, flags, args).Output()
 	if err != nil {
 		return "", classify(ctx, dir, refused, err)
 	}
@@ -83,8 +132,7 @@ func streamGit(
 	out, errOut io.Writer,
 	args ...string,
 ) error {
-	//nolint:gosec // as in gitWith: constant program name, separate arguments.
-	cmd := exec.CommandContext(ctx, "git", gitArgs(dir, flags, args)...)
+	cmd := gitCommand(ctx, dir, flags, args)
 	cmd.Stdout = out
 	cmd.Stderr = errOut
 
@@ -184,8 +232,10 @@ func gitSaid(exit *exec.ExitError) string {
 // here. Collapsing the two is what lets a cancelled context read as "no", which
 // is a wrong answer delivered confidently.
 func gitStatus(ctx context.Context, dir string, args ...string) (bool, error) {
-	//nolint:gosec // as in gitWith: constant program name, separate arguments.
-	err := exec.CommandContext(ctx, "git", gitArgs(dir, nil, args)...).Run()
+	// Output, not Run, although stdout is thrown away: only Output fills
+	// ExitError.Stderr, and without it a failure below reaches the user as
+	// "git refused: <dir>" with git's own explanation gone.
+	_, err := gitCommand(ctx, dir, nil, args).Output()
 	if err == nil {
 		return true, nil
 	}

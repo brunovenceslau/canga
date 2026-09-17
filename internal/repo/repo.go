@@ -117,9 +117,7 @@ func CommonDir(ctx context.Context, dir string) (string, error) {
 // SetConfig, by contrast, writes LOCALLY. Reading what git will obey and
 // writing only where devctl was invited are deliberately different scopes.
 func Config(ctx context.Context, dir, key string) (value string, set bool, err error) {
-	//nolint:gosec // the program name is a constant and every argument is passed
-	// separately, so no shell ever parses dir or key.
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", key).Output()
+	out, err := gitCommand(ctx, dir, nil, []string{"config", "--get", key}).Output()
 	if err == nil {
 		return strings.TrimSpace(string(out)), true, nil
 	}
@@ -142,9 +140,7 @@ func Config(ctx context.Context, dir, key string) (value string, set bool, err e
 // the wrong answer. Ported from zsh/dev.zsh, where the `--global` on those two
 // reads carries the same comment.
 func GlobalConfig(ctx context.Context, key string) (string, error) {
-	//nolint:gosec // the program name is a constant and the key is passed as its
-	// own argument, so no shell ever parses it.
-	out, err := exec.CommandContext(ctx, "git", "config", "--global", "--get", key).Output()
+	out, err := gitCommand(ctx, "", nil, []string{"config", "--global", "--get", key}).Output()
 	if err == nil {
 		return strings.TrimSpace(string(out)), nil
 	}

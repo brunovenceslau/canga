@@ -43,6 +43,24 @@ func TestSyncCmd_RecordsOnStdout(t *testing.T) {
 	assert.Empty(t, stderr, "a clean sync has nothing to warn about")
 }
 
+// A branch whose upstream was deleted may hold unpushed work, so it is named on
+// stderr rather than dropped the way a branch with no upstream is.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
+func TestSyncCmd_ReportsAGoneUpstream(t *testing.T) {
+	upstream, local := syncFixture(t)
+
+	gitRun(t, "-C", upstream, "branch", "feature")
+	gitRun(t, "-C", local, "fetch", "-q", "origin")
+	gitRun(t, "-C", local, "branch", "feature", "origin/feature")
+	gitRun(t, "-C", upstream, "branch", "-q", "-D", "feature")
+
+	stdout, stderr, err := executeSplit(t, "sync", "-C", local)
+	require.NoError(t, err)
+	assert.Equal(t, "main\torigin/main\n", stdout, "the other branch still syncs")
+	assert.Contains(t, stderr, "skip feature: upstream origin/feature is gone")
+}
+
 //nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
 func TestSyncCmd_ReportsWhatItRefused(t *testing.T) {
 	_, local := syncFixture(t)

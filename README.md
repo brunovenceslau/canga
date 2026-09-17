@@ -165,7 +165,13 @@ or user configuration can override them:
 The `ext` and `fd` remote helpers run the rest of the URL as a command, so a URL
 such as `ext::sh -c …` is a command execution dressed as a repository. Turning
 them off on the command line means a machine whose git config sets
-`protocol.ext.allow=always` still refuses one. `file` is left at git's default,
+`protocol.ext.allow=always` still refuses one.
+
+One setting outranks a `-c` option: the `GIT_ALLOW_PROTOCOL` environment
+variable, which replaces git's protocol policy when it is set. devctl removes
+`ext` and `fd` from it before running git and keeps every other entry, so an
+allow-list such as `https:ssh` still restricts what it restricted. A list that
+named only `ext` is left empty, which allows nothing. `file` is left at git's default,
 allowed, so local-path clones keep working. The two `fsckObjects` options make
 the fetch reject a malformed object graph rather than write it to disk first.
 
@@ -187,8 +193,11 @@ so the key is the machine's identity and never the local key of whatever
 repository you ran the command in. Nothing global is written.
 
 When neither a key nor an allowed-signers file resolves, the clone is left
-alone, and `devctl` says so on stderr rather than pointing the repository at a
-file that does not exist.
+alone rather than pointed at a file that does not exist. `devctl` then reports
+on stderr whether the clone signs anyway, because git configuration outside it
+turns `commit.gpgsign` on. A sandbox is that case: its `/etc/gitconfig` carries
+the format, the flag and a key command, and no `user.signingkey`. Otherwise it
+reports `signing OFF` and names what to set.
 
 ## `devctl sync`
 
@@ -224,6 +233,7 @@ repository on a machine without reading them first.
 | Branch diverged from its upstream | Reported on stderr in git's own words, and left exactly where it is. Exit 0. |
 | Branch git refuses for another reason | Same: git's words are printed rather than a guess at them. A branch checked out in a linked worktree, a rebase in progress, or an incoming commit that would overwrite an untracked file all land here. |
 | Branch with no upstream | Left out of the report. Nothing was ever asked of it. |
+| Branch whose upstream was deleted | Reported on stderr as `upstream <remote>/<branch> is gone`, and left where it is. It may hold commits that were never pushed. Exit 0. |
 | Detached HEAD | Not an error. Every branch is updated without a checkout. |
 | Fetch failed | Exit 1. Deciding branch states against a stale view of the remote would be guessing. |
 | Interrupted with Ctrl-C | Exit 1, naming the cancellation. A branch that was never asked about is never reported as refused. |
@@ -311,6 +321,11 @@ auth token` answers. That last one is why a token you never exported is still
 used on a mac: `gh` keeps it in the keychain. `gh` is optional — export
 `GH_TOKEN` and it is never consulted, install neither and the upgrade still
 runs.
+
+A token GitHub rejects, such as an expired or revoked one, does not stop the
+upgrade. devctl retries that request without it and makes every later request
+anonymously. If the anonymous request fails too, the error names both failures,
+so the stale token is still reported.
 
 ### When it refuses to guess
 

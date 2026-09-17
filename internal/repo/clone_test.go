@@ -151,35 +151,116 @@ func TestClone(t *testing.T) {
 }
 
 // TestClone_RefusesTheExtTransport is the behavioural proof that the hardening
-// in transportFlags reaches git: the ext remote helper RUNS the rest of the URL
-// as a command, and a machine whose git config allows it must not change that.
+// reaches git: the ext remote helper RUNS the rest of the URL as a command, and
+// nothing about the machine it runs on may change that.
 //
 // It needs an explicit target, because a URL this shape never survives Path.
 //
 //nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
 func TestClone_RefusesTheExtTransport(t *testing.T) {
-	hermeticGit(t)
+	// The two ways a machine can allow ext, each set exactly as a host might.
+	tests := []struct {
+		name  string
+		allow func(t *testing.T)
+	}{
+		{
+			name: "a global config that allows it",
+			allow: func(t *testing.T) {
+				t.Helper()
+				runGit(t, "config", "--global", "protocol.ext.allow", "always")
+			},
+		},
+		{
+			// The environment outranks every -c option, so this one is only
+			// refused because gitEnv filters it. Measured before the fix: the
+			// helper ran.
+			name: "GIT_ALLOW_PROTOCOL naming it",
+			allow: func(t *testing.T) {
+				t.Helper()
+				t.Setenv(envAllowProtocol, "ext:file")
+			},
+		},
+	}
 
-	// The configuration the flags exist to override, set exactly as a host might.
-	runGit(t, "config", "--global", "protocol.ext.allow", "always")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hermeticGit(t)
+			tt.allow(t)
+
+			helper, marker := extHelper(t)
+
+			// git's own stderr is captured here rather than discarded, so the
+			// test asserts WHY the clone failed. Any mistake in the target or
+			// the source would fail it too, and would pass a test that only
+			// checked for an error.
+			var said bytes.Buffer
+
+			options := quiet(filepath.Join(t.TempDir(), "clone"))
+			options.Err = &said
+
+			_, err := Clone(t.Context(), "ext::"+helper, options)
+			require.Error(t, err)
+			assert.Contains(t, said.String(), "transport 'ext' not allowed")
+			assert.NoFileExists(t, marker, "the ext helper must not have run")
+		})
+	}
+}
+
+// extHelper writes a script that leaves a marker file behind when it runs, and
+// returns both paths. The marker existing is the proof a command was executed.
+func extHelper(t *testing.T) (helper, marker string) {
+	t.Helper()
 
 	work := t.TempDir()
-	marker := filepath.Join(work, "executed")
-	helper := filepath.Join(work, "helper.sh")
+	marker = filepath.Join(work, "executed")
+	helper = filepath.Join(work, "helper.sh")
 	require.NoError(t, os.WriteFile(helper, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o700))
 
-	// git's own stderr is captured here rather than discarded, so the test
-	// asserts WHY the clone failed. Any mistake in the target or the source
-	// would fail it too, and would pass a test that only checked for an error.
-	var said bytes.Buffer
+	return helper, marker
+}
 
-	options := quiet(filepath.Join(work, "clone"))
-	options.Err = &said
+func TestGitEnv(t *testing.T) {
+	t.Parallel()
 
-	_, err := Clone(t.Context(), "ext::"+helper, options)
-	require.Error(t, err)
-	assert.Contains(t, said.String(), "transport 'ext' not allowed")
-	assert.NoFileExists(t, marker, "the ext helper must not have run")
+	// Entries that are not GIT_ALLOW_PROTOCOL, which must pass through as given.
+	const home, path = "HOME=/h", "PATH=/p"
+
+	tests := []struct {
+		name string
+		give []string
+		want []string
+	}{
+		{
+			name: "unset stays unset",
+			give: []string{home, path},
+			want: []string{home, path},
+		},
+		{
+			name: "ext and fd are removed, the rest of the list is kept",
+			give: []string{"GIT_ALLOW_PROTOCOL=https:ext:ssh:fd", home},
+			want: []string{"GIT_ALLOW_PROTOCOL=https:ssh", home},
+		},
+		{
+			// Empty allows nothing, which is stricter than dropping the
+			// variable and falling back to git's default policy.
+			name: "a list of only ext stays set, and allows nothing",
+			give: []string{"GIT_ALLOW_PROTOCOL=ext"},
+			want: []string{"GIT_ALLOW_PROTOCOL="},
+		},
+		{
+			name: "a name that only starts the same is left alone",
+			give: []string{"GIT_ALLOW_PROTOCOLS=ext"},
+			want: []string{"GIT_ALLOW_PROTOCOLS=ext"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, gitEnv(tt.give))
+		})
+	}
 }
 
 func TestTargetDir(t *testing.T) {

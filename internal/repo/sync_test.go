@@ -248,6 +248,28 @@ func TestSync_OtherBranches(t *testing.T) {
 		assert.Equal(t, head(t, upstream, "HEAD"), head(t, local, mainBranch))
 	})
 
+	// After a pull request merges, its remote branch is deleted and the fetch
+	// prunes origin/<branch>. The local branch may hold commits that never
+	// reached the remote, so it is reported, not silently dropped the way a
+	// branch that never had an upstream is.
+	t.Run("a branch whose upstream was deleted is reported", func(t *testing.T) {
+		hermeticGit(t)
+
+		upstream, local := syncPair(t)
+		runGit(t, "-C", upstream, "branch", "feature")
+		runGit(t, "-C", local, "fetch", "-q", "origin")
+		runGit(t, "-C", local, "branch", "feature", "origin/feature")
+		runGit(t, "-C", upstream, "branch", "-q", "-D", "feature")
+
+		before := head(t, local, "feature")
+
+		result, err := Sync(t.Context(), local)
+		require.NoError(t, err)
+		assert.Equal(t, BranchUpstreamGone, stateOf(t, result, "feature"))
+		assert.Equal(t, before, head(t, local, "feature"), "the branch is left where it is")
+		assert.Equal(t, BranchUpToDate, stateOf(t, result, mainBranch), "and the rest still sync")
+	})
+
 	// A local-only branch is a normal thing to have. It is absent from the
 	// result rather than reported as skipped: nothing was asked of it.
 	t.Run("a branch with no upstream is left out", func(t *testing.T) {
@@ -322,7 +344,7 @@ func TestSync_Refusals(t *testing.T) {
 		_, err = currentBranch(ctx, local)
 		require.ErrorIs(t, err, context.Canceled)
 
-		_, _, err = upstreamOf(ctx, local, mainBranch)
+		_, err = trackingBranches(ctx, local)
 		require.ErrorIs(t, err, context.Canceled)
 
 		_, err = isDirty(ctx, local)
@@ -341,6 +363,37 @@ func TestBranchState_ZeroIsNoState(t *testing.T) {
 	var unset BranchState
 
 	assert.NotContains(t, []BranchState{BranchUpToDate, BranchAdvanced, BranchRefused}, unset)
+}
+
+// The fetch talks to a remote, so it carries the same hardening as a clone. A
+// repository whose remote is an ext:: URL must not run it, even when the
+// environment allows ext.
+func TestSync_RefusesTheExtTransport(t *testing.T) {
+	hermeticGit(t)
+	t.Setenv(envAllowProtocol, "ext:file")
+
+	_, local := syncPair(t)
+	helper, marker := extHelper(t)
+	runGit(t, "-C", local, "remote", "add", "evil", "ext::"+helper)
+
+	_, err := Sync(t.Context(), local)
+	require.ErrorIs(t, err, ErrFetchFailed)
+	assert.NoFileExists(t, marker, "the ext helper must not have run")
+}
+
+// A status query that fails for a reason other than "no" must carry git's own
+// explanation. Run() never fills ExitError.Stderr, which left only
+// "git refused: <dir>".
+//
+//nolint:paralleltest // t.Setenv, which the hermetic git config needs, forbids it
+func TestGitStatus_KeepsWhatGitSaid(t *testing.T) {
+	hermeticGit(t)
+
+	_, local := syncPair(t)
+
+	_, err := isAncestor(t.Context(), local, "no-such-ref", mainBranch)
+	require.ErrorIs(t, err, ErrGitRefused)
+	assert.ErrorContains(t, err, "no-such-ref")
 }
 
 // stateOf reports what a run did to one named branch.

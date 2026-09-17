@@ -4,6 +4,7 @@
 package repo
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -88,6 +89,30 @@ func TestStampSigning(t *testing.T) {
 		assert.Empty(t, localValue(t, dir, "commit.gpgsign"))
 		assert.Empty(t, localValue(t, dir, "gpg.format"))
 		assert.Empty(t, localValue(t, dir, "gpg.ssh.allowedSignersFile"))
+	})
+
+	// A sandbox signs through /etc/gitconfig: commit.gpgsign and a key command,
+	// but no user.signingkey for the fallback to read. Nothing is stamped, and
+	// the result must still say the clone signs, or the user is told to fix
+	// something that works.
+	t.Run("signing turned on outside the repository is reported as inherited", func(t *testing.T) {
+		hermeticGit(t)
+
+		system := filepath.Join(t.TempDir(), "gitconfig")
+		require.NoError(t, os.WriteFile(system, []byte("[commit]\n\tgpgSign = yes\n"), 0o600))
+		t.Setenv("GIT_CONFIG_SYSTEM", system)
+
+		dir := filepath.Join(t.TempDir(), "repo")
+		runGit(t, "init", "-q", "-b", "main", dir)
+		t.Setenv(envSigningKey, "")
+		t.Setenv(envAllowedSigners, "")
+
+		stamped, err := StampSigning(t.Context(), dir)
+		require.NoError(t, err)
+		assert.True(t, stamped.Inherited)
+		assert.True(t, stamped.On())
+		assert.Empty(t, stamped.Key)
+		assert.Empty(t, localValue(t, dir, "commit.gpgsign"), "nothing is stamped")
 	})
 
 	// An allowed-signers file without a key is a repository that can VERIFY

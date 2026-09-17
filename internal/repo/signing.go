@@ -5,8 +5,10 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 )
 
 // The environment variables that override what the machine's global git config
@@ -24,12 +26,18 @@ type Signing struct {
 	AllowedSigners string
 
 	// Key is the signing key commit and tag signing were turned on with, or
-	// empty when none resolved — in which case signing was left off.
+	// empty when none resolved — in which case nothing was stamped.
 	Key string
+
+	// Inherited reports a repository that signs WITHOUT anything stamped,
+	// because git configuration outside it already turns commit.gpgsign on.
+	// That is a sandbox: /etc/gitconfig carries the format, the flag and a key
+	// command, and no user.signingkey for the fallback to find.
+	Inherited bool
 }
 
 // On reports whether the repository was left signing its commits.
-func (s Signing) On() bool { return s.Key != "" }
+func (s Signing) On() bool { return s.Key != "" || s.Inherited }
 
 // StampSigning writes SSH signing configuration into a repository's LOCAL
 // config, and reports what it wrote.
@@ -65,7 +73,12 @@ func StampSigning(ctx context.Context, dir string) (Signing, error) {
 	}
 
 	if key == "" {
-		return stamped, nil
+		// Nothing to stamp, which is not the same as not signing. Asked of the
+		// new repository itself, so the answer is the effective value git will
+		// obey; it has no local setting yet for that to be confused with.
+		stamped.Inherited, err = signsCommits(ctx, dir)
+
+		return stamped, err
 	}
 
 	// The four writes are one decision: a key without commit.gpgsign leaves the
@@ -113,4 +126,22 @@ func resolveSetting(ctx context.Context, env, key string) (string, error) {
 	}
 
 	return value, nil
+}
+
+// signsCommits reports whether commit.gpgsign is effectively true in dir, from
+// any scope. --type=bool normalizes yes, on and 1, which git accepts as true.
+func signsCommits(ctx context.Context, dir string) (bool, error) {
+	out, err := gitCommand(ctx, dir, nil,
+		[]string{"config", "--type=bool", "--get", "commit.gpgsign"}).Output()
+	if err == nil {
+		return string(out) == "true\n", nil
+	}
+
+	// Exit 1 is git's "no such key", which means signing is off.
+	if exit, ran := errors.AsType[*exec.ExitError](err); ran && exit.ExitCode() == 1 &&
+		ctx.Err() == nil {
+		return false, nil
+	}
+
+	return false, classify(ctx, dir, ErrGitRefused, err)
 }

@@ -50,6 +50,13 @@ const (
 	// out in a linked worktree, a rebase in progress, or an incoming commit that
 	// would overwrite an untracked file all land here.
 	BranchRefused
+
+	// BranchUpstreamGone means the branch tracks an upstream that no longer
+	// exists, typically one deleted after its pull request merged and then
+	// pruned by the fetch. Nothing was attempted. It is REPORTED rather than
+	// left out like a branch with no upstream, because it may hold commits that
+	// were never pushed anywhere else.
+	BranchUpstreamGone
 )
 
 // BranchResult is what a sync did to one local branch that tracks an upstream.
@@ -74,8 +81,8 @@ type SyncResult struct {
 	Dirty bool
 
 	// Branches is one entry per local branch that tracks an upstream, in git's
-	// own order. A branch with no upstream is absent rather than reported:
-	// nothing was ever asked of it.
+	// own order, including one whose upstream is gone. A branch that was never
+	// given an upstream is absent rather than reported: nothing was asked of it.
 	Branches []BranchResult
 }
 
@@ -102,7 +109,7 @@ func Sync(ctx context.Context, dir string) (SyncResult, error) {
 	// brings tags that no fetched branch reaches. The transport hardening
 	// applies here because this is the call that talks to a remote.
 	_, err := gitWith(ctx, dir, transportFlags(), ErrFetchFailed,
-		[]string{"fetch", "--all", "--prune", "--tags"})
+		"fetch", "--all", "--prune", "--tags")
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -122,7 +129,7 @@ func Sync(ctx context.Context, dir string) (SyncResult, error) {
 // syncBranches walks the repository's branches once the run has been cleared to
 // touch it.
 func syncBranches(ctx context.Context, dir string) (SyncResult, error) {
-	branches, err := localBranches(ctx, dir)
+	branches, err := trackingBranches(ctx, dir)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -135,16 +142,21 @@ func syncBranches(ctx context.Context, dir string) (SyncResult, error) {
 	var result SyncResult
 
 	for _, branch := range branches {
-		upstream, tracking, err := upstreamOf(ctx, dir, branch)
-		if err != nil {
-			return SyncResult{}, err
-		}
-
-		if !tracking {
+		if branch.upstream == "" {
 			continue
 		}
 
-		advanced, err := advance(ctx, dir, branch, upstream, current)
+		if branch.gone {
+			result.Branches = append(result.Branches, BranchResult{
+				Branch:   branch.name,
+				Upstream: branch.upstream,
+				State:    BranchUpstreamGone,
+			})
+
+			continue
+		}
+
+		advanced, err := advance(ctx, dir, branch.name, branch.upstream, current)
 		if err != nil {
 			// A failure to ASK is not an answer. Returning here is what stops a
 			// Ctrl-C from being reported as a dozen branches that would not
@@ -244,10 +256,32 @@ func isDirty(ctx context.Context, dir string) (bool, error) {
 	return out != "", nil
 }
 
-// localBranches lists the repository's own branches, in git's order.
-func localBranches(ctx context.Context, dir string) ([]string, error) {
-	out, err := git(ctx, dir, ErrGitRefused,
-		"for-each-ref", "--format=%(refname:short)", "refs/heads")
+// trackingBranch is one local branch as for-each-ref describes it.
+type trackingBranch struct {
+	name string
+
+	// upstream is `<remote>/<branch>`, read from the branch's configuration, so
+	// it is set even when the ref it names has been pruned. Empty means the
+	// branch was never given one.
+	upstream string
+
+	// gone reports an upstream that is configured but no longer exists.
+	gone bool
+}
+
+// trackingBranches lists the repository's own branches with their upstreams, in
+// git's order, in ONE call.
+//
+// One call rather than a `rev-parse <branch>@{upstream}` per branch, because
+// that command exits 128 both for a branch with no upstream and for one whose
+// upstream was deleted. Reading that refusal as "no upstream" made a pruned
+// branch, possibly holding unpushed work, vanish from the report. for-each-ref answers all three questions
+// without a refusal to interpret: the upstream comes from configuration, and
+// `upstream:track` says "gone" when its ref does not exist.
+func trackingBranches(ctx context.Context, dir string) ([]trackingBranch, error) {
+	out, err := git(ctx, dir, ErrGitRefused, "for-each-ref",
+		"--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)",
+		"refs/heads")
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +290,24 @@ func localBranches(ctx context.Context, dir string) ([]string, error) {
 		return nil, nil
 	}
 
-	return strings.Split(out, "\n"), nil
+	lines := strings.Split(out, "\n")
+	branches := make([]trackingBranch, 0, len(lines))
+
+	for _, line := range lines {
+		// A tab cannot appear in a ref name, so the split is unambiguous. The
+		// trailing fields are empty rather than missing, but git's output was
+		// trimmed, so the last line may have lost them.
+		name, rest, _ := strings.Cut(line, "\t")
+		upstream, track, _ := strings.Cut(rest, "\t")
+
+		branches = append(branches, trackingBranch{
+			name:     name,
+			upstream: upstream,
+			gone:     track == "gone",
+		})
+	}
+
+	return branches, nil
 }
 
 // currentBranch is the checked-out branch, or the empty string under a detached
@@ -280,21 +331,4 @@ func currentBranch(ctx context.Context, dir string) (string, error) {
 	}
 
 	return branch, nil
-}
-
-// upstreamOf resolves the branch a local branch tracks, and reports whether it
-// tracks one at all. A branch with no upstream is not a failure: a local-only
-// branch is a normal thing to have, and there is nothing to bring it up to.
-func upstreamOf(ctx context.Context, dir, branch string) (string, bool, error) {
-	upstream, err := git(ctx, dir, ErrGitRefused,
-		"rev-parse", "--abbrev-ref", "--symbolic-full-name", branch+"@{upstream}")
-	if err != nil {
-		if errors.Is(err, ErrGitRefused) {
-			return "", false, nil
-		}
-
-		return "", false, err
-	}
-
-	return upstream, upstream != "", nil
 }

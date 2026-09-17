@@ -167,10 +167,34 @@ func (c *client) download(ctx context.Context, want asset, limit int64) ([]byte,
 	return body, nil
 }
 
-// fetch performs one request and returns at most limit bytes of its body. It
-// owns the response from end to end — no caller has to remember to close it,
-// and no partially read body escapes.
+// fetch performs one request and returns at most limit bytes of its body.
+//
+// A token GitHub rejects is dropped and the request retried anonymously, once.
+// The token is optional, so a stale one (expired, revoked, or a sandbox secret
+// that outlived its purpose) must not refuse an upgrade that works without it.
+// The client forgets the token for every later request too, rather than paying
+// a 401 per asset. When the anonymous retry fails as well, both failures are
+// reported, so a rate limit hit without the token still names the token as the
+// thing to fix.
 func (c *client) fetch(ctx context.Context, path, accept string, limit int64) ([]byte, error) {
+	body, err := c.fetchOnce(ctx, path, accept, limit)
+	if !errors.Is(err, ErrUnauthorized) || c.token == "" {
+		return body, err
+	}
+
+	c.token = ""
+
+	body, retryErr := c.fetchOnce(ctx, path, accept, limit)
+	if retryErr != nil {
+		return nil, fmt.Errorf("%w; retried without the token: %w", err, retryErr)
+	}
+
+	return body, nil
+}
+
+// fetchOnce performs one request. It owns the response from end to end — no
+// caller has to remember to close it, and no partially read body escapes.
+func (c *client) fetchOnce(ctx context.Context, path, accept string, limit int64) ([]byte, error) {
 	url := c.baseURL + "/repos/" + apiOwner + "/" + apiRepo + path
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -291,7 +315,8 @@ func githubSaid(body io.Reader) string {
 // outbound address with everything else behind it. If releases ever stop being
 // readable anonymously, this is the function that has to start refusing again.
 //
-// Not finding one is therefore not a failure, and this reports none. The
+// Not finding one is therefore not a failure, and this reports none. Nor is
+// finding a bad one: a token GitHub rejects is dropped, see fetch. The
 // environment comes first, in gh's own precedence order, because that is how a
 // sandbox is handed one; `gh auth token` is the fallback for the mac, where the
 // token lives in the keychain and never reaches the environment. gh stays an
