@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/brunovenceslau/devctl/internal/cli"
 )
 
 // Stamped in by ldflags at build time; see the Makefile and .goreleaser.yml.
@@ -41,5 +43,5 @@ func run() int {
 		return exitCode(err)
 	}
 
-	return exitOK
+	return cli.ExitOK
 }

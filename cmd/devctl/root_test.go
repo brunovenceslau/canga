@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,75 +85,6 @@ func scratchRepo(t *testing.T, origin string) string {
 	return dir
 }
 
-func TestRemindersBaseDir(t *testing.T) {
-	t.Run("explicit directory wins", func(t *testing.T) {
-		// Set explicitly because $HOME is not the same on both sides of the
-		// sandbox boundary: a sandbox is handed the path, never left to derive
-		// a different one from its own environment.
-		t.Setenv("DEVCTL_REMINDERS_DIR", "/explicit")
-		t.Setenv("XDG_DATA_HOME", "/xdg")
-
-		got, err := remindersBaseDir()
-		require.NoError(t, err)
-		assert.Equal(t, "/explicit", got)
-	})
-
-	t.Run("falls back to XDG data", func(t *testing.T) {
-		t.Setenv("DEVCTL_REMINDERS_DIR", "")
-		t.Setenv("XDG_DATA_HOME", "/xdg")
-
-		got, err := remindersBaseDir()
-		require.NoError(t, err)
-		assert.Equal(t, filepath.Join("/xdg", "devctl", "reminders"), got)
-	})
-
-	t.Run("falls back to the XDG default", func(t *testing.T) {
-		t.Setenv("DEVCTL_REMINDERS_DIR", "")
-		t.Setenv("XDG_DATA_HOME", "")
-		t.Setenv("HOME", "/home/someone")
-
-		got, err := remindersBaseDir()
-		require.NoError(t, err)
-		assert.Equal(t, filepath.Join("/home/someone", ".local", "share", "devctl", "reminders"), got)
-	})
-}
-
-// TestConfig_KeysTheStoreByTheRepository is the join between the two packages:
-// the store directory a command resolves must be the origin-derived path, not
-// anything about where the process happens to be running.
-//
-//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
-func TestConfig_KeysTheStoreByTheRepository(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
-
-	cfg, err := (&app{repoDir: dir}).config(t.Context())
-	require.NoError(t, err)
-
-	assert.Equal(t, "github.com/acme/widget", cfg.Repo)
-	assert.Equal(t, scopeRepo, cfg.Scope)
-	assert.Equal(t,
-		filepath.Join(os.Getenv("DEVCTL_REMINDERS_DIR"), "github.com", "acme", "widget", scopeRepo),
-		cfg.Dir)
-}
-
-// TestConfig_EncodesCaseInTheDirectory: the directory has to mean the same
-// thing on a case-folding APFS and on a sandbox filesystem that does not fold,
-// which is the boundary a shared store spans. The readable spelling stays in
-// Repo, because that is what each reminder's header records.
-//
-//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
-func TestConfig_EncodesCaseInTheDirectory(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:Acme/Widget.git")
-
-	cfg, err := (&app{repoDir: dir}).config(t.Context())
-	require.NoError(t, err)
-
-	assert.Equal(t, "github.com/Acme/Widget", cfg.Repo)
-	assert.Equal(t,
-		filepath.Join(os.Getenv("DEVCTL_REMINDERS_DIR"), "github.com", "!acme", "!widget", scopeRepo),
-		cfg.Dir)
-}
-
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestRoot_UsageErrors(t *testing.T) {
 	tests := []struct {
@@ -171,7 +103,7 @@ func TestRoot_UsageErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := execute(t, tt.args...)
 			require.Error(t, err)
-			assert.Equal(t, exitUsage, exitCode(err))
+			assert.Equal(t, cli.ExitUsage, exitCode(err))
 		})
 	}
 }
@@ -185,7 +117,7 @@ func TestRoot_OutsideARepository(t *testing.T) {
 
 	_, err := execute(t, remindersCmd, "list", "-C", t.TempDir())
 	require.Error(t, err)
-	assert.Equal(t, exitUsage, exitCode(err))
+	assert.Equal(t, cli.ExitUsage, exitCode(err))
 }
 
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
@@ -194,5 +126,58 @@ func TestRoot_BareCommandsPrintHelp(t *testing.T) {
 		out, err := execute(t, args...)
 		require.NoError(t, err)
 		assert.Contains(t, out, "Usage:")
+	}
+}
+
+// TestRoot_RegistersEveryRemindersVerb: the verbs' behaviour is tested where
+// they live, in internal/cli. What is devctl's own is WHICH of them it exposes,
+// and on the host that is all five.
+func TestRoot_RegistersEveryRemindersVerb(t *testing.T) {
+	t.Parallel()
+
+	reminders, _, err := newRootCmd().Find([]string{remindersCmd})
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(reminders.Commands()))
+	for _, sub := range reminders.Commands() {
+		names = append(names, sub.Name())
+	}
+
+	assert.ElementsMatch(t, []string{"add", "list", "rm", "path", "reorder"}, names)
+}
+
+// TestCompletionScript asserts the generated completion rather than eyeballing
+// it. The shape check runs everywhere; the parse runs wherever the shell is
+// installed, which on the CI matrix is at least the macOS leg for zsh.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
+func TestCompletionScript(t *testing.T) {
+	tests := []struct {
+		shell  string
+		marker string
+	}{
+		{shell: "zsh", marker: "#compdef devctl"},
+		{shell: "bash", marker: "__devctl"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.shell, func(t *testing.T) {
+			out, err := execute(t, "completion", tt.shell)
+			require.NoError(t, err)
+			require.Contains(t, out, tt.marker)
+			require.Contains(t, out, "__complete",
+				"the script must call back into devctl, which is what makes the ids real")
+
+			shell, err := exec.LookPath(tt.shell)
+			if err != nil {
+				t.Skipf("%s is not installed; the generated script was still checked for shape", tt.shell)
+			}
+
+			script := filepath.Join(t.TempDir(), "completion."+tt.shell)
+			require.NoError(t, os.WriteFile(script, []byte(out), 0o600))
+
+			parsed, err := exec.CommandContext(t.Context(), shell, "-n", script).CombinedOutput()
+			require.NoErrorf(t, err, "%s -n: %s", tt.shell, parsed)
+		})
 	}
 }

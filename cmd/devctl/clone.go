@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 
+	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/brunovenceslau/devctl/internal/repo"
 	"github.com/spf13/cobra"
 )
@@ -31,7 +32,7 @@ func newCloneCmd() *cobra.Command {
 			"DEVCTL_SIGNING_KEY and DEVCTL_ALLOWED_SIGNERS, or from the machine's\n" +
 			"global git config. When neither resolves nothing is stamped, and the\n" +
 			"command says whether git configuration outside the clone signs anyway.",
-		Args:              usageArgs(cobra.RangeArgs(1, 2)),
+		Args:              cli.UsageArgs(cobra.RangeArgs(1, 2)),
 		ValidArgsFunction: completeCloneArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options := repo.CloneOptions{
@@ -55,7 +56,7 @@ func newCloneCmd() *cobra.Command {
 			}
 
 			reportSigning(cmd, result)
-			printf(cmd, "%s\n", result.Dir)
+			cli.Printf(cmd, "%s\n", result.Dir)
 
 			return nil
 		},
@@ -73,26 +74,26 @@ func reportSigning(cmd *cobra.Command, result repo.CloneResult) {
 	// reported rather than returned for that reason, and named precisely enough
 	// that one `git config` in that directory finishes the job.
 	if result.StampErr != nil {
-		fprintf(errOut, "devctl: warning: could not stamp signing config in %s: %v\n",
+		cli.Fprintf(errOut, "devctl: warning: could not stamp signing config in %s: %v\n",
 			result.Dir, result.StampErr)
 
 		return
 	}
 
 	if result.Signing.Key != "" {
-		fprintf(errOut, "devctl: signing on (commit.gpgsign=true)\n")
+		cli.Fprintf(errOut, "devctl: signing on (commit.gpgsign=true)\n")
 
 		return
 	}
 
 	if result.Signing.Inherited {
-		fprintf(errOut, "devctl: signing on (commit.gpgsign=true, inherited from git config "+
+		cli.Fprintf(errOut, "devctl: signing on (commit.gpgsign=true, inherited from git config "+
 			"outside the clone)\n")
 
 		return
 	}
 
-	fprintf(errOut, "devctl: signing OFF — set DEVCTL_SIGNING_KEY or a global "+
+	cli.Fprintf(errOut, "devctl: signing OFF — set DEVCTL_SIGNING_KEY or a global "+
 		"user.signingkey to sign here\n")
 }
 

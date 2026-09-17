@@ -4,11 +4,12 @@
 package main
 
 import (
+	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/brunovenceslau/devctl/internal/repo"
 	"github.com/spf13/cobra"
 )
 
-func newSyncCmd(a *app) *cobra.Command {
+func newSyncCmd(a *cli.App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Fetch and fast-forward every tracking branch",
@@ -24,14 +25,14 @@ func newSyncCmd(a *app) *cobra.Command {
 			"Everything it does is therefore recoverable, which is what makes it safe\n" +
 			"to run across every repository on a machine without reading them first.\n\n" +
 			"Use -C to name a repository other than the current directory.",
-		Args: usageArgs(cobra.NoArgs),
+		Args: cli.UsageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			result, err := repo.Sync(cmd.Context(), a.repoDir)
+			result, err := repo.Sync(cmd.Context(), a.RepoDir)
 			if err != nil {
 				return err
 			}
 
-			reportSync(cmd, a.repoDir, result)
+			reportSync(cmd, a.RepoDir, result)
 
 			return nil
 		},
@@ -47,7 +48,7 @@ func reportSync(cmd *cobra.Command, dir string, result repo.SyncResult) {
 	errOut := cmd.ErrOrStderr()
 
 	if result.Dirty {
-		fprintf(errOut, "devctl: skip (dirty working tree): %s\n", dir)
+		cli.Fprintf(errOut, "devctl: skip (dirty working tree): %s\n", dir)
 
 		return
 	}
@@ -55,7 +56,7 @@ func reportSync(cmd *cobra.Command, dir string, result repo.SyncResult) {
 	for _, branch := range result.Branches {
 		switch branch.State {
 		case repo.BranchAdvanced:
-			printf(cmd, "%s\t%s\n", branch.Branch, branch.Upstream)
+			cli.Printf(cmd, "%s\t%s\n", branch.Branch, branch.Upstream)
 
 		case repo.BranchRefused:
 			// git's own words, not a guess at them. The reason is not always
@@ -63,12 +64,12 @@ func reportSync(cmd *cobra.Command, dir string, result repo.SyncResult) {
 			// incoming commit that would overwrite an untracked file both land
 			// here, and "not a fast-forward" would send the user looking for
 			// something that is not there.
-			fprintf(errOut, "devctl: skip %s: %v\n", branch.Branch, branch.Refusal)
+			cli.Fprintf(errOut, "devctl: skip %s: %v\n", branch.Branch, branch.Refusal)
 
 		case repo.BranchUpstreamGone:
 			// Reported, not dropped: the upstream was usually deleted after a
 			// merge, and the branch may still hold commits that were not.
-			fprintf(errOut, "devctl: skip %s: upstream %s is gone\n", branch.Branch, branch.Upstream)
+			cli.Fprintf(errOut, "devctl: skip %s: upstream %s is gone\n", branch.Branch, branch.Upstream)
 
 		case repo.BranchUpToDate:
 			// Silent on purpose: a branch with nothing to bring in is the

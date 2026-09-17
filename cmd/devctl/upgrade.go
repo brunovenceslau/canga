@@ -4,6 +4,7 @@
 package main
 
 import (
+	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/brunovenceslau/devctl/internal/upgrade"
 	"github.com/spf13/cobra"
 )
@@ -28,7 +29,7 @@ func newUpgradeCmd() *cobra.Command {
 			"A GitHub token is optional. GH_TOKEN, GITHUB_TOKEN or whatever `gh\n" +
 			"auth token` answers is used when one is there, which raises GitHub's\n" +
 			"rate limit; without one the release is read anonymously.",
-		Args: usageArgs(cobra.NoArgs),
+		Args: cli.UsageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			options.Current = version
 			options.Token = upgrade.Token(cmd.Context())
@@ -68,29 +69,29 @@ func reportUpgrade(cmd *cobra.Command, options upgrade.Options, result upgrade.R
 	// Said whenever the two differ, because the file being replaced is then not
 	// the path the user typed — ~/.local/bin is full of symlinks.
 	if result.Invoked != "" {
-		fprintf(errOut, "devctl: %s resolves to %s\n", result.Invoked, result.Path)
+		cli.Fprintf(errOut, "devctl: %s resolves to %s\n", result.Invoked, result.Path)
 	}
 
 	switch {
 	case failure != nil:
 		// The error itself follows, from main. What this adds is how far the run
 		// got, which the error does not carry.
-		fprintf(errOut, "devctl: stopped while installing %s over %s\n", result.Release, result.Path)
+		cli.Fprintf(errOut, "devctl: stopped while installing %s over %s\n", result.Release, result.Path)
 
 		return
 	case result.Installed:
-		fprintf(errOut, "devctl: installed %s over %s at %s\n", result.Release, result.Current, result.Path)
+		cli.Fprintf(errOut, "devctl: installed %s over %s at %s\n", result.Release, result.Current, result.Path)
 	case options.Check:
-		fprintf(errOut, "devctl: %s\n", checkSummary(result))
+		cli.Fprintf(errOut, "devctl: %s\n", checkSummary(result))
 		// On its own line, and on BOTH branches. Saying what would happen
 		// without saying where is half an answer, and the file replaced is
 		// resolved through symlinks, so it is not always the path that was typed.
-		fprintf(errOut, "devctl: it would replace %s\n", result.Path)
+		cli.Fprintf(errOut, "devctl: it would replace %s\n", result.Path)
 	default:
-		fprintf(errOut, "devctl: %s is the newest release; nothing to do\n", result.Release)
+		cli.Fprintf(errOut, "devctl: %s is the newest release; nothing to do\n", result.Release)
 	}
 
-	printf(cmd, "%s\n", result.Release)
+	cli.Printf(cmd, "%s\n", result.Release)
 }
 
 // checkSummary is the line --check prints above the path.

@@ -1,35 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-package main
+package cli
 
 import (
 	"errors"
-	"fmt"
-	"io"
 	"strings"
 
 	"github.com/brunovenceslau/devctl/internal/store"
 	"github.com/spf13/cobra"
 )
 
-// printf writes one record to the command's stdout.
+// Subcommand builds one `reminders` verb against an App.
 //
-// The write error is deliberately dropped. The only realistic failure is a
-// closed pipe, which Go's runtime already turns into the conventional SIGPIPE
-// death; reporting it instead would make `devctl reminders list | head` look
-// like a broken command rather than a finished one.
-func printf(cmd *cobra.Command, format string, args ...any) {
-	fprintf(cmd.OutOrStdout(), format, args...)
-}
+// Each binary passes the verbs it exposes to NewRemindersCmd, so the set is a
+// decision made in one visible place per binary. agtctl leaves out rm and
+// reorder: an agent in a sandbox may read the list and add to it, but only the
+// person on the host removes or reorders their own reminders.
+type Subcommand func(*App) *cobra.Command
 
-// fprintf writes to any of a command's streams, dropping the write error for
-// the reason given above printf.
-func fprintf(out io.Writer, format string, args ...any) {
-	_, _ = fmt.Fprintf(out, format, args...)
-}
-
-func newRemindersCmd(a *app) *cobra.Command {
+// NewRemindersCmd builds the `reminders` command with the given verbs.
+func NewRemindersCmd(a *App, verbs ...Subcommand) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "reminders",
 		Aliases: []string{"todo"},
@@ -38,37 +29,34 @@ func newRemindersCmd(a *app) *cobra.Command {
 			"wrote it. Every session working on the same repository, in any sandbox,\n" +
 			"sees the same list, and each item is a plain file meant to be edited by\n" +
 			"hand as readily as by this command.",
-		Args: usageArgs(cobra.NoArgs),
-		RunE: runHelp,
+		Args: UsageArgs(cobra.NoArgs),
+		RunE: RunHelp,
 	}
 
-	cmd.AddCommand(
-		newRemindersAddCmd(a),
-		newRemindersListCmd(a),
-		newRemindersRemoveCmd(a),
-		newRemindersPathCmd(a),
-		newRemindersReorderCmd(a),
-	)
+	for _, verb := range verbs {
+		cmd.AddCommand(verb(a))
+	}
 
 	return cmd
 }
 
-func newRemindersAddCmd(a *app) *cobra.Command {
+// RemindersAdd is `reminders add`.
+func RemindersAdd(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "add <text>...",
 		Short: "Record a reminder and print its id",
 		Long: "add records a reminder. The arguments are joined with spaces, so the\n" +
 			"text needs no quoting. This is the only subcommand that creates the\n" +
 			"store; the rest refuse to bring one into existence just by asking.",
-		Args: usageArgs(cobra.MinimumNArgs(1)),
+		Args: UsageArgs(cobra.MinimumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withNewStore(cmd, func(reminders *store.Store) error {
+			return a.WithNewStore(cmd, func(reminders *store.Store) error {
 				item, err := reminders.Add(strings.Join(args, " "))
 				if err != nil {
 					return err
 				}
 
-				printf(cmd, "%s\n", item.ID)
+				Printf(cmd, "%s\n", item.ID)
 
 				return nil
 			})
@@ -76,7 +64,8 @@ func newRemindersAddCmd(a *app) *cobra.Command {
 	}
 }
 
-func newRemindersListCmd(a *app) *cobra.Command {
+// RemindersList is `reminders list`.
+func RemindersList(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -86,16 +75,16 @@ func newRemindersListCmd(a *app) *cobra.Command {
 			"rest in its file, which `devctl reminders path <id>` points at.\n\n" +
 			"A repository with no store yet lists nothing and succeeds — having\n" +
 			"recorded nothing is not an error.",
-		Args: usageArgs(cobra.NoArgs),
+		Args: UsageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			err := a.withStore(cmd, func(reminders *store.Store) error {
+			err := a.WithStore(cmd, func(reminders *store.Store) error {
 				items, err := reminders.List()
 				if err != nil {
 					return err
 				}
 
 				for _, item := range items {
-					printf(cmd, "%s\t%s\n", item.ID, item.Summary())
+					Printf(cmd, "%s\t%s\n", item.ID, item.Summary())
 				}
 
 				return nil
@@ -110,7 +99,8 @@ func newRemindersListCmd(a *app) *cobra.Command {
 	}
 }
 
-func newRemindersRemoveCmd(a *app) *cobra.Command {
+// RemindersRemove is `reminders rm`.
+func RemindersRemove(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:     "rm <id>...",
 		Aliases: []string{"remove"},
@@ -118,10 +108,10 @@ func newRemindersRemoveCmd(a *app) *cobra.Command {
 		Long: "rm removes each named reminder. Every id is attempted even if an\n" +
 			"earlier one fails, so one stale id on the line does not silently skip\n" +
 			"the rest; the failures are reported together.",
-		Args:              usageArgs(cobra.MinimumNArgs(1)),
+		Args:              UsageArgs(cobra.MinimumNArgs(1)),
 		ValidArgsFunction: a.completeIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withStore(cmd, func(reminders *store.Store) error {
+			return a.WithStore(cmd, func(reminders *store.Store) error {
 				var failures []error
 
 				for _, id := range args {
@@ -136,36 +126,37 @@ func newRemindersRemoveCmd(a *app) *cobra.Command {
 	}
 }
 
-func newRemindersPathCmd(a *app) *cobra.Command {
+// RemindersPath is `reminders path`.
+func RemindersPath(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "path [<id>]",
 		Short: "Print the store directory, or one reminder's file",
 		Long: "path prints where the reminders live, so an editor or a script can be\n" +
 			"pointed at them. It creates nothing: with no argument it reports the\n" +
 			"store directory whether or not anything has been recorded there yet.",
-		Args:              usageArgs(cobra.MaximumNArgs(1)),
+		Args:              UsageArgs(cobra.MaximumNArgs(1)),
 		ValidArgsFunction: a.completeIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				// Deliberately does not open the store: asking where something
 				// would live must not bring it into being.
-				cfg, err := a.config(cmd.Context())
+				cfg, err := a.Config(cmd.Context())
 				if err != nil {
 					return err
 				}
 
-				printf(cmd, "%s\n", cfg.Dir)
+				Printf(cmd, "%s\n", cfg.Dir)
 
 				return nil
 			}
 
-			return a.withStore(cmd, func(reminders *store.Store) error {
+			return a.WithStore(cmd, func(reminders *store.Store) error {
 				path, err := reminders.ItemPath(args[0])
 				if err != nil {
 					return err
 				}
 
-				printf(cmd, "%s\n", path)
+				Printf(cmd, "%s\n", path)
 
 				return nil
 			})
@@ -173,7 +164,8 @@ func newRemindersPathCmd(a *app) *cobra.Command {
 	}
 }
 
-func newRemindersReorderCmd(a *app) *cobra.Command {
+// RemindersReorder is `reminders reorder`.
+func RemindersReorder(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "reorder <id>...",
 		Short: "Move reminders to the front of the listing",
@@ -183,10 +175,10 @@ func newRemindersReorderCmd(a *app) *cobra.Command {
 			"the same verb with every id listed.\n\n" +
 			"It takes no lock. A reorder that loses a race against another writer\n" +
 			"recomputes against the winner's result rather than overwriting it.",
-		Args:              usageArgs(cobra.MinimumNArgs(1)),
+		Args:              UsageArgs(cobra.MinimumNArgs(1)),
 		ValidArgsFunction: a.completeIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withStore(cmd, func(reminders *store.Store) error {
+			return a.WithStore(cmd, func(reminders *store.Store) error {
 				return reminders.Reorder(args)
 			})
 		},
@@ -197,7 +189,7 @@ func newRemindersReorderCmd(a *app) *cobra.Command {
 // the candidate, which is what zsh renders as the description. Producing that
 // is the thing a hand-written completion cannot do without reimplementing the
 // store, and the reason the completion moved into the binary.
-func (a *app) completeIDs(
+func (a *App) completeIDs(
 	cmd *cobra.Command,
 	args []string,
 	toComplete string,
@@ -207,7 +199,7 @@ func (a *app) completeIDs(
 	// A completion must never be noisy: outside a repository, or with no store
 	// yet, it offers nothing rather than printing a diagnostic into the line the
 	// user is still typing. The error is dropped for that reason alone.
-	_ = a.withStore(cmd, func(reminders *store.Store) error {
+	_ = a.WithStore(cmd, func(reminders *store.Store) error {
 		items, err := reminders.List()
 		if err != nil {
 			return err

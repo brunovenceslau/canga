@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/brunovenceslau/devctl/internal/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,7 +38,7 @@ func TestSetupHooks_OutsideARepositoryIsAUsageError(t *testing.T) {
 
 	_, err := execute(t, "setup", "hooks", "-C", t.TempDir())
 	require.Error(t, err)
-	assert.Equal(t, exitUsage, exitCode(err))
+	assert.Equal(t, cli.ExitUsage, exitCode(err))
 	assert.Contains(t, err.Error(), "not inside a git repository")
 }
 
@@ -47,7 +48,7 @@ func TestSetupHooks_NothingToInstallIsARuntimeFailure(t *testing.T) {
 
 	_, err := execute(t, "setup", "hooks", "-C", dir)
 	require.Error(t, err)
-	assert.Equal(t, exitFailure, exitCode(err))
+	assert.Equal(t, cli.ExitFailure, exitCode(err))
 	assert.Contains(t, err.Error(), hooks.SourceDir)
 }
 
@@ -102,7 +103,7 @@ func TestSetupHooks_RefusalClaimsNoChange(t *testing.T) {
 
 	stdout, stderr, err := executeSplit(t, "setup", "hooks", "-C", dir, "--symlink")
 	require.Error(t, err)
-	assert.Equal(t, exitUsage, exitCode(err), "a conflict is fixed by changing the command, not repeating it")
+	assert.Equal(t, cli.ExitUsage, exitCode(err), "a conflict is fixed by changing the command, not repeating it")
 	assert.NotContains(t, stderr, "stopped part way")
 	assert.NotContains(t, stderr, "installed via")
 	assert.Empty(t, stdout)
@@ -118,7 +119,7 @@ func TestSetupHooks_UsageErrors(t *testing.T) {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			_, err := execute(t, args...)
 			require.Error(t, err)
-			assert.Equal(t, exitUsage, exitCode(err))
+			assert.Equal(t, cli.ExitUsage, exitCode(err))
 		})
 	}
 }

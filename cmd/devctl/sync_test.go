@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/brunovenceslau/devctl/internal/repo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,12 +96,12 @@ func TestSyncCmd_ExitCodes(t *testing.T) {
 
 	_, err := execute(t, "sync", "-C", t.TempDir())
 	require.ErrorIs(t, err, repo.ErrNotARepository)
-	assert.Equal(t, exitUsage, exitCode(err))
+	assert.Equal(t, cli.ExitUsage, exitCode(err))
 
 	// sync takes no positional argument: the repository is named with -C.
 	_, err = execute(t, "sync", "/some/path")
 	require.Error(t, err)
-	assert.Equal(t, exitUsage, exitCode(err))
+	assert.Equal(t, cli.ExitUsage, exitCode(err))
 }
 
 // A fetch that cannot complete is a RUNTIME failure: the remote or the network
@@ -115,7 +116,7 @@ func TestSyncCmd_AFailedFetchIsARuntimeFailure(t *testing.T) {
 
 	_, err := execute(t, "sync", "-C", local)
 	require.ErrorIs(t, err, repo.ErrFetchFailed)
-	assert.Equal(t, exitFailure, exitCode(err))
+	assert.Equal(t, cli.ExitFailure, exitCode(err))
 }
 
 // A branch with nothing to bring in is the common case. It prints nothing at
