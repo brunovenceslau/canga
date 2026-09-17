@@ -110,13 +110,26 @@ func TestPickAssets(t *testing.T) {
 			expected: archiveName,
 		},
 		{
+			// A release carries more than one binary. Another binary's archive
+			// for this very platform must not count as devctl's, or the upgrade
+			// refuses a release that does hold exactly one devctl archive.
+			name:     "another binary's archive for this platform is ignored",
+			assets:   []asset{{ID: 1, Name: "agtctl_0.1.0" + assetSuffix()}, {ID: 2, Name: archiveName}, {ID: 3, Name: checksumsName}},
+			expected: archiveName,
+		},
+		{
+			name:      "only another binary's archive for this platform",
+			assets:    []asset{{ID: 1, Name: "agtctl_0.1.0" + assetSuffix()}, {ID: 2, Name: checksumsName}},
+			expectErr: true,
+		},
+		{
 			name:      "nothing for this platform",
 			assets:    []asset{{ID: 1, Name: otherName}, {ID: 2, Name: checksumsName}},
 			expectErr: true,
 		},
 		{
 			name:      "two archives for this platform",
-			assets:    []asset{{ID: 1, Name: archiveName}, {ID: 2, Name: "other_" + assetSuffix()}, {ID: 3, Name: checksumsName}},
+			assets:    []asset{{ID: 1, Name: archiveName}, {ID: 2, Name: "devctl_0.2.0" + assetSuffix()}, {ID: 3, Name: checksumsName}},
 			expectErr: true,
 		},
 		{
