@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -120,22 +121,22 @@ func TestCloneCmd_ExitCodes(t *testing.T) {
 
 	_, err := execute(t, "clone", source, occupied)
 	require.Error(t, err)
-	assert.Equal(t, exitFailure, exitCode(err))
+	assert.Equal(t, cli.ExitFailure, exitCode(err))
 
 	t.Setenv("DEVCTL_BASE_DIR", t.TempDir())
 
 	_, err = execute(t, "clone", "not-a-url")
 	require.Error(t, err)
-	assert.Equal(t, exitUsage, exitCode(err))
+	assert.Equal(t, cli.ExitUsage, exitCode(err))
 
 	// Wrong argument count is cobra's own refusal, and must exit 2 as well.
 	_, err = execute(t, "clone")
 	require.Error(t, err)
-	assert.Equal(t, exitUsage, exitCode(err))
+	assert.Equal(t, cli.ExitUsage, exitCode(err))
 
 	_, err = execute(t, "clone", "a", "b", "c")
 	require.Error(t, err)
-	assert.Equal(t, exitUsage, exitCode(err))
+	assert.Equal(t, cli.ExitUsage, exitCode(err))
 }
 
 // Completion is driven through cobra's own `__complete`, not by calling the

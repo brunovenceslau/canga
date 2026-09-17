@@ -4,20 +4,20 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"testing"
 
-	"github.com/brunovenceslau/devctl/internal/repo"
-	"github.com/brunovenceslau/devctl/internal/store"
+	"github.com/brunovenceslau/devctl/internal/cli"
+	"github.com/brunovenceslau/devctl/internal/hooks"
+	"github.com/brunovenceslau/devctl/internal/upgrade"
 	"github.com/stretchr/testify/assert"
 )
 
-// TestExitCode pins the contract a script calling devctl relies on. The codes
-// are deliberately coarse: 2 means the invocation was wrong and retrying it
-// unchanged is pointless, 1 means it was right and something failed anyway.
+// TestExitCode pins what devctl adds to the shared contract, which
+// internal/cli's own test pins: its own sentinels are usage errors, and
+// everything else is decided by cli.ExitCode.
 func TestExitCode(t *testing.T) {
 	t.Parallel()
 
@@ -26,21 +26,12 @@ func TestExitCode(t *testing.T) {
 		err  error
 		want int
 	}{
-		{name: "success", err: nil, want: exitOK},
-		{name: "usage", err: errUsage(errors.New("unknown flag")), want: exitUsage},
-		{name: "wrapped usage", err: fmt.Errorf("outer: %w", errUsage(errors.New("bad"))), want: exitUsage},
-		{name: "no origin", err: fmt.Errorf("x: %w", repo.ErrNoOrigin), want: exitUsage},
-		{name: "unparseable url", err: fmt.Errorf("x: %w", repo.ErrBadURL), want: exitUsage},
-		{name: "id not found", err: fmt.Errorf("x: %w", store.ErrNotFound), want: exitFailure},
-		// A missing git binary is a runtime failure, not a bad invocation: the
-		// command was right, the machine is not set up.
-		{name: "git missing", err: fmt.Errorf("x: %w", repo.ErrGitMissing), want: exitFailure},
-		{name: "interrupted", err: fmt.Errorf("x: %w", context.Canceled), want: exitFailure},
-		{name: "no store", err: fmt.Errorf("x: %w", store.ErrNoStore), want: exitFailure},
-		// A typo in an id is a bad invocation. Exit 1 would tell a caller to
-		// retry, and retrying a typo never stops.
-		{name: "malformed id", err: fmt.Errorf("x: %w", store.ErrInvalidID), want: exitUsage},
-		{name: "runtime failure", err: fs.ErrPermission, want: exitFailure},
+		{name: "success", err: nil, want: cli.ExitOK},
+		{name: "hook conflict", err: fmt.Errorf("x: %w", hooks.ErrConflict), want: cli.ExitUsage},
+		{name: "not a release", err: fmt.Errorf("x: %w", upgrade.ErrNotRelease), want: cli.ExitUsage},
+		{name: "bad tag", err: fmt.Errorf("x: %w", upgrade.ErrBadTag), want: cli.ExitUsage},
+		{name: "shared usage", err: cli.Usage(errors.New("unknown flag")), want: cli.ExitUsage},
+		{name: "shared runtime failure", err: fs.ErrPermission, want: cli.ExitFailure},
 	}
 
 	for _, tt := range tests {

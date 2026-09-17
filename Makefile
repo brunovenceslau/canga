@@ -9,8 +9,10 @@
 
 SHELL := /bin/bash
 
-BIN      := bin/devctl
-PKG      := ./cmd/devctl
+# Both binaries come from this module and are built, cross-compiled and
+# released together. devctl is the host tool; agtctl is its sandbox-side
+# counterpart and ships for linux only (see .goreleaser.yml).
+BINS     := devctl agtctl
 # Injected into main.version by ldflags. A release overrides it from the tag;
 # a local build reports the git description so `devctl version` never lies about
 # which tree it came from. `devctl upgrade` compares a release against this
@@ -37,6 +39,7 @@ RACE_STORE_DIR ?=
 # why the test matrix does not need a second operating system to catch a
 # platform-specific compile error.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
+AGTCTL_PLATFORMS ?= linux/arm64 linux/amd64
 
 # Prerequisite order is load-bearing in this file, and `make -j` does not keep
 # it: GNU make only promises left-to-right processing in serial mode. `release`
@@ -52,9 +55,9 @@ PLATFORMS ?= darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
 
 help:
 	@echo "Targets:"
-	@echo "  make build    build $(BIN) with version/commit stamped in"
-	@echo "  make cross    compile every platform a release ships"
-	@echo "  make install  go install devctl into GOBIN"
+	@echo "  make build    build bin/devctl and bin/agtctl with version/commit stamped in"
+	@echo "  make cross    compile every binary for every platform a release ships"
+	@echo "  make install  go install devctl into GOBIN (agtctl belongs in a sandbox, not here)"
 	@echo "  make fmt      apply the configured formatters (gofumpt + goimports)"
 	@echo "  make fix      apply every automatic fix: go fix, the formatters, --fix linters"
 	@echo "  make pre-commit  the fast subset a commit hook runs"
@@ -68,21 +71,26 @@ help:
 	@echo "  make tools    install the pinned dev tools into GOBIN"
 
 build:
-	go build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) $(PKG)
+	@set -e; for bin in $(BINS); do \
+	  echo "go build -o bin/$$bin ./cmd/$$bin"; \
+	  go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$$bin ./cmd/$$bin; \
+	done
 
 # CGO_ENABLED=0 matches what .goreleaser.yml sets, so this compiles the way a
 # release does rather than however the host happens to be configured. The output
 # goes nowhere: the question is whether it builds, not what it produces.
 cross:
-	@set -e; for platform in $(PLATFORMS); do \
-	  goos=$${platform%/*}; goarch=$${platform#*/}; \
-	  echo "GOOS=$$goos GOARCH=$$goarch go build $(PKG)"; \
+	@set -e; build() { \
+	  goos=$${2%/*}; goarch=$${2#*/}; \
+	  echo "GOOS=$$goos GOARCH=$$goarch go build ./cmd/$$1"; \
 	  CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch \
-	    go build -trimpath -ldflags '$(LDFLAGS)' -o /dev/null $(PKG); \
-	done
+	    go build -trimpath -ldflags '$(LDFLAGS)' -o /dev/null ./cmd/$$1; \
+	}; \
+	for platform in $(PLATFORMS); do build devctl $$platform; done; \
+	for platform in $(AGTCTL_PLATFORMS); do build agtctl $$platform; done
 
 install:
-	go install -trimpath -ldflags '$(LDFLAGS)' $(PKG)
+	go install -trimpath -ldflags '$(LDFLAGS)' ./cmd/devctl
 
 fmt:
 	golangci-lint fmt ./...

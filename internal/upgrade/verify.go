@@ -48,6 +48,15 @@ var (
 	ErrNoBinary = errors.New("no devctl in the release archive")
 )
 
+// assetPrefix is what an archive of THIS binary is named by.
+//
+// The platform suffix alone stopped being enough the day a release began to
+// carry a second binary: agtctl ships linux archives beside devctl's, so
+// "_linux_arm64.tar.gz" names two files and the upgrade would refuse both. The
+// prefix is the binary's own name, which is the one part of the name_template
+// that cannot change without renaming the project.
+const assetPrefix = binaryName + "_"
+
 // assetSuffix is what an archive for this platform is named by.
 //
 // It is matched as a SUFFIX rather than rebuilt from the version, which the
@@ -59,8 +68,8 @@ func assetSuffix() string {
 	return "_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
 }
 
-// pickAssets finds the archive for this platform and the checksums file beside
-// it.
+// pickAssets finds devctl's archive for this platform and the checksums file
+// beside it.
 func pickAssets(rel release) (archive, checksums asset, err error) {
 	suffix := assetSuffix()
 
@@ -68,7 +77,7 @@ func pickAssets(rel release) (archive, checksums asset, err error) {
 
 	for _, candidate := range rel.Assets {
 		switch {
-		case strings.HasSuffix(candidate.Name, suffix):
+		case strings.HasPrefix(candidate.Name, assetPrefix) && strings.HasSuffix(candidate.Name, suffix):
 			matches = append(matches, candidate)
 		case candidate.Name == checksumsName:
 			checksums = candidate
@@ -77,7 +86,7 @@ func pickAssets(rel release) (archive, checksums asset, err error) {
 
 	if len(matches) != 1 {
 		return asset{}, asset{}, fmt.Errorf(
-			"%w: %s has %d assets ending in %q", ErrNoAsset, rel.Tag, len(matches), suffix)
+			"%w: %s has %d assets named %s*%s", ErrNoAsset, rel.Tag, len(matches), assetPrefix, suffix)
 	}
 
 	if checksums.Name == "" {

@@ -1,8 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Command devctl is a developer control tool: small, deterministic operations
-// on the repositories and sandboxes a working day is spent in.
+// Command agtctl is devctl's counterpart for the agents inside a sandbox.
+//
+// It is a separate binary rather than devctl with some commands hidden, so
+// that what an agent can do is decided by what was compiled in: a sandbox that
+// only has agtctl cannot clone, sync, install hooks or replace a binary, and
+// can read and add reminders but not remove or reorder them.
 package main
 
 import (
@@ -16,8 +20,6 @@ import (
 )
 
 // Stamped in by ldflags at build time; see the Makefile and .goreleaser.yml.
-// `devctl upgrade` compares a published release against version, so a build
-// that reported a hardcoded string would upgrade itself in circles.
 var (
 	version = "dev"
 	commit  = "none"
@@ -30,17 +32,17 @@ func main() {
 }
 
 func run() int {
-	// The cancelled context reaches every git subprocess devctl starts, so a
-	// Ctrl-C does not leave one behind.
+	// The cancelled context reaches the git subprocess that resolves the
+	// origin, so a Ctrl-C or a hook timeout does not leave one behind.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	if err := newRootCmd().ExecuteContext(ctx); err != nil {
 		// SilenceErrors is on, so this is the ONLY place an error is printed,
 		// and it goes to stderr — stdout stays a clean, pipeable record stream.
-		fmt.Fprintf(os.Stderr, "devctl: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agtctl: %v\n", err)
 
-		return exitCode(err)
+		return cli.ExitCode(err)
 	}
 
 	return cli.ExitOK

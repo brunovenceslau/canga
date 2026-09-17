@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brunovenceslau/devctl/internal/testrepo"
+
+	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/brunovenceslau/devctl/internal/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +23,7 @@ import (
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	source := filepath.Join(dir, filepath.FromSlash(hooks.SourceDir))
 	require.NoError(t, os.MkdirAll(source, 0o755))
@@ -33,21 +36,21 @@ func TestSetupHooks(t *testing.T) {
 
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks_OutsideARepositoryIsAUsageError(t *testing.T) {
-	scratchRepo(t, "git@github.com:acme/widget.git")
+	testrepo.New(t, "git@github.com:acme/widget.git")
 
 	_, err := execute(t, "setup", "hooks", "-C", t.TempDir())
 	require.Error(t, err)
-	assert.Equal(t, exitUsage, exitCode(err))
+	assert.Equal(t, cli.ExitUsage, exitCode(err))
 	assert.Contains(t, err.Error(), "not inside a git repository")
 }
 
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks_NothingToInstallIsARuntimeFailure(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	_, err := execute(t, "setup", "hooks", "-C", dir)
 	require.Error(t, err)
-	assert.Equal(t, exitFailure, exitCode(err))
+	assert.Equal(t, cli.ExitFailure, exitCode(err))
 	assert.Contains(t, err.Error(), hooks.SourceDir)
 }
 
@@ -58,7 +61,7 @@ func TestSetupHooks_NothingToInstallIsARuntimeFailure(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks_PartialInstallIsReported(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	source := filepath.Join(dir, filepath.FromSlash(hooks.SourceDir))
 	require.NoError(t, os.MkdirAll(source, 0o755))
@@ -90,7 +93,7 @@ func TestSetupHooks_PartialInstallIsReported(t *testing.T) {
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks_RefusalClaimsNoChange(t *testing.T) {
-	dir := scratchRepo(t, "git@github.com:acme/widget.git")
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
 	source := filepath.Join(dir, filepath.FromSlash(hooks.SourceDir))
 	require.NoError(t, os.MkdirAll(source, 0o755))
@@ -102,7 +105,7 @@ func TestSetupHooks_RefusalClaimsNoChange(t *testing.T) {
 
 	stdout, stderr, err := executeSplit(t, "setup", "hooks", "-C", dir, "--symlink")
 	require.Error(t, err)
-	assert.Equal(t, exitUsage, exitCode(err), "a conflict is fixed by changing the command, not repeating it")
+	assert.Equal(t, cli.ExitUsage, exitCode(err), "a conflict is fixed by changing the command, not repeating it")
 	assert.NotContains(t, stderr, "stopped part way")
 	assert.NotContains(t, stderr, "installed via")
 	assert.Empty(t, stdout)
@@ -118,7 +121,7 @@ func TestSetupHooks_UsageErrors(t *testing.T) {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			_, err := execute(t, args...)
 			require.Error(t, err)
-			assert.Equal(t, exitUsage, exitCode(err))
+			assert.Equal(t, cli.ExitUsage, exitCode(err))
 		})
 	}
 }

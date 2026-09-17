@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/brunovenceslau/devctl/internal/upgrade"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,7 @@ func TestUpgradeRefusesATestBuild(t *testing.T) {
 
 	_, err := execute(t, upgradeCmd)
 	require.ErrorIs(t, err, upgrade.ErrNotRelease)
-	assert.Equal(t, exitUsage, exitCode(err),
+	assert.Equal(t, cli.ExitUsage, exitCode(err),
 		"the fix is to pass --tag, so this is a bad invocation rather than a runtime failure")
 }
 
@@ -33,7 +34,7 @@ func TestUpgradeRefusesATagThatIsNotAVersion(t *testing.T) {
 
 	_, err := execute(t, upgradeCmd, "--tag", "main")
 	require.ErrorIs(t, err, upgrade.ErrBadTag)
-	assert.Equal(t, exitUsage, exitCode(err))
+	assert.Equal(t, cli.ExitUsage, exitCode(err))
 }
 
 // A machine with neither a token in the environment nor gh installed is no
@@ -69,7 +70,7 @@ func TestUpgradeUsage(t *testing.T) {
 
 			_, err := execute(t, tt.args...)
 			require.Error(t, err)
-			assert.Equal(t, exitUsage, exitCode(err))
+			assert.Equal(t, cli.ExitUsage, exitCode(err))
 		})
 	}
 }

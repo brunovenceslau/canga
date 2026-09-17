@@ -339,6 +339,21 @@ are refused, and `--tag` is how you say which release you meant:
 devctl upgrade --tag v0.1.0
 ```
 
+### Upgrading a linux devctl from v0.3.0 or earlier
+
+Releases after v0.3.0 also carry `agtctl` archives for linux. devctl v0.3.0 and
+earlier select an archive by the platform suffix alone, so on linux they find
+two archives and refuse the upgrade with:
+
+```
+devctl: no release asset for this platform: <tag> has 2 assets ending in "_linux_arm64.tar.gz"
+```
+
+Install the new release once by hand, as in
+[Install a release binary](#install-a-release-binary). From then on `devctl
+upgrade` selects its archive by name and works again. devctl on a mac is not
+affected, because no darwin `agtctl` is published.
+
 ## `devctl reminders`
 
 A per-repository TODO store that outlives the session that wrote it. An idea
@@ -413,6 +428,57 @@ Every path is resolved through an `os.Root` rooted at the store directory, so a
 crafted id cannot address anything outside it by construction rather than by
 validation. Go 1.27 is a correctness floor, not a preference: before it, a
 symlink opened with a trailing slash escaped a `Root`.
+
+## `agtctl`
+
+`agtctl` is the binary for agents inside a sandbox. It reads and adds to the
+same reminders `devctl` manages on the host, and does nothing else.
+
+```sh
+agtctl reminders list
+agtctl reminders add check the retry budget before merging
+```
+
+Both verbs behave exactly as their `devctl reminders` counterparts: `list`
+prints one `<id><TAB><text>` record per line, `add` prints the new id, and `-C`
+names a repository other than the current directory.
+
+### What it leaves out
+
+`agtctl` has no `rm`, `reorder` or `path`, and no `clone`, `sync`, `setup`,
+`upgrade` or `completion`. An agent may surface the list and record an idea, but
+the list belongs to the person on the host, so only `devctl` removes or reorders
+it. The verbs are absent from the binary, not hidden: `agtctl reminders rm`
+fails as an unknown command and exits `2`.
+
+### Where it finds the store
+
+`agtctl` resolves the store exactly as `devctl` does, from the same
+`DEVCTL_REMINDERS_DIR` variable. It has no variable of its own. For the sandbox
+and the host to share one list, the sandbox needs the host's store directory
+mounted, and `DEVCTL_REMINDERS_DIR` set to the path it is mounted at. See
+[Where the reminders live](#where-the-reminders-live) for the layout under it.
+
+### Install it in a sandbox
+
+Releases ship `agtctl` for linux only, because sandboxes are linux VMs. Verify
+the archive against `checksums.txt` before extracting it:
+
+```sh
+releases=https://github.com/brunovenceslau/devctl/releases
+tag=vX.Y.Z                                   # the release this sandbox pins
+asset=agtctl_${tag#v}_linux_arm64.tar.gz     # or linux_amd64
+
+curl -fsSLO "$releases/download/$tag/$asset"
+curl -fsSLO "$releases/download/$tag/checksums.txt"
+mkdir -p "$HOME/.local/bin"
+awk -v a="$asset" '$2 == a' checksums.txt | sha256sum -c - \
+  && tar -xzf "$asset" -C "$HOME/.local/bin" agtctl
+```
+
+Pin the tag rather than following `latest`, so every sandbox built from one
+definition runs the same binary. `agtctl --version` prints the version, the
+commit, and the Go version.
 
 ## Shell completion
 
@@ -493,7 +559,7 @@ To publish a version:
 The last line reports what landed:
 
 ```
-release: v0.2.0 now carries 4 archives and checksums.txt
+release: v0.2.0 now carries 6 archives and checksums.txt
 ```
 
 Run it again and it replaces those assets instead of failing, so building one
@@ -534,8 +600,8 @@ the workflow now that the local path exists, is still open.
 
 `make release` calls GoReleaser rather than packaging with `tar` and `shasum`,
 so `.goreleaser.yml` stays the single definition of the artifact format. The
-reason is `devctl upgrade`: it finds its asset by the `_<os>_<arch>.tar.gz`
-suffix and reads `checksums.txt` by exact filename. A second packaging
+reason is `devctl upgrade`: it finds its asset by the `devctl_` prefix and the
+`_<os>_<arch>.tar.gz` suffix, and reads `checksums.txt` by exact filename. A second packaging
 implementation that drifted from the first would break upgrading, for whoever
 ran it next, rather than releasing, for whoever changed it.
 

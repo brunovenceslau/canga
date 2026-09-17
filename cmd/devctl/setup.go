@@ -4,16 +4,17 @@
 package main
 
 import (
+	"github.com/brunovenceslau/devctl/internal/cli"
 	"github.com/brunovenceslau/devctl/internal/hooks"
 	"github.com/spf13/cobra"
 )
 
-func newSetupCmd(a *app) *cobra.Command {
+func newSetupCmd(a *cli.App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Wire devctl into a repository",
-		Args:  usageArgs(cobra.NoArgs),
-		RunE:  runHelp,
+		Args:  cli.UsageArgs(cobra.NoArgs),
+		RunE:  cli.RunHelp,
 	}
 
 	cmd.AddCommand(newSetupHooksCmd(a))
@@ -28,11 +29,11 @@ func reportInstall(cmd *cobra.Command, report hooks.Report, failure error) {
 	errOut := cmd.ErrOrStderr()
 
 	for _, warning := range report.Warnings {
-		fprintf(errOut, "devctl: %s\n", warning)
+		cli.Fprintf(errOut, "devctl: %s\n", warning)
 	}
 
 	for _, backup := range report.BackedUp {
-		fprintf(errOut, "devctl: moved aside to %s\n", backup)
+		cli.Fprintf(errOut, "devctl: moved aside to %s\n", backup)
 	}
 
 	// Nothing touched, nothing to summarize. Mode alone is not the test: it is
@@ -46,17 +47,17 @@ func reportInstall(cmd *cobra.Command, report hooks.Report, failure error) {
 	// The summary must not claim success when the run failed part way. What was
 	// already installed is still worth naming, and the error itself follows.
 	if failure != nil {
-		fprintf(errOut, "devctl: stopped part way through %s in %s\n", report.Mode, report.Root)
+		cli.Fprintf(errOut, "devctl: stopped part way through %s in %s\n", report.Mode, report.Root)
 	} else {
-		fprintf(errOut, "devctl: installed via %s in %s\n", report.Mode, report.Root)
+		cli.Fprintf(errOut, "devctl: installed via %s in %s\n", report.Mode, report.Root)
 	}
 
 	for _, name := range report.Installed {
-		printf(cmd, "%s\n", name)
+		cli.Printf(cmd, "%s\n", name)
 	}
 }
 
-func newSetupHooksCmd(a *app) *cobra.Command {
+func newSetupHooksCmd(a *cli.App) *cobra.Command {
 	var options hooks.Options
 
 	cmd := &cobra.Command{
@@ -71,9 +72,9 @@ func newSetupHooksCmd(a *app) *cobra.Command {
 			"The hooks are the repository's own tracked files, so installing them\n" +
 			"means its content runs on every commit. Install them in repositories\n" +
 			"whose contents you would run anyway.",
-		Args: usageArgs(cobra.NoArgs),
+		Args: cli.UsageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			report, err := hooks.Install(cmd.Context(), a.repoDir, options)
+			report, err := hooks.Install(cmd.Context(), a.RepoDir, options)
 
 			// Reported BEFORE the error is returned, and on both paths: a run
 			// that moved a file aside and then failed has already changed the
