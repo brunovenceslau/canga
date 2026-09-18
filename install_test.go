@@ -51,23 +51,33 @@ const (
 	_linux   = "Linux"
 	_amd64   = "amd64"
 	_aarch64 = "aarch64"
+
+	// The two checksum tools, and the two ways mangleChecksums breaks
+	// checksums.txt.
+	_sha256sum = "sha256sum"
+	_shasum    = "shasum"
+	_wrong     = "wrong"
+	_absent    = "absent"
 )
 
 // _fakeCurl serves $FAKE_RELEASES/<tag>/<file> for
-// <releases>/download/<tag>/<file>, and 404s (exit 22, as `curl -f` does) when
-// the file is not there. It answers <releases>/latest with the newest tag's
+// <releases>/download/<tag>/<file>. A missing file is a 404: with -f it exits
+// 22 as real curl does, and without -f it saves the error page and exits 0,
+// also as real curl does, so a script that drops -f fails a test. It answers <releases>/latest with the newest tag's
 // URL ONLY when -L was passed, as real curl does: without -L the effective URL
 // is the one asked for. That is the bug the README block had, and why dropping
 // -L from install_host.sh fails the newest-release case. Every request is
 // logged as "<followed redirects: 0|1> <url>".
 const _fakeCurl = `#!/bin/sh
-follow=0 out= format= url=
+follow=0 fail=0 out= format= url=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-o) out=$2; shift ;;
 	-w) format=$2; shift ;;
-	-*L*) follow=1 ;;
-	-*) ;;
+	-*)
+		case "$1" in *L*) follow=1 ;; esac
+		case "$1" in *f*) fail=1 ;; esac
+		;;
 	*) url=$1 ;;
 	esac
 	shift
@@ -81,8 +91,9 @@ case "$url" in
 	;;
 "$FAKE_BASE/download/"*)
 	file="$FAKE_RELEASES/${url#"$FAKE_BASE/download/"}"
-	if [ ! -f "$file" ]; then echo "curl: (22) 404 $url" >&2; exit 22; fi
-	cp "$file" "$out"
+	if [ -f "$file" ]; then cp "$file" "$out"; exit 0; fi
+	if [ "$fail" = 1 ]; then echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; fi
+	echo "Not Found" >"$out"
 	;;
 *)
 	echo "fake curl: unexpected URL $url" >&2
@@ -110,7 +121,7 @@ var _tools = []string{"tar", "gzip", "awk", "mktemp", "mkdir", "rm", "cp", "inst
 // env is one case's throwaway world.
 type env struct {
 	root     string
-	bin      string
+	bin      string // shared by every case with the same checksum tool
 	releases string
 	log      string
 }
@@ -123,30 +134,53 @@ type result struct {
 	requests []string
 }
 
-// newEnv builds the bin directory, with shaTool as the only checksum program
-// on PATH, and a release of _tag with every archive the scripts may ask for.
-func newEnv(t *testing.T, shaTool string) env {
+// newBins builds one bin directory per checksum tool this machine has: the
+// fakes, and symlinks to the real tools with that checksum tool as the only
+// one. It runs before any parallel subtest starts, on purpose: a file this
+// process is still writing can be held open by another goroutine's fork, and
+// executing it then fails with "text file busy" (golang/go#22315).
+func newBins(t *testing.T) map[string]string {
+	t.Helper()
+
+	bins := map[string]string{}
+
+	for _, sha := range []string{_sha256sum, _shasum} {
+		shaPath, err := exec.LookPath(sha)
+		if err != nil {
+			continue
+		}
+
+		bin := t.TempDir()
+		for name, body := range map[string]string{"curl": _fakeCurl, "uname": _fakeUname, "id": _fakeID} {
+			require.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755))
+		}
+
+		require.NoError(t, os.Symlink(shaPath, filepath.Join(bin, sha)))
+
+		for _, tool := range _tools {
+			path, err := exec.LookPath(tool)
+			require.NoError(t, err, "these tests run the real %s", tool)
+			require.NoError(t, os.Symlink(path, filepath.Join(bin, tool)))
+		}
+
+		bins[sha] = bin
+	}
+
+	return bins
+}
+
+// newEnv lays out one case: a release of _tag with every archive the scripts
+// may ask for, and the request log, with bin on PATH.
+func newEnv(t *testing.T, bin string) env {
 	t.Helper()
 
 	root := t.TempDir()
 	e := env{
 		root:     root,
-		bin:      filepath.Join(root, "bin"),
+		bin:      bin,
 		releases: filepath.Join(root, "releases"),
 		log:      filepath.Join(root, "requests.log"),
 	}
-	require.NoError(t, os.MkdirAll(e.bin, 0o755))
-
-	for name, body := range map[string]string{"curl": _fakeCurl, "uname": _fakeUname, "id": _fakeID} {
-		require.NoError(t, os.WriteFile(filepath.Join(e.bin, name), []byte(body), 0o755))
-	}
-
-	for _, tool := range append([]string{shaTool}, _tools...) {
-		path, err := exec.LookPath(tool)
-		require.NoError(t, err, "these tests run the real %s", tool)
-		require.NoError(t, os.Symlink(path, filepath.Join(e.bin, tool)))
-	}
-
 	writeRelease(t, filepath.Join(e.releases, _tag))
 
 	return e
@@ -220,7 +254,7 @@ func (e env) mangleChecksums(t *testing.T, how string) {
 	switch how {
 	case "":
 		return
-	case "wrong":
+	case _wrong:
 		data, err := os.ReadFile(path)
 		require.NoError(t, err)
 
@@ -232,7 +266,7 @@ func (e env) mangleChecksums(t *testing.T, how string) {
 		}
 
 		require.NoError(t, os.WriteFile(path, []byte(out.String()), 0o644))
-	case "absent":
+	case _absent:
 		require.NoError(t, os.WriteFile(path, []byte(strings.Repeat("0", 64)+"  other.tar.gz\n"), 0o644))
 	default:
 		t.Fatalf("unknown checksums mangling %q", how)
@@ -260,6 +294,8 @@ func (e env) run(t *testing.T, shell []string, script string, args []string, var
 	cmd.Dir = e.root
 	cmd.Env = append([]string{
 		"PATH=" + e.bin,
+		// The scripts' mktemp -d lands in the case's directory, not /tmp.
+		"TMPDIR=" + e.root,
 		"FAKE_BASE=" + _releases,
 		"FAKE_LATEST=" + _tag,
 		"FAKE_RELEASES=" + e.releases,
@@ -269,6 +305,9 @@ func (e env) run(t *testing.T, shell []string, script string, args []string, var
 	var stdout, stderr bytes.Buffer
 
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	// The timeout kills the shell only; a hung child holding the output pipes
+	// would otherwise keep Run waiting.
+	cmd.WaitDelay = 5 * time.Second
 
 	var res result
 
@@ -317,7 +356,9 @@ func downloads(tag, asset string) []string {
 func assertInstalled(t *testing.T, res result, path, role string, wantExit int) {
 	t.Helper()
 
-	out, err := exec.CommandContext(t.Context(), path).Output()
+	// Through sh, not executed directly: the seeded canga is a file this
+	// process wrote, and executing it could hit "text file busy".
+	out, err := exec.CommandContext(t.Context(), "sh", path).Output()
 	require.NoError(t, err, "the canga at %s must still run", path)
 
 	if wantExit != 0 {
@@ -334,7 +375,14 @@ func assertInstalled(t *testing.T, res result, path, role string, wantExit int) 
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+
+	// install -m 0755 sets the mode exactly. tar keeps the archive's 0755 minus
+	// the umask, so only the owner's execute bit is certain on the host.
+	if role == _host {
+		assert.NotZero(t, info.Mode().Perm()&0o100, "canga must be executable by its owner")
+	} else {
+		assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+	}
 }
 
 // installCase is one run of an install script and what it must leave behind.
@@ -354,12 +402,11 @@ type installCase struct {
 // script is where a case's script lives and where it installs canga.
 type script func(t *testing.T, e env) (path, installed string)
 
+//nolint:paralleltest // serial so newBins writes the fakes while no other test in this package forks
 func TestInstallHost(t *testing.T) {
-	t.Parallel()
-
-	sha := "sha256sum" // macOS has only shasum, which has a case of its own
+	sha := _sha256sum // macOS has only shasum, which has a case of its own
 	if _, err := exec.LookPath(sha); err != nil {
-		sha = "shasum"
+		sha = _shasum
 	}
 
 	host := func(asset string) string { return fmt.Sprintf("canga-host_%s_%s.tar.gz", _version, asset) }
@@ -367,13 +414,15 @@ func TestInstallHost(t *testing.T) {
 	tests := []installCase{
 		{name: "newest release", os: _linux, arch: "x86_64", sha: sha, wantRequests: newest, wantStderr: "is not on your PATH"},
 		{name: "pinned tag on a mac", args: []string{_tag}, os: "Darwin", arch: "arm64", sha: sha, wantRequests: downloads(_tag, host("darwin_arm64"))},
-		{name: "shasum only", args: []string{_tag}, os: _linux, arch: _aarch64, sha: "shasum", wantRequests: downloads(_tag, host("linux_arm64"))},
-		{name: "checksum mismatch", args: []string{_tag}, os: _linux, arch: _amd64, sha: sha, checksums: "wrong", wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
-		{name: "no checksum line", args: []string{_tag}, os: _linux, arch: _amd64, sha: sha, checksums: "absent", wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
-		{name: "release that does not exist", args: []string{"v9.9.9"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v9.9.9/canga-host_9.9.9_linux_amd64.tar.gz")}},
-		{name: "not a release tag", args: []string{"latest"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1},
-		{name: "unsupported architecture", os: _linux, arch: "riscv64", sha: sha, wantExit: 1},
-		{name: "unsupported system", os: "FreeBSD", arch: _amd64, sha: sha, wantExit: 1},
+		{name: "shasum only", args: []string{_tag}, os: _linux, arch: _aarch64, sha: _shasum, wantRequests: downloads(_tag, host("linux_arm64"))},
+		{name: "checksum mismatch", args: []string{_tag}, os: _linux, arch: _amd64, sha: sha, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
+		{name: "no checksum line", args: []string{_tag}, os: _linux, arch: _amd64, sha: sha, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
+		{name: "checksum mismatch, shasum", args: []string{_tag}, os: _linux, arch: _amd64, sha: _shasum, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
+		{name: "no checksum line, shasum", args: []string{_tag}, os: _linux, arch: _amd64, sha: _shasum, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
+		{name: "release that does not exist", args: []string{"v9.9.9"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v9.9.9/canga-host_9.9.9_linux_amd64.tar.gz")}, wantStderr: "404"},
+		{name: "not a release tag", args: []string{"latest"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: `"latest" is not a release tag`},
+		{name: "unsupported architecture", os: _linux, arch: "riscv64", sha: sha, wantExit: 1, wantStderr: "unsupported architecture riscv64"},
+		{name: "unsupported system", os: "FreeBSD", arch: _amd64, sha: sha, wantExit: 1, wantStderr: "unsupported system FreeBSD"},
 	}
 
 	runCases(t, _host, tests, func(t *testing.T, e env) (string, string) {
@@ -387,10 +436,9 @@ func TestInstallHost(t *testing.T) {
 	})
 }
 
+//nolint:paralleltest // serial so newBins writes the fakes while no other test in this package forks
 func TestInstallSandbox(t *testing.T) {
-	t.Parallel()
-
-	if _, err := exec.LookPath("sha256sum"); err != nil {
+	if _, err := exec.LookPath(_sha256sum); err != nil {
 		t.Skip("install_sandbox.sh requires sha256sum, which this machine lacks; CI runs these cases")
 	}
 
@@ -398,15 +446,15 @@ func TestInstallSandbox(t *testing.T) {
 
 	tests := []installCase{
 		{name: "pinned tag as root", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", wantRequests: downloads(_tag, sandbox)},
-		{name: "checksum mismatch", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", checksums: "wrong", wantExit: 1, wantRequests: downloads(_tag, sandbox)},
-		{name: "no tag", os: _linux, arch: _aarch64, uid: "0", wantExit: 2},
-		{name: "two arguments", args: []string{_tag, "extra"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 2},
-		{name: "not a release tag", args: []string{"0.9"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 2},
-		{name: "not root", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "1000", wantExit: 1},
-		{name: "not linux", args: []string{_tag}, os: "Darwin", arch: "arm64", uid: "0", wantExit: 1},
+		{name: "checksum mismatch", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, sandbox)},
+		{name: "no tag", os: _linux, arch: _aarch64, uid: "0", wantExit: 2, wantStderr: "usage: install_sandbox.sh"},
+		{name: "two arguments", args: []string{_tag, "extra"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 2, wantStderr: "usage: install_sandbox.sh"},
+		{name: "not a release tag", args: []string{"0.9"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 2, wantStderr: `"0.9" is not a release tag`},
+		{name: "not root", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "1000", wantExit: 1, wantStderr: "run this as root"},
+		{name: "not linux", args: []string{_tag}, os: "Darwin", arch: "arm64", uid: "0", wantExit: 1, wantStderr: "linux only, not Darwin"},
 	}
 	for i := range tests {
-		tests[i].sha = "sha256sum"
+		tests[i].sha = _sha256sum
 	}
 
 	runCases(t, "sandbox", tests, func(t *testing.T, e env) (string, string) {
@@ -433,16 +481,19 @@ func TestInstallSandbox(t *testing.T) {
 func runCases(t *testing.T, role string, tests []installCase, locate script) {
 	t.Helper()
 
+	bins := newBins(t)
+
 	for shellName, shell := range shells(t) {
 		for _, tt := range tests {
 			t.Run(shellName+"/"+tt.name, func(t *testing.T) {
 				t.Parallel()
 
-				if _, err := exec.LookPath(tt.sha); err != nil {
+				bin, ok := bins[tt.sha]
+				if !ok {
 					t.Skipf("%s is not installed here", tt.sha)
 				}
 
-				e := newEnv(t, tt.sha)
+				e := newEnv(t, bin)
 				e.mangleChecksums(t, tt.checksums)
 				path, installed := locate(t, e)
 				seed(t, installed)
