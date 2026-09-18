@@ -109,6 +109,11 @@ type Store struct {
 	// that window deterministically, so the CAS is asserted rather than hoped
 	// for. Nil everywhere except in order_test.go.
 	hookBeforePublish func()
+
+	// hookAfterOpenRoot runs between OpenRoot and checkRoot, the window the
+	// identity check exists to close. It lets a test swap the directory in
+	// that window and prove open() still refuses it. Nil outside store_test.go.
+	hookAfterOpenRoot func()
 }
 
 // Option adjusts a Store at construction.
@@ -154,6 +159,13 @@ func open(cfg Config, create bool, opts []Option) (*Store, error) {
 		}
 	}
 
+	// Options are applied before the root is opened, so a test hook can reach
+	// the window between OpenRoot and checkRoot.
+	store := &Store{cfg: cfg, newID: newID}
+	for _, opt := range opts {
+		opt(store)
+	}
+
 	root, err := os.OpenRoot(cfg.Dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -161,6 +173,10 @@ func open(cfg Config, create bool, opts []Option) (*Store, error) {
 		}
 
 		return nil, fmt.Errorf("open store: %w", err)
+	}
+
+	if store.hookAfterOpenRoot != nil {
+		store.hookAfterOpenRoot()
 	}
 
 	if err := checkRoot(root, cfg.Dir); err != nil {
@@ -179,10 +195,7 @@ func open(cfg Config, create bool, opts []Option) (*Store, error) {
 		}
 	}
 
-	store := &Store{root: root, cfg: cfg, newID: newID}
-	for _, opt := range opts {
-		opt(store)
-	}
+	store.root = root
 
 	return store, nil
 }

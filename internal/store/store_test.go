@@ -754,29 +754,29 @@ func TestOpen_RefusesASymlinkedDir(t *testing.T) {
 	}
 }
 
-// TestCheckRoot covers the window refuseSymlink cannot: the directory at the
-// path changing after it was checked. It calls checkRoot directly, which is
-// what makes the swap deterministic without a test seam in open.
-func TestCheckRoot(t *testing.T) {
+// TestOpen_RefusesADirReplacedWhileOpening covers the window refuseSymlink
+// cannot: the directory at the path changing between the symlink check and
+// OpenRoot. The hook lands the swap right after OpenRoot, which is the same
+// state as a swap before it, since the root then holds a directory that no
+// longer sits at the path. It goes through Open, so dropping the checkRoot
+// call from open fails here and not only in a test of the helper.
+func TestOpen_RefusesADirReplacedWhileOpening(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name string
 		// swap changes what sits at dir after the root was opened on it.
-		swap func(t *testing.T, dir string)
+		swap func(dir string) error
 		want error
 	}{
 		{
-			name: "unchanged directory",
-			swap: func(*testing.T, string) {},
-		},
-		{
 			name: "directory replaced by another",
-			swap: func(t *testing.T, dir string) {
-				t.Helper()
+			swap: func(dir string) error {
+				if err := os.Rename(dir, dir+".old"); err != nil {
+					return err
+				}
 
-				require.NoError(t, os.Rename(dir, dir+".old"))
-				require.NoError(t, os.Mkdir(dir, dirPerm))
+				return os.Mkdir(dir, dirPerm)
 			},
 			want: errStoreReplaced,
 		},
@@ -785,11 +785,12 @@ func TestCheckRoot(t *testing.T) {
 			// refused either way; the sentinel pins that it is named a link
 			// rather than a replacement.
 			name: "directory replaced by a link to itself",
-			swap: func(t *testing.T, dir string) {
-				t.Helper()
+			swap: func(dir string) error {
+				if err := os.Rename(dir, dir+".old"); err != nil {
+					return err
+				}
 
-				require.NoError(t, os.Rename(dir, dir+".old"))
-				require.NoError(t, os.Symlink(dir+".old", dir))
+				return os.Symlink(dir+".old", dir)
 			},
 			want: ErrSymlinkedStore,
 		},
@@ -800,24 +801,36 @@ func TestCheckRoot(t *testing.T) {
 			t.Parallel()
 
 			dir := filepath.Join(t.TempDir(), "store")
-			require.NoError(t, os.Mkdir(dir, dirPerm))
 
-			root, err := os.OpenRoot(dir)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, root.Close()) })
+			var swapErr error
 
-			tt.swap(t, dir)
+			_, err := Open(Config{Dir: dir}, func(s *Store) {
+				s.hookAfterOpenRoot = func() { swapErr = tt.swap(dir) }
+			})
 
-			err = checkRoot(root, dir)
-			if tt.want == nil {
-				require.NoError(t, err)
-
-				return
-			}
-
+			require.NoError(t, swapErr)
 			require.ErrorIs(t, err, tt.want)
 		})
 	}
+}
+
+// TestOpen_FollowsALinkAboveTheDir pins the other half of the rule: only the
+// store directory itself is refused. A symlinked ~/.local/share is ordinary,
+// and t.TempDir() covers it only by accident on macOS, where /var is a link.
+func TestOpen_FollowsALinkAboveTheDir(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	target := filepath.Join(base, "real")
+	require.NoError(t, os.Mkdir(target, dirPerm))
+	require.NoError(t, os.Symlink(target, filepath.Join(base, "link")))
+
+	reminders, err := Open(Config{Dir: filepath.Join(base, "link", "store")})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reminders.Close()) })
+
+	_, err = os.Stat(filepath.Join(target, "store", itemsDir))
+	assert.NoError(t, err, "the store was not created through the link above it")
 }
 
 // TestRootContainment pins the containment the store relies on instead of
