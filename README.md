@@ -49,11 +49,30 @@ checkout with `make install` instead.
 
 ### Install a release binary
 
-Download, verify against the published checksums, then extract:
+Run the install script. It downloads the newest release for your system,
+verifies it against the release's `checksums.txt`, and puts `canga` in
+`~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_host.sh | sh
+```
+
+To install one release instead of the newest, pass its tag:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_host.sh | sh -s -- v0.5.0
+```
+
+The script stops before extracting anything when the checksum does not match,
+or when `checksums.txt` has no line for the archive. It prints the installed
+version last, and says so when `~/.local/bin` is not on your PATH.
+
+To do the same by hand, download, verify against the published checksums, then
+extract:
 
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
-tag=$(basename "$(curl -fsS -o /dev/null -w '%{url_effective}' "$releases/latest")")
+tag=$(basename "$(curl -fsSL -o /dev/null -w '%{url_effective}' "$releases/latest")")
 asset=canga-host_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64, linux_amd64, linux_arm64
 
 curl -fsSLO "$releases/download/$tag/$asset"
@@ -64,7 +83,9 @@ awk -v a="$asset" '$2 == a' checksums.txt | shasum -a 256 -c - \
 ```
 
 `$releases/latest` redirects to the newest release, so `%{url_effective}` names
-its tag without parsing any JSON.
+its tag without parsing any JSON. `-L` makes curl follow that redirect; without
+it, the effective URL is `$releases/latest` itself and the tag comes out as
+`latest`.
 
 Read the last two lines as one command. `&&` is what makes the checksum a gate:
 without it a pasted block runs every line in turn, and a `FAILED` verification is
@@ -481,7 +502,19 @@ root.
 ### Install it in a sandbox
 
 Releases ship the sandbox build for linux only, because sandboxes are linux
-VMs. Verify the archive against `checksums.txt` before extracting it:
+VMs. In a sandbox's provisioning step, run as root, the install script takes
+the tag to pin and installs a root-owned `canga` in `/usr/local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_sandbox.sh | sh -s -- vX.Y.Z
+```
+
+Root ownership keeps a process without root from replacing the binary. It is
+no boundary against an agent with sudo, which a Docker Sandbox grants its agent
+user. The script verifies the archive against `checksums.txt` the same way the
+host script does.
+
+By hand, verify the archive against `checksums.txt` before extracting it:
 
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
