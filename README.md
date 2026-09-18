@@ -582,9 +582,9 @@ Sandbox builds up to v0.6.0 do not have this command. They answer
 sandbox build`. Move those sandboxes to a release that has it by changing the
 pin.
 
-`--tag` can install one of those builds. `sudo canga upgrade --tag v0.6.0`
-succeeds and leaves the sandbox without `upgrade` until it is recreated or the
-install script runs again.
+`--tag` can install one of those builds: `sudo canga upgrade --tag v0.6.0`
+succeeds. After that, `canga upgrade` in the sandbox refuses until the sandbox
+is recreated or `install_sandbox.sh` runs again.
 
 ## Moving from devctl and agtctl
 

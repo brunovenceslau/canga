@@ -138,6 +138,7 @@ func TestSandbox_Upgrade(t *testing.T) {
 	assert.Contains(t, out, "release's sandbox build", "the sandbox must upgrade into the sandbox build")
 	assert.Contains(t, out, "sudo canga upgrade")
 	assert.Contains(t, out, "recreated from the kit's pin")
+	assert.Contains(t, out, "install_sandbox.sh runs again", "the way back from a --tag downgrade")
 
 	// A test binary reports "dev", which is refused before any request: that
 	// the refusal is the upgrade's own, and not errHostOnly, is the point.

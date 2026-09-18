@@ -84,9 +84,9 @@ func newUpgradeCmd() *cobra.Command {
 		"owned by root, so run `sudo canga upgrade`. The kit pins the release a\n" +
 		"sandbox is provisioned with; an upgrade replaces it in this sandbox\n" +
 		"only, until the sandbox is recreated from the kit's pin.\n\n" +
-		"--tag can name a release whose sandbox build has no upgrade (v0.6.0\n" +
-		"and earlier). Installing one leaves this sandbox without upgrade until\n" +
-		"it is recreated."
+		"--tag can install a release whose sandbox build has no upgrade command\n" +
+		"(v0.6.0 and earlier). After that, `canga upgrade` in this sandbox refuses\n" +
+		"until the sandbox is recreated or install_sandbox.sh runs again."
 
 	return cmd
 }
