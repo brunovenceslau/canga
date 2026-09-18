@@ -101,8 +101,14 @@ func Resolve(url string) (Target, error) {
 			ErrNotCloned, err)
 	}
 
+	// The hint lists the three ways this happens, most likely first: the
+	// environments' checkout predates the repository's environment (or its
+	// move to the derived path), the environment was never created, or the
+	// root points somewhere else.
 	if err := requireDir(target.EnvDir); err != nil {
-		return Target{}, fmt.Errorf("%w: %w", ErrNoEnv, err)
+		return Target{}, fmt.Errorf("%w: %w (update the checkout that holds the "+
+			"environments, create the directory, or point %s at the root that holds "+
+			"the <host>/<owner>/<repo> directories)", ErrNoEnv, err, EnvsDirVar)
 	}
 
 	return target, nil
