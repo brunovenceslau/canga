@@ -49,9 +49,9 @@ builds:
       - -X main.commit={{.Commit}}
 
 # One archive per role. Both hold a file named canga, so the role in the
-# archive name is the only thing that tells them apart: `canga upgrade`
-# selects the canga-host_ archive by that prefix, and the sandbox kit pins a
-# canga-sandbox_ one. The templates below are part of that contract.
+# archive name is the only thing that tells them apart: `canga upgrade` in
+# each build selects that build's archive by its prefix, and the sandbox kit
+# pins a canga-sandbox_ one. The templates below are part of that contract.
 archives:
   - id: host
     ids: [host]
