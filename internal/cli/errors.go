@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package cli holds what canga's two builds share: the exit code contract, the
-// store a command resolves for a repository, and the reminders subcommands
-// themselves.
+// store a command resolves for a repository, and the reminders and upgrade
+// subcommands themselves.
 //
 // It exists so the host and sandbox builds cannot drift. They run on opposite
 // sides of the sandbox boundary against ONE store; if each derived the store

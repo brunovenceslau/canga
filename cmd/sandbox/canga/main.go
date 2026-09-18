@@ -4,11 +4,11 @@
 // Command canga, in its sandbox build, is what an agent inside a sandbox runs.
 //
 // It is the same binary name as the host build and a different program: this
-// package imports only the reminders commands, so what an agent can do is
-// decided by what was compiled in. It cannot clone, sync, install hooks or
-// replace a binary, and it can read and add reminders but not remove or
-// reorder them. Choosing the role at runtime instead would hand those commands
-// to anyone who could set a variable.
+// package imports only the reminders and upgrade commands, so what an agent
+// can do is decided by what was compiled in. It cannot clone, sync or install
+// hooks, it can read and add reminders but not remove or reorder them, and its
+// upgrade installs only the sandbox build. Choosing the role at runtime
+// instead would hand the host's commands to anyone who could set a variable.
 package main
 
 import (

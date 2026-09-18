@@ -12,8 +12,9 @@ import (
 )
 
 // role names this build in `canga --version`, so a report says which of the
-// two builds it came from. The release stays the FIRST field of that output:
-// upgrade runs a downloaded binary with --version and compares that field.
+// two builds it came from. The release stays the FIRST field of that output and
+// the role the second: upgrade runs a downloaded binary with --version and
+// compares both.
 const role = "host"
 
 func newRootCmd() *cobra.Command {
@@ -46,7 +47,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(newGitCmd(a), cli.NewRemindersCmd(a,
 		cli.RemindersAdd, cli.RemindersList, cli.RemindersRemove, cli.RemindersPath, cli.RemindersReorder,
-	), newUpgradeCmd())
+	), cli.NewUpgradeCmd(role, version))
 
 	return root
 }

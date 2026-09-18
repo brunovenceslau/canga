@@ -12,11 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeBinary is a program that reports version the way `canga --version`
-// does. A shell script is enough: what the sanity check exercises is that the
-// staged file RUNS and answers for itself, not that it is an ELF.
+// fakeBuild is a program that reports version and role the way
+// `canga --version` does. A shell script is enough: what the sanity check
+// exercises is that the staged file RUNS and answers for itself, not that it
+// is an ELF.
+func fakeBuild(version, role string) []byte {
+	return []byte("#!/bin/sh\necho \"" + version + " (" + role + ", abc1234, go1.27.0)\"\n")
+}
+
+// fakeBinary is fakeBuild for the host build, which most tests run as.
 func fakeBinary(version string) []byte {
-	return []byte("#!/bin/sh\necho \"" + version + " (abc1234, go1.27.0)\"\n")
+	return fakeBuild(version, RoleHost)
 }
 
 // installedBinary lays down a file standing in for the canga being replaced,
@@ -69,7 +75,7 @@ func TestReplace(t *testing.T) {
 		dir := t.TempDir()
 		path := installedBinary(t, dir, installedVersion)
 
-		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion))
+		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion, RoleHost))
 
 		assert.Equal(t, string(fakeBinary(newerVersion)), readFile(t, path))
 		assert.Empty(t, stagingLeftovers(t, dir))
@@ -88,7 +94,7 @@ func TestReplace(t *testing.T) {
 		path := installedBinary(t, dir, installedVersion)
 		require.NoError(t, os.Chmod(path, 0o700))
 
-		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion))
+		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion, RoleHost))
 
 		info, err := os.Stat(path)
 		require.NoError(t, err)
@@ -106,7 +112,7 @@ func TestReplace(t *testing.T) {
 		path := installedBinary(t, dir, installedVersion)
 		require.NoError(t, os.Chmod(path, 0o777))
 
-		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion))
+		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion, RoleHost))
 
 		info, err := os.Stat(path)
 		require.NoError(t, err)
@@ -122,7 +128,7 @@ func TestReplace(t *testing.T) {
 		path := installedBinary(t, dir, installedVersion)
 		require.NoError(t, os.Chmod(path, 0o644))
 
-		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion))
+		require.NoError(t, replace(t.Context(), path, fakeBinary(newerVersion), newerVersion, RoleHost))
 
 		info, err := os.Stat(path)
 		require.NoError(t, err)
@@ -137,7 +143,7 @@ func TestReplace(t *testing.T) {
 		dir := t.TempDir()
 		path := installedBinary(t, dir, "v0.0.1")
 
-		require.NoError(t, replace(t.Context(), path, fakeBinary("0.1.0"), installedVersion))
+		require.NoError(t, replace(t.Context(), path, fakeBinary("0.1.0"), installedVersion, RoleHost))
 	})
 
 	t.Run("a binary reporting another version never lands", func(t *testing.T) {
@@ -146,7 +152,7 @@ func TestReplace(t *testing.T) {
 		dir := t.TempDir()
 		path := installedBinary(t, dir, installedVersion)
 
-		err := replace(t.Context(), path, fakeBinary("v9.9.9"), newerVersion)
+		err := replace(t.Context(), path, fakeBinary("v9.9.9"), newerVersion, RoleHost)
 		require.ErrorIs(t, err, ErrWrongBinary)
 
 		assert.Equal(t, string(fakeBinary(installedVersion)), readFile(t, path), "the working binary must survive")
@@ -162,7 +168,7 @@ func TestReplace(t *testing.T) {
 		dir := t.TempDir()
 		path := installedBinary(t, dir, installedVersion)
 
-		err := replace(t.Context(), path, []byte("\x7fELF not really"), newerVersion)
+		err := replace(t.Context(), path, []byte("\x7fELF not really"), newerVersion, RoleHost)
 		require.ErrorIs(t, err, ErrWrongBinary)
 
 		assert.Equal(t, string(fakeBinary(installedVersion)), readFile(t, path))
@@ -182,7 +188,7 @@ func TestReplace(t *testing.T) {
 		require.NoError(t, os.Chmod(dir, 0o500))
 		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
-		err := replace(t.Context(), path, fakeBinary(newerVersion), newerVersion)
+		err := replace(t.Context(), path, fakeBinary(newerVersion), newerVersion, RoleHost)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "stage a new binary beside",
 			"the refusal has to name the staging step, which is where the permission is missing")
@@ -198,7 +204,20 @@ func TestVerifyRuns(t *testing.T) {
 		t.Parallel()
 
 		path := installedBinary(t, t.TempDir(), newerVersion)
-		require.NoError(t, verifyRuns(t.Context(), path, newerVersion))
+		require.NoError(t, verifyRuns(t.Context(), path, newerVersion, RoleHost))
+	})
+
+	// The check that keeps the host build out of a sandbox even if a release
+	// misnamed an archive, and the sandbox build off a host.
+	t.Run("the other build of the expected version", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "canga")
+		require.NoError(t, os.WriteFile(path, fakeBuild(newerVersion, RoleHost), 0o755))
+
+		err := verifyRuns(t.Context(), path, newerVersion, RoleSandbox)
+		require.ErrorIs(t, err, ErrWrongBinary)
+		assert.ErrorContains(t, err, "(host)")
 	})
 
 	t.Run("a file that is not executable", func(t *testing.T) {
@@ -207,8 +226,37 @@ func TestVerifyRuns(t *testing.T) {
 		path := filepath.Join(dir, "not-executable")
 		require.NoError(t, os.WriteFile(path, fakeBinary(newerVersion), 0o644))
 
-		require.ErrorIs(t, verifyRuns(t.Context(), path, newerVersion), ErrWrongBinary)
+		require.ErrorIs(t, verifyRuns(t.Context(), path, newerVersion, RoleHost), ErrWrongBinary)
 	})
+}
+
+func TestParseVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		give        string
+		wantVersion string
+		wantRole    string
+	}{
+		{name: "host build", give: newerVersion + " (host, 7f80975, go1.27.0)\n", wantVersion: newerVersion, wantRole: RoleHost},
+		{name: "sandbox build", give: newerVersion + " (sandbox, 7f80975, go1.27.0)", wantVersion: newerVersion, wantRole: RoleSandbox},
+		// devctl and agtctl printed no role, so their commit lands where the
+		// role would be. That is no build's name, so the comparison fails.
+		{name: "no role", give: installedVersion + " (7f80975, go1.26.0)", wantVersion: installedVersion, wantRole: "7f80975"},
+		{name: "version only", give: newerVersion, wantVersion: newerVersion},
+		{name: "nothing", give: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			version, role := parseVersion(tt.give)
+			assert.Equal(t, tt.wantVersion, version)
+			assert.Equal(t, tt.wantRole, role)
+		})
+	}
 }
 
 // readFile is the assertion helper for "what is on disk now".

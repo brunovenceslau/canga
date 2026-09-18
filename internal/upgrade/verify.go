@@ -48,14 +48,17 @@ var (
 	ErrNoBinary = errors.New("no canga in the release archive")
 )
 
-// assetPrefix is what an archive of the HOST build is named by, which is the
-// only build that upgrades itself.
+// assetPrefix is what an archive of role's build is named by: canga-host_ or
+// canga-sandbox_. Each build upgrades itself from its own archives only.
 //
-// The platform suffix alone does not name one file: a release carries the
-// sandbox build too, and "_linux_arm64.tar.gz" ends both canga-host_ and
-// canga-sandbox_ archives. Both builds are called canga, so the binary's name
-// cannot tell them apart either; the role in the archive name does.
-const assetPrefix = binaryName + "-host_"
+// The platform suffix alone does not name one file: "_linux_arm64.tar.gz" ends
+// both canga-host_ and canga-sandbox_ archives. Both builds are called canga,
+// so the binary's name cannot tell them apart either; the role in the archive
+// name does. A sandbox that matched on the suffix could install the HOST
+// build, and with it the commands the sandbox build leaves out.
+func assetPrefix(role string) string {
+	return binaryName + "-" + role + "_"
+}
 
 // assetSuffix is what an archive for this platform is named by.
 //
@@ -68,16 +71,16 @@ func assetSuffix() string {
 	return "_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
 }
 
-// pickAssets finds canga's archive for this platform and the checksums file
+// pickAssets finds role's archive for this platform and the checksums file
 // beside it.
-func pickAssets(rel release) (archive, checksums asset, err error) {
-	suffix := assetSuffix()
+func pickAssets(rel release, role string) (archive, checksums asset, err error) {
+	prefix, suffix := assetPrefix(role), assetSuffix()
 
 	var matches []asset
 
 	for _, candidate := range rel.Assets {
 		switch {
-		case strings.HasPrefix(candidate.Name, assetPrefix) && strings.HasSuffix(candidate.Name, suffix):
+		case strings.HasPrefix(candidate.Name, prefix) && strings.HasSuffix(candidate.Name, suffix):
 			matches = append(matches, candidate)
 		case candidate.Name == checksumsName:
 			checksums = candidate
@@ -86,7 +89,7 @@ func pickAssets(rel release) (archive, checksums asset, err error) {
 
 	if len(matches) != 1 {
 		return asset{}, asset{}, fmt.Errorf(
-			"%w: %s has %d assets named %s*%s", ErrNoAsset, rel.Tag, len(matches), assetPrefix, suffix)
+			"%w: %s has %d assets named %s*%s", ErrNoAsset, rel.Tag, len(matches), prefix, suffix)
 	}
 
 	if checksums.Name == "" {

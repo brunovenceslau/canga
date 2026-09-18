@@ -25,23 +25,28 @@ type fixture struct {
 }
 
 // releaseFixture builds the release GoReleaser would publish for tag: one
-// archive for this platform, holding a canga that reports tag, plus the
-// checksums.txt covering it.
+// archive per build for this platform, each holding a canga that reports tag
+// and its own role, plus the checksums.txt covering both. Carrying both is
+// what makes picking the wrong one observable.
 func releaseFixture(t *testing.T, tag string, extra ...tarEntry) fixture {
 	t.Helper()
 
-	entries := append([]tarEntry{{name: licenseName, body: licenseBody}}, extra...)
-	entries = append(entries, tarEntry{name: binaryName, body: string(fakeBinary(tag))})
+	files := map[string][]byte{}
 
-	files := map[string][]byte{archiveName(tag): tarGz(t, entries...)}
+	for _, role := range []string{RoleHost, RoleSandbox} {
+		entries := append([]tarEntry{{name: licenseName, body: licenseBody}}, extra...)
+		entries = append(entries, tarEntry{name: binaryName, body: string(fakeBuild(tag, role))})
+		files[archiveName(role, tag)] = tarGz(t, entries...)
+	}
+
 	files[checksumsName] = checksumsFile(files)
 
 	return fixture{tag: tag, files: files}
 }
 
-// archiveName is what GoReleaser calls the archive for this platform.
-func archiveName(tag string) string {
-	return "canga-host_" + strings.TrimPrefix(tag, "v") + assetSuffix()
+// archiveName is what GoReleaser calls role's archive for this platform.
+func archiveName(role, tag string) string {
+	return "canga-" + role + "_" + strings.TrimPrefix(tag, "v") + assetSuffix()
 }
 
 // fakeGitHub serves the three endpoints canga reads, and nothing else. The
@@ -118,6 +123,7 @@ func runOptions(t *testing.T, current string, releases ...fixture) Options {
 	t.Helper()
 
 	return Options{
+		Role:    RoleHost,
 		Current: current,
 		Token:   "token",
 		baseURL: fakeGitHub(t, releases...),
@@ -140,6 +146,55 @@ func TestRunInstalls(t *testing.T) {
 	assert.Equal(t, opts.path, result.Path)
 	assert.Equal(t, string(fakeBinary(newerVersion)), readFile(t, opts.path))
 	assert.Empty(t, stagingLeftovers(t, filepath.Dir(opts.path)))
+}
+
+// TestRunInstallsItsOwnBuild: from a release carrying both builds, each one
+// installs the build it is. A sandbox that installed the host build would get
+// the commands the sandbox build leaves out.
+func TestRunInstallsItsOwnBuild(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{RoleHost, RoleSandbox} {
+		t.Run(role, func(t *testing.T) {
+			t.Parallel()
+
+			opts := runOptions(t, installedVersion, releaseFixture(t, newerVersion))
+			opts.Role = role
+
+			result, err := Run(t.Context(), opts)
+			require.NoError(t, err)
+
+			assert.True(t, result.Installed)
+			assert.Equal(t, string(fakeBuild(newerVersion, role)), readFile(t, opts.path))
+		})
+	}
+}
+
+// TestRunRefusesAnUnknownRole: a caller that forgot the role is refused
+// before any request, rather than upgraded into a build it did not name.
+func TestRunRefusesAnUnknownRole(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{"", "guest"} {
+		t.Run("role "+role, func(t *testing.T) {
+			t.Parallel()
+
+			opts := runOptions(t, installedVersion, releaseFixture(t, newerVersion))
+			opts.Role = role
+
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("an unknown role must be refused before any request")
+			}))
+			t.Cleanup(server.Close)
+
+			opts.baseURL = server.URL
+
+			result, err := Run(t.Context(), opts)
+			require.ErrorContains(t, err, "unknown canga build role")
+			assert.Empty(t, result.Release)
+			assert.Equal(t, string(fakeBinary(installedVersion)), readFile(t, opts.path))
+		})
+	}
 }
 
 func TestRunIsANoOpWhenNothingIsNewer(t *testing.T) {
@@ -317,7 +372,7 @@ func TestRunDoesNotCapTheArchiveAtTheChecksumsCeiling(t *testing.T) {
 
 	opts := runOptions(t, installedVersion, big)
 
-	archive := big.files[archiveName(newerVersion)]
+	archive := big.files[archiveName(RoleHost, newerVersion)]
 	require.Greater(t, len(archive), maxChecksumsBytes,
 		"the fixture only tests anything if its archive is past the checksums ceiling")
 

@@ -11,7 +11,6 @@ import (
 
 	"github.com/brunovenceslau/canga/internal/cli"
 	"github.com/brunovenceslau/canga/internal/hooks"
-	"github.com/brunovenceslau/canga/internal/upgrade"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,8 +27,6 @@ func TestExitCode(t *testing.T) {
 	}{
 		{name: "success", err: nil, want: cli.ExitOK},
 		{name: "hook conflict", err: fmt.Errorf("x: %w", hooks.ErrConflict), want: cli.ExitUsage},
-		{name: "not a release", err: fmt.Errorf("x: %w", upgrade.ErrNotRelease), want: cli.ExitUsage},
-		{name: "bad tag", err: fmt.Errorf("x: %w", upgrade.ErrBadTag), want: cli.ExitUsage},
 		{name: "shared usage", err: cli.Usage(errors.New("unknown flag")), want: cli.ExitUsage},
 		{name: "shared runtime failure", err: fs.ErrPermission, want: cli.ExitFailure},
 	}
