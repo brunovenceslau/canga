@@ -61,8 +61,9 @@ func TestClone(t *testing.T) {
 		assert.DirExists(t, filepath.Join(target, ".git"))
 	})
 
-	// The resolved path is printed for a caller to use — `cd $(canga clone …)`
-	// — so a relative one, meaningless in any other directory, is resolved here.
+	// The resolved path is printed for a caller to use — `cd $(canga git clone
+	// …)` — so a relative one, meaningless in any other directory, is resolved
+	// here.
 	t.Run("a relative directory is made absolute", func(t *testing.T) {
 		hermeticGit(t)
 
@@ -89,8 +90,8 @@ func TestClone(t *testing.T) {
 		assert.FileExists(t, filepath.Join(target, "occupied"), "and nothing was taken out")
 	})
 
-	// `mkdir ~/src/thing && canga clone … ~/src/thing` is a normal thing to do,
-	// and git accepts it, so this refusal is about CONTENT, not existence.
+	// `mkdir ~/src/thing && canga git clone … ~/src/thing` is a normal thing to
+	// do, and git accepts it, so this refusal is about CONTENT, not existence.
 	t.Run("accepts an existing empty directory", func(t *testing.T) {
 		hermeticGit(t)
 
@@ -282,7 +283,7 @@ func TestTargetDir(t *testing.T) {
 		assert.Equal(t, filepath.Join(home, "src", "github.com", "owner", "repo"), got)
 	})
 
-	// The path is printed for `cd $(canga clone …)` to consume, so a relative
+	// The path is printed for `cd $(canga git clone …)` to consume, so a relative
 	// CANGA_HOST_BASE_DIR must not produce a relative answer.
 	t.Run("absolutizes a relative base", func(t *testing.T) {
 		t.Chdir(t.TempDir())

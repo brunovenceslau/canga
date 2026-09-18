@@ -10,7 +10,7 @@
 # staged content then differs from what they reviewed. This one leaves the fix
 # in the working tree and hands the decision back.
 #
-# Install it with `canga setup hooks`, or by hand:
+# Install it with `canga git setup-hooks`, or by hand:
 #   git config core.hooksPath .canga/hooks
 #
 # Bypass for an emergency with `git commit --no-verify`.

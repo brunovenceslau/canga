@@ -9,15 +9,39 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newSetupCmd(a *cli.App) *cobra.Command {
+func newSetupHooksCmd(a *cli.App) *cobra.Command {
+	var options hooks.Options
+
 	cmd := &cobra.Command{
-		Use:   "setup",
-		Short: "Wire canga into a repository",
-		Args:  cli.UsageArgs(cobra.NoArgs),
-		RunE:  cli.RunHelp,
+		Use:   "setup-hooks",
+		Short: "Install this repository's own git hooks",
+		Long: "setup-hooks installs the git hooks a repository keeps under\n" +
+			".canga/hooks.\n\n" +
+			"By default it points git's core.hooksPath at that directory, which\n" +
+			"covers every hook at once and is undone with `git config --unset\n" +
+			"core.hooksPath`. git reads hooks from only ONE directory, so anything\n" +
+			"already in .git/hooks stops running; that is reported, and --symlink\n" +
+			"links each hook individually instead, which keeps them.\n\n" +
+			"The hooks are the repository's own tracked files, so installing them\n" +
+			"means its content runs on every commit. Install them in repositories\n" +
+			"whose contents you would run anyway.",
+		Args: cli.UsageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			report, err := hooks.Install(cmd.Context(), a.RepoDir, options)
+
+			// Reported BEFORE the error is returned, and on both paths: a run
+			// that moved a file aside and then failed has already changed the
+			// repository, and the user has to hear about it.
+			reportInstall(cmd, report, err)
+
+			return err
+		},
 	}
 
-	cmd.AddCommand(newSetupHooksCmd(a))
+	cmd.Flags().BoolVar(&options.Symlink, "symlink", false,
+		"link each hook into .git/hooks instead of setting core.hooksPath")
+	cmd.Flags().BoolVar(&options.Force, "force", false,
+		"replace a conflicting setting, moving any file in the way to <name>.bak")
 
 	return cmd
 }
@@ -55,40 +79,4 @@ func reportInstall(cmd *cobra.Command, report hooks.Report, failure error) {
 	for _, name := range report.Installed {
 		cli.Printf(cmd, "%s\n", name)
 	}
-}
-
-func newSetupHooksCmd(a *cli.App) *cobra.Command {
-	var options hooks.Options
-
-	cmd := &cobra.Command{
-		Use:   "hooks",
-		Short: "Install this repository's own git hooks",
-		Long: "hooks installs the git hooks a repository keeps under .canga/hooks.\n\n" +
-			"By default it points git's core.hooksPath at that directory, which\n" +
-			"covers every hook at once and is undone with `git config --unset\n" +
-			"core.hooksPath`. git reads hooks from only ONE directory, so anything\n" +
-			"already in .git/hooks stops running; that is reported, and --symlink\n" +
-			"links each hook individually instead, which keeps them.\n\n" +
-			"The hooks are the repository's own tracked files, so installing them\n" +
-			"means its content runs on every commit. Install them in repositories\n" +
-			"whose contents you would run anyway.",
-		Args: cli.UsageArgs(cobra.NoArgs),
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			report, err := hooks.Install(cmd.Context(), a.RepoDir, options)
-
-			// Reported BEFORE the error is returned, and on both paths: a run
-			// that moved a file aside and then failed has already changed the
-			// repository, and the user has to hear about it.
-			reportInstall(cmd, report, err)
-
-			return err
-		},
-	}
-
-	cmd.Flags().BoolVar(&options.Symlink, "symlink", false,
-		"link each hook into .git/hooks instead of setting core.hooksPath")
-	cmd.Flags().BoolVar(&options.Force, "force", false,
-		"replace a conflicting setting, moving any file in the way to <name>.bak")
-
-	return cmd
 }

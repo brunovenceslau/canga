@@ -297,7 +297,7 @@ func TestOrigin(t *testing.T) {
 	})
 
 	// classify is shared by every git call, so its cancellation message must
-	// not name one of them. A Ctrl-C during `canga setup hooks`, which never
+	// not name one of them. A Ctrl-C during `canga git setup-hooks`, which never
 	// asks for a remote, used to report "reading the origin".
 	t.Run("cancellation does not name an operation that never ran", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())

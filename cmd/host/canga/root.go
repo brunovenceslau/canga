@@ -44,9 +44,9 @@ func newRootCmd() *cobra.Command {
 
 	a.BindRepoFlag(root)
 
-	root.AddCommand(newCloneCmd(), cli.NewRemindersCmd(a,
+	root.AddCommand(newGitCmd(a), cli.NewRemindersCmd(a,
 		cli.RemindersAdd, cli.RemindersList, cli.RemindersRemove, cli.RemindersPath, cli.RemindersReorder,
-	), newSetupCmd(a), newSyncCmd(a), newUpgradeCmd())
+	), newUpgradeCmd())
 
 	return root
 }

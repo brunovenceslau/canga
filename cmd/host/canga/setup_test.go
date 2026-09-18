@@ -29,7 +29,7 @@ func TestSetupHooks(t *testing.T) {
 	require.NoError(t, os.MkdirAll(source, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(source, "pre-commit"), []byte("#!/bin/sh\n"), 0o755))
 
-	out, err := execute(t, "setup", "hooks", "-C", dir)
+	out, err := execute(t, gitCmd, "setup-hooks", "-C", dir)
 	require.NoError(t, err)
 	assert.Contains(t, out, "pre-commit")
 }
@@ -38,7 +38,7 @@ func TestSetupHooks(t *testing.T) {
 func TestSetupHooks_OutsideARepositoryIsAUsageError(t *testing.T) {
 	testrepo.New(t, "git@github.com:acme/widget.git")
 
-	_, err := execute(t, "setup", "hooks", "-C", t.TempDir())
+	_, err := execute(t, gitCmd, "setup-hooks", "-C", t.TempDir())
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitUsage, exitCode(err))
 	assert.Contains(t, err.Error(), "not inside a git repository")
@@ -48,7 +48,7 @@ func TestSetupHooks_OutsideARepositoryIsAUsageError(t *testing.T) {
 func TestSetupHooks_NothingToInstallIsARuntimeFailure(t *testing.T) {
 	dir := testrepo.New(t, "git@github.com:acme/widget.git")
 
-	_, err := execute(t, "setup", "hooks", "-C", dir)
+	_, err := execute(t, gitCmd, "setup-hooks", "-C", dir)
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitFailure, exitCode(err))
 	assert.Contains(t, err.Error(), hooks.SourceDir)
@@ -79,7 +79,7 @@ func TestSetupHooks_PartialInstallIsReported(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(gitHooks, "pre-push"), []byte("other\n"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(gitHooks, "pre-push.bak"), []byte("pristine\n"), 0o755))
 
-	stdout, stderr, err := executeSplit(t, "setup", "hooks", "-C", dir, "--symlink", "--force")
+	stdout, stderr, err := executeSplit(t, gitCmd, "setup-hooks", "-C", dir, "--symlink", "--force")
 	require.Error(t, err)
 
 	assert.Contains(t, stderr, "pre-commit.bak", "the rename already made must be reported")
@@ -103,7 +103,7 @@ func TestSetupHooks_RefusalClaimsNoChange(t *testing.T) {
 	require.NoError(t, os.MkdirAll(gitHooks, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(gitHooks, "pre-commit"), []byte("mine\n"), 0o755))
 
-	stdout, stderr, err := executeSplit(t, "setup", "hooks", "-C", dir, "--symlink")
+	stdout, stderr, err := executeSplit(t, gitCmd, "setup-hooks", "-C", dir, "--symlink")
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitUsage, exitCode(err), "a conflict is fixed by changing the command, not repeating it")
 	assert.NotContains(t, stderr, "stopped part way")
@@ -114,9 +114,8 @@ func TestSetupHooks_RefusalClaimsNoChange(t *testing.T) {
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestSetupHooks_UsageErrors(t *testing.T) {
 	for _, args := range [][]string{
-		{"setup", "bogus"},
-		{"setup", "hooks", "extra"},
-		{"setup", "hooks", "--nope"},
+		{gitCmd, "setup-hooks", "extra"},
+		{gitCmd, "setup-hooks", "--nope"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			_, err := execute(t, args...)

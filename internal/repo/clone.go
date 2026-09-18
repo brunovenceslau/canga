@@ -127,9 +127,10 @@ func TargetDir(url string) (string, error) {
 // BaseDir is the root of the deterministic clone layout, as an absolute path.
 //
 // Absolute even when CANGA_HOST_BASE_DIR is not, because the derived path is
-// PRINTED for a caller to use: `cd $(canga clone <url>)` from another directory
-// needs an answer that does not depend on where canga was standing. It is also
-// what makes the non-empty check and the clone itself agree about one place.
+// PRINTED for a caller to use: `cd $(canga git clone <url>)` from another
+// directory needs an answer that does not depend on where canga was standing.
+// It is also what makes the non-empty check and the clone itself agree about
+// one place.
 func BaseDir() (string, error) {
 	dir := os.Getenv(envBaseDir)
 	if dir == "" {
@@ -168,8 +169,8 @@ func resolveTarget(url, dir string) (string, error) {
 // requireEmpty refuses a target that already holds something.
 //
 // An EXISTING EMPTY directory is accepted, which is not an oversight: `mkdir
-// ~/src/thing && canga clone … ~/src/thing` is a normal thing to do, and git
-// accepts it too.
+// ~/src/thing && canga git clone … ~/src/thing` is a normal thing to do, and
+// git accepts it too.
 func requireEmpty(target string) error {
 	entries, err := os.ReadDir(target)
 

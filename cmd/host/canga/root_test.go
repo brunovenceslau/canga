@@ -20,6 +20,9 @@ import (
 // remindersCmd is the subcommand every test below drives.
 const remindersCmd = "reminders"
 
+// gitCmd is the group that holds clone, sync and setup-hooks, spelled once.
+const gitCmd = "git"
+
 // execute runs one canga invocation against a FRESH command tree — cobra
 // accumulates flag state across Execute calls, so reusing one would leak the
 // previous test's flags into this one.
@@ -71,6 +74,12 @@ func TestRoot_UsageErrors(t *testing.T) {
 		{name: "add with no text", args: []string{remindersCmd, "add"}},
 		{name: "rm with no id", args: []string{remindersCmd, "rm"}},
 		{name: "path with too many ids", args: []string{remindersCmd, "path", "a", "b"}},
+		{name: "unknown git subcommand", args: []string{gitCmd, "bogus"}},
+		// The names these commands had before the git group. They are gone,
+		// not aliased, so each is an unknown command like any other.
+		{name: "clone at the root", args: []string{"clone", "https://github.com/acme/widget"}},
+		{name: "sync at the root", args: []string{"sync"}},
+		{name: "setup hooks at the root", args: []string{"setup", "hooks"}},
 	}
 
 	for _, tt := range tests {
@@ -96,7 +105,7 @@ func TestRoot_OutsideARepository(t *testing.T) {
 
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestRoot_BareCommandsPrintHelp(t *testing.T) {
-	for _, args := range [][]string{{}, {remindersCmd}} {
+	for _, args := range [][]string{{}, {remindersCmd}, {gitCmd}} {
 		out, err := execute(t, args...)
 		require.NoError(t, err)
 		assert.Contains(t, out, "Usage:")
@@ -118,6 +127,23 @@ func TestRoot_RegistersEveryRemindersVerb(t *testing.T) {
 	}
 
 	assert.ElementsMatch(t, []string{"add", "list", "rm", "path", "reorder"}, names)
+}
+
+// TestRoot_GroupsTheGitCommands pins the git group's members. The sandbox
+// build refuses the whole group through one stub, so a git command registered
+// anywhere else would escape that refusal.
+func TestRoot_GroupsTheGitCommands(t *testing.T) {
+	t.Parallel()
+
+	git, _, err := newRootCmd().Find([]string{gitCmd})
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(git.Commands()))
+	for _, sub := range git.Commands() {
+		names = append(names, sub.Name())
+	}
+
+	assert.ElementsMatch(t, []string{"clone", "setup-hooks", "sync"}, names)
 }
 
 // TestCompletionScript asserts the generated completion rather than eyeballing

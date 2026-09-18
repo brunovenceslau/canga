@@ -20,6 +20,9 @@ import (
 // remindersCmd is the subcommand most cases here drive, spelled once.
 const remindersCmd = "reminders"
 
+// gitCmd is the group that holds clone, sync and setup-hooks, spelled once.
+const gitCmd = "git"
+
 // execute runs one sandbox-build invocation against a FRESH command tree, keeping the
 // two streams apart so a test can prove records land on stdout alone.
 func execute(t *testing.T, args ...string) (stdout, stderr string, err error) {
@@ -89,10 +92,11 @@ func TestSandbox_ExposesOnlyListAndAdd(t *testing.T) {
 		{remindersCmd, "rm", "-C", dir, "x"},
 		{remindersCmd, "reorder", "-C", dir, "x"},
 		{remindersCmd, "path", "-C", dir},
-		{"clone", "https://github.com/acme/widget"},
-		{"clone", "--no-such-flag"},
-		{"sync"},
-		{"setup", "hooks"},
+		{gitCmd},
+		{gitCmd, "clone", "https://github.com/acme/widget"},
+		{gitCmd, "clone", "--no-such-flag"},
+		{gitCmd, "sync", "-C", dir},
+		{gitCmd, "setup-hooks", "--symlink"},
 		{"upgrade", "--check"},
 		{"completion", "zsh"},
 	}
@@ -110,8 +114,10 @@ func TestSandbox_ExposesOnlyListAndAdd(t *testing.T) {
 		out, _, err := execute(t, args...)
 		require.NoError(t, err)
 
-		for _, name := range []string{"clone", "sync", "setup", "upgrade", "completion", "reorder", "path"} {
-			assert.NotContains(t, out, "  "+name+" ", "help must not list %q", name)
+		for _, name := range []string{gitCmd, "upgrade", "completion", "reorder", "path"} {
+			// Anchored at a line start, where help lists a command: "git"
+			// also appears mid-line, in the description of -C.
+			assert.NotContains(t, out, "\n  "+name+" ", "help must not list %q", name)
 		}
 	}
 }
