@@ -6,9 +6,9 @@ package main
 import (
 	"errors"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/hooks"
-	"github.com/brunovenceslau/devctl/internal/upgrade"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/hooks"
+	"github.com/brunovenceslau/canga/internal/upgrade"
 )
 
 // exitCode maps an error to devctl's exit code: devctl's own sentinels first,

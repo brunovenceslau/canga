@@ -20,7 +20,7 @@ Neither path below needs a GitHub account or a credential.
 ### Build from source
 
 ```sh
-GOBIN="$HOME/.local/bin" go install github.com/brunovenceslau/devctl/cmd/devctl@latest
+GOBIN="$HOME/.local/bin" go install github.com/brunovenceslau/canga/cmd/devctl@latest
 ```
 
 `GOBIN` puts the binary in a directory on your PATH, because the default,
@@ -35,7 +35,7 @@ checkout with `make install` instead.
 Download, verify against the published checksums, then extract:
 
 ```sh
-releases=https://github.com/brunovenceslau/devctl/releases
+releases=https://github.com/brunovenceslau/canga/releases
 tag=$(basename "$(curl -fsS -o /dev/null -w '%{url_effective}' "$releases/latest")")
 asset=devctl_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64, linux_amd64, linux_arm64
 
@@ -465,7 +465,7 @@ Releases ship `agtctl` for linux only, because sandboxes are linux VMs. Verify
 the archive against `checksums.txt` before extracting it:
 
 ```sh
-releases=https://github.com/brunovenceslau/devctl/releases
+releases=https://github.com/brunovenceslau/canga/releases
 tag=vX.Y.Z                                   # the release this sandbox pins
 asset=agtctl_${tag#v}_linux_arm64.tar.gz     # or linux_amd64
 

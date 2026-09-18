@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
+	"github.com/brunovenceslau/canga/internal/cli"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

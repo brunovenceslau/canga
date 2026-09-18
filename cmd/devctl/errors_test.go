@@ -9,9 +9,9 @@ import (
 	"io/fs"
 	"testing"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/hooks"
-	"github.com/brunovenceslau/devctl/internal/upgrade"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/hooks"
+	"github.com/brunovenceslau/canga/internal/upgrade"
 	"github.com/stretchr/testify/assert"
 )
 

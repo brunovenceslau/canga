@@ -125,7 +125,7 @@ func TestClientStatusErrors(t *testing.T) {
 			name:      "no such release",
 			status:    http.StatusNotFound,
 			expected:  ErrNoRelease,
-			mustState: "brunovenceslau/devctl",
+			mustState: "brunovenceslau/canga",
 		},
 		{
 			name:      "something else entirely",

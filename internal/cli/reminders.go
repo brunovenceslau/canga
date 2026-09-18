@@ -7,7 +7,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/brunovenceslau/devctl/internal/store"
+	"github.com/brunovenceslau/canga/internal/store"
 	"github.com/spf13/cobra"
 )
 

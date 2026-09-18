@@ -4,8 +4,8 @@
 package main
 
 import (
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/hooks"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/hooks"
 	"github.com/spf13/cobra"
 )
 

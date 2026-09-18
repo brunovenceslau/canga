@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brunovenceslau/devctl/internal/testrepo"
+	"github.com/brunovenceslau/canga/internal/testrepo"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"

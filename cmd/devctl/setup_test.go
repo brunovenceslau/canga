@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brunovenceslau/devctl/internal/testrepo"
+	"github.com/brunovenceslau/canga/internal/testrepo"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/hooks"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

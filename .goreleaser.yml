@@ -4,7 +4,7 @@
 # GoReleaser — cross-compiled binaries attached to a GitHub release on a v* tag.
 version: 2
 
-project_name: devctl
+project_name: canga
 
 builds:
   - id: devctl

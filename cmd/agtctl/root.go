@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
+	"github.com/brunovenceslau/canga/internal/cli"
 	"github.com/spf13/cobra"
 )
 

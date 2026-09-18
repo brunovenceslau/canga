@@ -16,7 +16,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
+	"github.com/brunovenceslau/canga/internal/cli"
 )
 
 // Stamped in by ldflags at build time; see the Makefile and .goreleaser.yml.

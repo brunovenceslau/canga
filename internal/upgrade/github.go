@@ -25,7 +25,7 @@ import (
 const (
 	apiBase    = "https://api.github.com"
 	apiOwner   = "brunovenceslau"
-	apiRepo    = "devctl"
+	apiRepo    = "canga"
 	apiVersion = "2022-11-28"
 )
 

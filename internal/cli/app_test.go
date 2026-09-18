@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/brunovenceslau/devctl/internal/testrepo"
+	"github.com/brunovenceslau/canga/internal/testrepo"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

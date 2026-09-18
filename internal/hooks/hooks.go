@@ -26,7 +26,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/brunovenceslau/devctl/internal/repo"
+	"github.com/brunovenceslau/canga/internal/repo"
 )
 
 // SourceDir is where a repository keeps the hooks devctl installs, relative to
