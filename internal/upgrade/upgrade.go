@@ -43,8 +43,22 @@ var (
 	ErrBadTag = errors.New("not a release tag")
 )
 
+// The two builds of canga, as a release names them: in its archives
+// (canga-host_..., canga-sandbox_...) and in the second field of
+// `canga --version`. They are the only values Options.Role takes.
+const (
+	RoleHost    = "host"
+	RoleSandbox = "sandbox"
+)
+
 // Options is one upgrade run.
 type Options struct {
+	// Role is the build that is running, RoleHost or RoleSandbox. It picks the
+	// archive, and the replacement must report the same role. It has no
+	// default: a caller that forgot it would otherwise upgrade into whichever
+	// build the default named.
+	Role string
+
 	// Current is the version stamped into the running binary. It is passed in
 	// rather than read from a package variable so that a run is fully
 	// determined by its arguments.
@@ -86,6 +100,10 @@ type Result struct {
 // refused before anything is downloaded, and nothing is written until the
 // download has been verified.
 func Run(ctx context.Context, opts Options) (Result, error) {
+	if opts.Role != RoleHost && opts.Role != RoleSandbox {
+		return Result{}, fmt.Errorf("unknown canga build role %q", opts.Role)
+	}
+
 	wanted, err := wantedTag(opts)
 	if err != nil {
 		return Result{}, err
@@ -117,7 +135,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return result, err
 	}
 
-	if err := replace(ctx, result.Path, binary, found.Tag); err != nil {
+	if err := replace(ctx, result.Path, binary, found.Tag, opts.Role); err != nil {
 		return result, err
 	}
 
@@ -168,10 +186,10 @@ func resolveRelease(ctx context.Context, opts Options, wanted string) (release, 
 	return api.latest(ctx)
 }
 
-// fetchBinary downloads a release's archive, proves it is the one the release
+// fetchBinary downloads the running build's archive from a release, proves it is the one the release
 // names, and returns the canga inside it.
 func fetchBinary(ctx context.Context, opts Options, found release) ([]byte, error) {
-	archiveAsset, checksumsAsset, err := pickAssets(found)
+	archiveAsset, checksumsAsset, err := pickAssets(found, opts.Role)
 	if err != nil {
 		return nil, err
 	}

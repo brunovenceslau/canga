@@ -11,7 +11,7 @@ working day:
 | Build | Runs on | What it does |
 | --- | --- | --- |
 | host | your Mac (darwin and linux builds) | `git` (clone, sync, hook setup), reminders, its own upgrade |
-| sandbox | inside an agent sandbox (linux) | reminders `list` and `add`, nothing else |
+| sandbox | inside an agent sandbox (linux) | reminders `list` and `add`, its own upgrade |
 
 Both builds are named `canga` and share one reminders list. The role is fixed
 when the binary is built: the sandbox build does not contain the host's
@@ -293,7 +293,10 @@ The fetch carries the same transport hardening as `canga git clone`.
 
 ## `canga upgrade`
 
-Replaces the running binary with a published release, in place.
+Replaces the running binary with a published release, in place. Each build
+replaces itself with the same build: the host build installs a `canga-host_`
+archive, the sandbox build a `canga-sandbox_` one. See
+[Upgrade it in a sandbox](#upgrade-it-in-a-sandbox) for what differs there.
 
 ```sh
 canga upgrade                # install the newest release
@@ -320,9 +323,10 @@ release is genuine — the same account publishes the asset and the checksum
 beside it. That is integrity, not authenticity.
 
 The new binary is then written beside the old one, flushed to disk, and **run
-once** to confirm it reports the version it was downloaded as. Only then is it
-renamed over the target. An archive holding something that is not canga, or a
-binary for the wrong platform, fails at that step with the working binary
+once** to confirm it reports the version and the build (`host` or `sandbox`)
+it was downloaded as. Only then is it renamed over the target. An archive
+holding something that is not canga, a binary for the wrong platform, or the
+other build, fails at that step with the working binary
 untouched, instead of after taking its place on your PATH.
 
 Nothing is written outside the directory the binary already lives in, and no
@@ -461,7 +465,7 @@ up the path, such as a symlinked `~/.local/share`, still work.
 ## The sandbox build
 
 The sandbox build is what an agent inside a sandbox runs. It reads and adds to
-the same reminders the host build manages, and does nothing else.
+the same reminders the host build manages, and upgrades itself.
 
 ```sh
 canga reminders list
@@ -474,8 +478,8 @@ than the current directory.
 
 ### What it leaves out
 
-The sandbox build has no `git`, `upgrade` or `completion`, and no `reminders
-rm`, `reorder` or `path`. An agent may surface the list and record an idea, but
+The sandbox build has no `git` or `completion`, and no `reminders rm`,
+`reorder` or `path`. An agent may surface the list and record an idea, but
 the list belongs to the person on the host, so only the host build removes or
 reorders it.
 
@@ -536,6 +540,51 @@ awk -v a="$asset" '$2 == a' checksums.txt | sha256sum -c - \
 Pin the tag rather than following `latest`, so every sandbox built from one
 definition runs the same binary. `canga --version` prints the version, the role
 (`sandbox`), the commit, and the Go version.
+
+### Upgrade it in a sandbox
+
+`canga upgrade` moves a running sandbox to a newer release of the sandbox
+build. The pin still decides the release every sandbox starts with: recreating
+the sandbox installs the pinned release again. To change the release of every
+sandbox, change the pin.
+
+Before you run it:
+
+- The sandbox's egress policy allows `api.github.com`, where canga reads the
+  release, and `release-assets.githubusercontent.com`, where GitHub redirects
+  the download.
+- You can write to the directory that holds the binary. The upgrade stages the
+  new binary there before renaming it over the old one.
+
+Run it with `sudo` when root owns the binary, as it owns the install script's
+`/usr/local/bin/canga`:
+
+```sh
+sudo canga upgrade
+```
+
+A copy in a directory you own, such as `~/.local/bin`, needs no `sudo`:
+
+```sh
+canga upgrade
+```
+
+On success, stdout holds the installed tag and stderr says
+`canga: installed <new> over <old> at <path>`. `canga --version` then reports
+the new release and the role `sandbox`.
+
+`sudo` resets the environment by default, so `GH_TOKEN` does not reach the
+upgrade and canga reads the release anonymously. The repository is public, so
+the upgrade still works, within GitHub's anonymous limit of 60 requests an hour.
+
+Sandbox builds up to v0.6.0 do not have this command. They answer
+`canga upgrade` with `upgrade is available in the host build only, not in the
+sandbox build`. Move those sandboxes to a release that has it by changing the
+pin.
+
+`--tag` can install one of those builds: `sudo canga upgrade --tag v0.6.0`
+succeeds. After that, `canga upgrade` in the sandbox refuses until the sandbox
+is recreated or `install_sandbox.sh` runs again.
 
 ## Moving from devctl and agtctl
 
@@ -683,9 +732,10 @@ the workflow now that the local path exists, is still open.
 
 `make release` calls GoReleaser rather than packaging with `tar` and `shasum`,
 so `.goreleaser.yml` stays the single definition of the artifact format. The
-reason is `canga upgrade`: it finds its asset by the `canga-host_` prefix and the
-`_<os>_<arch>.tar.gz` suffix, and reads `checksums.txt` by exact filename. A second packaging
-implementation that drifted from the first would break upgrading, for whoever
+reason is `canga upgrade`: each build finds its asset by its own prefix
+(`canga-host_` or `canga-sandbox_`) and the `_<os>_<arch>.tar.gz` suffix, and
+reads `checksums.txt` by exact filename. A second packaging implementation that
+drifted from the first would break upgrading, for whoever
 ran it next, rather than releasing, for whoever changed it.
 
 ### Commit hook

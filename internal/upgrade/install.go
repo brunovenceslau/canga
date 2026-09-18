@@ -55,7 +55,7 @@ const (
 // ErrWrongBinary reports a staged file that does not run, or does not report
 // the version it was downloaded as. It is the check that turns a wrong-platform
 // download into a refusal instead of an unusable canga on PATH.
-var ErrWrongBinary = errors.New("the downloaded binary does not report the expected version")
+var ErrWrongBinary = errors.New("the downloaded binary does not report the expected version and build")
 
 // target resolves the file this process is running from.
 //
@@ -102,7 +102,7 @@ func target() (path, invoked string, err error) {
 // a crash leave a directory entry pointing at a half-written executable. On
 // unix the running process keeps its own inode alive, so replacing the file
 // under it is safe.
-func replace(ctx context.Context, path string, binary []byte, wantTag string) (err error) {
+func replace(ctx context.Context, path string, binary []byte, wantTag, wantRole string) (err error) {
 	staged, err := os.CreateTemp(filepath.Dir(path), ".canga-upgrade-*")
 	if err != nil {
 		return fmt.Errorf("stage a new binary beside %s: %w", path, err)
@@ -127,7 +127,7 @@ func replace(ctx context.Context, path string, binary []byte, wantTag string) (e
 		return fmt.Errorf("write %s: %w", name, err)
 	}
 
-	if err = verifyRuns(ctx, name, wantTag); err != nil {
+	if err = verifyRuns(ctx, name, wantTag, wantRole); err != nil {
 		return err
 	}
 
@@ -180,7 +180,7 @@ func writeStaged(staged *os.File, binary []byte, perm fs.FileMode) error {
 }
 
 // verifyRuns executes the staged binary and requires it to report the version
-// that was downloaded.
+// that was downloaded, from the build that is running.
 //
 // It runs only AFTER the checksum has been verified — never before — so this is
 // not a new trust decision, it is a last check that the file is what it claims:
@@ -188,7 +188,11 @@ func writeStaged(staged *os.File, binary []byte, perm fs.FileMode) error {
 // all, fails here instead of after it has taken the place of a working install.
 // The version it prints comes from the new binary itself, so what the command
 // reports afterwards is observed rather than assumed.
-func verifyRuns(ctx context.Context, path, wantTag string) error {
+//
+// The role is checked for the same reason the archive is picked by it: a
+// sandbox build must never be replaced by the host build, whatever a release's
+// archive happens to be called.
+func verifyRuns(ctx context.Context, path, wantTag, wantRole string) error {
 	ctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
 
@@ -197,14 +201,25 @@ func verifyRuns(ctx context.Context, path, wantTag string) error {
 		return fmt.Errorf("%w: %s did not run: %w", ErrWrongBinary, filepath.Base(path), err)
 	}
 
-	// `canga --version` prints "<version> (<role>, <commit>, <goversion>)", so
-	// the first field is the whole of the claim being checked.
-	reported, _, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
-	if !sameTag(reported, wantTag) {
-		return fmt.Errorf("%w: it reports %q, not %s", ErrWrongBinary, reported, wantTag)
+	reported, role := parseVersion(string(out))
+	if !sameTag(reported, wantTag) || role != wantRole {
+		return fmt.Errorf("%w: it reports %q (%s), not %s (%s)", ErrWrongBinary, reported, role, wantTag, wantRole)
 	}
 
 	return nil
+}
+
+// parseVersion reads the two fields verifyRuns checks out of `canga --version`,
+// which prints "<version> (<role>, <commit>, <goversion>)". Output of another
+// shape yields a role that names no build, so the comparison fails.
+func parseVersion(out string) (version, role string) {
+	version, rest, _ := strings.Cut(strings.TrimSpace(out), " ")
+
+	if details, ok := strings.CutPrefix(rest, "("); ok {
+		role, _, _ = strings.Cut(details, ",")
+	}
+
+	return version, role
 }
 
 // runVersion executes path with --version, retrying only ETXTBSY.

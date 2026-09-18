@@ -1,37 +1,46 @@
 // SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-package main
+package cli
 
 import (
-	"github.com/brunovenceslau/canga/internal/cli"
+	"errors"
+
 	"github.com/brunovenceslau/canga/internal/upgrade"
 	"github.com/spf13/cobra"
 )
 
-func newUpgradeCmd() *cobra.Command {
-	var options upgrade.Options
+// NewUpgradeCmd is `canga upgrade` for the build named by role, which replaces
+// itself with the same build of a newer release. version is what the running
+// binary was stamped with.
+//
+// It lives here rather than in either main package because both builds carry
+// it, and the two must not drift in how they choose and verify a release.
+func NewUpgradeCmd(role, version string) *cobra.Command {
+	options := upgrade.Options{Role: role, Current: version}
 
 	cmd := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Replace this binary with a published release",
+		// The role is spelled out, not described: it is the one thing that
+		// differs between the builds, and the help is where a test can see
+		// which role a build actually passed in.
 		Long: "upgrade downloads the newest canga release and replaces the running\n" +
-			"binary with it, in place.\n\n" +
+			"binary with that release's " + role + " build, in place.\n\n" +
 			"This is NOT dotfiles-upgrade. That one fetches git and updates a\n" +
 			"checkout; this one swaps an executable file for a release artifact.\n\n" +
 			"The archive is checked against the SHA-256 the release publishes in\n" +
 			"checksums.txt. That proves the download is the file the release names\n" +
 			"— not that the release is genuine, since the same account publishes\n" +
 			"both. The new binary is written beside the old one, run once to\n" +
-			"confirm it reports the version it was downloaded as, and only then\n" +
-			"renamed over it, so an interrupted upgrade leaves the working binary\n" +
-			"untouched.\n\n" +
+			"confirm it reports the version and build it was downloaded as, and\n" +
+			"only then renamed over it, so an interrupted upgrade leaves the\n" +
+			"working binary untouched.\n\n" +
 			"A GitHub token is optional. GH_TOKEN, GITHUB_TOKEN or whatever `gh\n" +
 			"auth token` answers is used when one is there, which raises GitHub's\n" +
 			"rate limit; without one the release is read anonymously.",
-		Args: cli.UsageArgs(cobra.NoArgs),
+		Args: UsageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			options.Current = version
 			options.Token = upgrade.Token(cmd.Context())
 
 			result, err := upgrade.Run(cmd.Context(), options)
@@ -41,6 +50,13 @@ func newUpgradeCmd() *cobra.Command {
 			// a run that failed during the swap has to name the file it was
 			// working on.
 			reportUpgrade(cmd, options, result, err)
+
+			// Both are answered by naming a release on the command line, so
+			// they are bad invocations: running the same command again cannot
+			// fix them.
+			if errors.Is(err, upgrade.ErrNotRelease) || errors.Is(err, upgrade.ErrBadTag) {
+				return Usage(err)
+			}
 
 			return err
 		},
@@ -69,29 +85,29 @@ func reportUpgrade(cmd *cobra.Command, options upgrade.Options, result upgrade.R
 	// Said whenever the two differ, because the file being replaced is then not
 	// the path the user typed — ~/.local/bin is full of symlinks.
 	if result.Invoked != "" {
-		cli.Fprintf(errOut, "canga: %s resolves to %s\n", result.Invoked, result.Path)
+		Fprintf(errOut, "canga: %s resolves to %s\n", result.Invoked, result.Path)
 	}
 
 	switch {
 	case failure != nil:
 		// The error itself follows, from main. What this adds is how far the run
 		// got, which the error does not carry.
-		cli.Fprintf(errOut, "canga: stopped while installing %s over %s\n", result.Release, result.Path)
+		Fprintf(errOut, "canga: stopped while installing %s over %s\n", result.Release, result.Path)
 
 		return
 	case result.Installed:
-		cli.Fprintf(errOut, "canga: installed %s over %s at %s\n", result.Release, result.Current, result.Path)
+		Fprintf(errOut, "canga: installed %s over %s at %s\n", result.Release, result.Current, result.Path)
 	case options.Check:
-		cli.Fprintf(errOut, "canga: %s\n", checkSummary(result))
+		Fprintf(errOut, "canga: %s\n", checkSummary(result))
 		// On its own line, and on BOTH branches. Saying what would happen
 		// without saying where is half an answer, and the file replaced is
 		// resolved through symlinks, so it is not always the path that was typed.
-		cli.Fprintf(errOut, "canga: it would replace %s\n", result.Path)
+		Fprintf(errOut, "canga: it would replace %s\n", result.Path)
 	default:
-		cli.Fprintf(errOut, "canga: %s is the newest release; nothing to do\n", result.Release)
+		Fprintf(errOut, "canga: %s is the newest release; nothing to do\n", result.Release)
 	}
 
-	cli.Printf(cmd, "%s\n", result.Release)
+	Printf(cmd, "%s\n", result.Release)
 }
 
 // checkSummary is the line --check prints above the path.

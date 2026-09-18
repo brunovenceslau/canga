@@ -95,47 +95,67 @@ func maps(files map[string][]byte) func(func(string) bool) {
 func TestPickAssets(t *testing.T) {
 	t.Parallel()
 
-	archiveName := "canga-host_0.1.0" + assetSuffix()
+	hostName := "canga-host_0.1.0" + assetSuffix()
+	sandboxName := "canga-sandbox_0.1.0" + assetSuffix()
 	otherName := "canga-host_0.1.0_plan9_mips.tar.gz"
 
 	tests := []struct {
 		name      string
+		role      string
 		assets    []asset
 		expected  string
 		expectErr bool
 	}{
 		{
 			name:     "one archive for this platform among several",
-			assets:   []asset{{ID: 1, Name: otherName}, {ID: 2, Name: archiveName}, {ID: 3, Name: checksumsName}},
-			expected: archiveName,
+			role:     RoleHost,
+			assets:   []asset{{ID: 1, Name: otherName}, {ID: 2, Name: hostName}, {ID: 3, Name: checksumsName}},
+			expected: hostName,
 		},
 		{
-			// A release carries both builds, both called canga. The sandbox
-			// build's archive for this very platform must not count as the
-			// host's, or the upgrade refuses a release that does hold exactly
-			// one host archive.
-			name:     "the sandbox build's archive for this platform is ignored",
-			assets:   []asset{{ID: 1, Name: "canga-sandbox_0.1.0" + assetSuffix()}, {ID: 2, Name: archiveName}, {ID: 3, Name: checksumsName}},
-			expected: archiveName,
+			// A release carries both builds, both called canga, and both end
+			// in this platform's suffix. Each role takes its own and only its
+			// own, or the upgrade refuses a release that does hold exactly one
+			// archive for it.
+			name:     "host takes the host archive from a release with both",
+			role:     RoleHost,
+			assets:   []asset{{ID: 1, Name: sandboxName}, {ID: 2, Name: hostName}, {ID: 3, Name: checksumsName}},
+			expected: hostName,
 		},
 		{
-			name:      "only the sandbox build's archive for this platform",
-			assets:    []asset{{ID: 1, Name: "canga-sandbox_0.1.0" + assetSuffix()}, {ID: 2, Name: checksumsName}},
+			name:     "sandbox takes the sandbox archive from a release with both",
+			role:     RoleSandbox,
+			assets:   []asset{{ID: 1, Name: hostName}, {ID: 2, Name: sandboxName}, {ID: 3, Name: checksumsName}},
+			expected: sandboxName,
+		},
+		{
+			name:      "host never falls back to the sandbox archive",
+			role:      RoleHost,
+			assets:    []asset{{ID: 1, Name: sandboxName}, {ID: 2, Name: checksumsName}},
+			expectErr: true,
+		},
+		{
+			name:      "sandbox never falls back to the host archive",
+			role:      RoleSandbox,
+			assets:    []asset{{ID: 1, Name: hostName}, {ID: 2, Name: checksumsName}},
 			expectErr: true,
 		},
 		{
 			name:      "nothing for this platform",
+			role:      RoleHost,
 			assets:    []asset{{ID: 1, Name: otherName}, {ID: 2, Name: checksumsName}},
 			expectErr: true,
 		},
 		{
 			name:      "two archives for this platform",
-			assets:    []asset{{ID: 1, Name: archiveName}, {ID: 2, Name: "canga-host_0.2.0" + assetSuffix()}, {ID: 3, Name: checksumsName}},
+			role:      RoleHost,
+			assets:    []asset{{ID: 1, Name: hostName}, {ID: 2, Name: "canga-host_0.2.0" + assetSuffix()}, {ID: 3, Name: checksumsName}},
 			expectErr: true,
 		},
 		{
 			name:      "no checksums to verify against",
-			assets:    []asset{{ID: 1, Name: archiveName}},
+			role:      RoleHost,
+			assets:    []asset{{ID: 1, Name: hostName}},
 			expectErr: true,
 		},
 	}
@@ -144,7 +164,7 @@ func TestPickAssets(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			archive, checksums, err := pickAssets(release{Tag: installedVersion, Assets: tt.assets})
+			archive, checksums, err := pickAssets(release{Tag: installedVersion, Assets: tt.assets}, tt.role)
 			if tt.expectErr {
 				require.ErrorIs(t, err, ErrNoAsset)
 

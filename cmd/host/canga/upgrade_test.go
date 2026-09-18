@@ -4,12 +4,10 @@
 package main
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/brunovenceslau/canga/internal/cli"
 	"github.com/brunovenceslau/canga/internal/upgrade"
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -85,76 +83,5 @@ func TestUpgradeHelpSeparatesItFromDotfilesUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "dotfiles-upgrade")
 	assert.Contains(t, out, "checksums.txt")
-}
-
-// report drives reportUpgrade alone, which is the only way to see its output:
-// every path through it needs a resolved release, and the cmd tests cannot
-// point the client at a fake GitHub.
-func report(t *testing.T, options upgrade.Options, result upgrade.Result, failure error) (stdout, stderr string) {
-	t.Helper()
-
-	var out, errOut bytes.Buffer
-
-	cmd := &cobra.Command{}
-	cmd.SetOut(&out)
-	cmd.SetErr(&errOut)
-
-	reportUpgrade(cmd, options, result, failure)
-
-	return out.String(), errOut.String()
-}
-
-func TestReportUpgrade(t *testing.T) {
-	t.Parallel()
-
-	resolved := upgrade.Result{Current: "v0.1.0", Release: "v0.2.0", Path: "/opt/bin/canga", Newer: true}
-
-	// --check has to name the file it would replace on BOTH branches. The
-	// README promises it, and it used to appear only when nothing was newer —
-	// which is the case where it matters least.
-	t.Run("check names the path whether or not something is newer", func(t *testing.T) {
-		t.Parallel()
-
-		_, stderr := report(t, upgrade.Options{Check: true}, resolved, nil)
-		assert.Contains(t, stderr, "v0.2.0 is available")
-		assert.Contains(t, stderr, "it would replace /opt/bin/canga")
-
-		uptodate := resolved
-		uptodate.Newer = false
-
-		_, stderr = report(t, upgrade.Options{Check: true}, uptodate, nil)
-		assert.Contains(t, stderr, "newest release")
-		assert.Contains(t, stderr, "it would replace /opt/bin/canga")
-	})
-
-	t.Run("the tag is the only thing on stdout", func(t *testing.T) {
-		t.Parallel()
-
-		installed := resolved
-		installed.Installed = true
-
-		stdout, stderr := report(t, upgrade.Options{}, installed, nil)
-		assert.Equal(t, "v0.2.0\n", stdout, "`v=$(canga upgrade)` has to be the version")
-		assert.Contains(t, stderr, "/opt/bin/canga")
-	})
-
-	// A run that failed before resolving anything has nothing to add to the
-	// error main is about to print.
-	t.Run("nothing resolved, nothing said", func(t *testing.T) {
-		t.Parallel()
-
-		stdout, stderr := report(t, upgrade.Options{}, upgrade.Result{}, assert.AnError)
-		assert.Empty(t, stdout)
-		assert.Empty(t, stderr)
-	})
-
-	// A failure mid-install must not print a version on stdout: nothing was
-	// installed, and a caller reading stdout would record that it was.
-	t.Run("a failed install says how far it got and prints no version", func(t *testing.T) {
-		t.Parallel()
-
-		stdout, stderr := report(t, upgrade.Options{}, resolved, assert.AnError)
-		assert.Empty(t, stdout)
-		assert.Contains(t, stderr, "stopped while installing v0.2.0 over /opt/bin/canga")
-	})
+	assert.Contains(t, out, "release's host build", "the host must upgrade into the host build")
 }

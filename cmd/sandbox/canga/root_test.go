@@ -13,6 +13,7 @@ import (
 	"github.com/brunovenceslau/canga/internal/testrepo"
 
 	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/upgrade"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,12 +81,12 @@ func TestSandbox_SharesTheHostStore(t *testing.T) {
 	assert.Len(t, entries, 1)
 }
 
-// TestSandbox_ExposesOnlyListAndAdd pins the surface. Every host-only command
+// TestSandbox_RefusesHostOnlyCommands pins the surface. Every host-only command
 // refuses with exit 2 and says where it lives, whatever flags it is given, and
 // none of them shows up in help.
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
-func TestSandbox_ExposesOnlyListAndAdd(t *testing.T) {
+func TestSandbox_RefusesHostOnlyCommands(t *testing.T) {
 	dir := testrepo.New(t, "https://github.com/acme/widget.git")
 
 	tests := [][]string{
@@ -97,7 +98,6 @@ func TestSandbox_ExposesOnlyListAndAdd(t *testing.T) {
 		{gitCmd, "clone", "--no-such-flag"},
 		{gitCmd, "sync", "-C", dir},
 		{gitCmd, "setup-hooks", "--symlink"},
-		{"upgrade", "--check"},
 		{"completion", "zsh"},
 	}
 
@@ -114,12 +114,38 @@ func TestSandbox_ExposesOnlyListAndAdd(t *testing.T) {
 		out, _, err := execute(t, args...)
 		require.NoError(t, err)
 
-		for _, name := range []string{gitCmd, "upgrade", "completion", "reorder", "path"} {
+		for _, name := range []string{gitCmd, "completion", "reorder", "path"} {
 			// Anchored at a line start, where help lists a command: "git"
 			// also appears mid-line, in the description of -C.
 			assert.NotContains(t, out, "\n  "+name+" ", "help must not list %q", name)
 		}
 	}
+}
+
+// TestSandbox_Upgrade: the sandbox build carries a real upgrade, listed in
+// help, and its help says what differs in a sandbox: the binary is root's,
+// and the kit's pin wins again when the sandbox is recreated. GH_TOKEN keeps
+// `gh auth token` out of the run.
+func TestSandbox_Upgrade(t *testing.T) {
+	t.Setenv("GH_TOKEN", "token")
+
+	out, _, err := execute(t, "--help")
+	require.NoError(t, err)
+	assert.Contains(t, out, "\n  upgrade ", "help must list upgrade")
+
+	out, _, err = execute(t, "upgrade", "--help")
+	require.NoError(t, err)
+	assert.Contains(t, out, "release's sandbox build", "the sandbox must upgrade into the sandbox build")
+	assert.Contains(t, out, "sudo canga upgrade")
+	assert.Contains(t, out, "recreated from the kit's pin")
+	assert.Contains(t, out, "install_sandbox.sh runs again", "the way back from a --tag downgrade")
+
+	// A test binary reports "dev", which is refused before any request: that
+	// the refusal is the upgrade's own, and not errHostOnly, is the point.
+	_, _, err = execute(t, "upgrade")
+	require.ErrorIs(t, err, upgrade.ErrNotRelease)
+	require.NotErrorIs(t, err, errHostOnly)
+	assert.Equal(t, cli.ExitUsage, cli.ExitCode(err))
 }
 
 // TestSandbox_VersionNamesTheRole: the release comes first, which is what the
