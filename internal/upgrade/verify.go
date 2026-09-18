@@ -22,10 +22,10 @@ const checksumsName = "checksums.txt"
 
 // binaryName is the one entry extracted from an archive. The archive also
 // carries LICENSE and README.md, which are ignored.
-const binaryName = "devctl"
+const binaryName = "canga"
 
 // maxExpandedBytes caps what the whole archive may expand to, counted across
-// EVERY entry rather than only the devctl one. The binaries published so far
+// EVERY entry rather than only the canga one. The binaries published so far
 // are around 6 MiB uncompressed.
 //
 // Counting every entry is the point. Capping only the entry that is kept leaves
@@ -44,18 +44,18 @@ var (
 	// which is refused rather than waved through.
 	ErrChecksum = errors.New("checksum mismatch")
 
-	// ErrNoBinary reports an archive with no devctl in it.
-	ErrNoBinary = errors.New("no devctl in the release archive")
+	// ErrNoBinary reports an archive with no canga in it.
+	ErrNoBinary = errors.New("no canga in the release archive")
 )
 
-// assetPrefix is what an archive of THIS binary is named by.
+// assetPrefix is what an archive of the HOST build is named by, which is the
+// only build that upgrades itself.
 //
-// The platform suffix alone stopped being enough the day a release began to
-// carry a second binary: agtctl ships linux archives beside devctl's, so
-// "_linux_arm64.tar.gz" names two files and the upgrade would refuse both. The
-// prefix is the binary's own name, which is the one part of the name_template
-// that cannot change without renaming the project.
-const assetPrefix = binaryName + "_"
+// The platform suffix alone does not name one file: a release carries the
+// sandbox build too, and "_linux_arm64.tar.gz" ends both canga-host_ and
+// canga-sandbox_ archives. Both builds are called canga, so the binary's name
+// cannot tell them apart either; the role in the archive name does.
+const assetPrefix = binaryName + "-host_"
 
 // assetSuffix is what an archive for this platform is named by.
 //
@@ -68,7 +68,7 @@ func assetSuffix() string {
 	return "_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
 }
 
-// pickAssets finds devctl's archive for this platform and the checksums file
+// pickAssets finds canga's archive for this platform and the checksums file
 // beside it.
 func pickAssets(rel release) (archive, checksums asset, err error) {
 	suffix := assetSuffix()
@@ -124,7 +124,7 @@ func verifyChecksum(archive, checksums []byte, name string) error {
 //
 // The filename is matched for EQUALITY, the same choice the README's `awk`
 // makes and for the same reason: a pattern match would read the dots in
-// "devctl_0.1.0_linux_arm64.tar.gz" as wildcards. A file with no line of its
+// "canga-host_0.1.0_linux_arm64.tar.gz" as wildcards. A file with no line of its
 // own produces an error, never an empty checksum that would then compare equal
 // to nothing.
 func checksumFor(checksums []byte, name string) (string, error) {
@@ -138,11 +138,11 @@ func checksumFor(checksums []byte, name string) (string, error) {
 	return "", fmt.Errorf("%w: %s is absent from %s", ErrChecksum, name, checksumsName)
 }
 
-// extractBinary pulls devctl out of a gzipped tar.
+// extractBinary pulls canga out of a gzipped tar.
 //
 // The archive's own entry names are never joined onto a path — the only thing
 // done with a name is comparing it to a constant — so an entry called
-// "../../.ssh/authorized_keys" is not dangerous here, it is simply not devctl.
+// "../../.ssh/authorized_keys" is not dangerous here, it is simply not canga.
 // Path traversal is impossible by construction rather than by validation, which
 // is the difference between a rule and a guarantee.
 func extractBinary(archive []byte) ([]byte, error) {

@@ -5,7 +5,7 @@
 // against. It is imported only by tests.
 //
 // It exists because the reminders tests live in three packages (internal/cli,
-// cmd/devctl and cmd/agtctl), and a helper in a _test.go file cannot be shared
+// cmd/host/canga and cmd/sandbox/canga), and a helper in a _test.go file cannot be shared
 // across packages. Three copies of the environment it sets would drift, and a
 // copy that forgot DEVCTL_REMINDERS_DIR would read the developer's real store.
 package testrepo

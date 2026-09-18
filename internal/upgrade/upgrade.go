@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Package upgrade replaces the running devctl with a binary from a GitHub
+// Package upgrade replaces the running canga with a binary from a GitHub
 // release.
 //
 // It is NOT the same mechanism as dotfiles-upgrade, which is git-fetch based
@@ -11,7 +11,7 @@
 // Three properties are the whole point of the package.
 //
 // The release source is fixed at compile time. Nothing in the environment can
-// point devctl at another host, because whoever set that variable would be
+// point canga at another host, because whoever set that variable would be
 // choosing the code this binary replaces itself with.
 //
 // Every artifact is checked against the SHA-256 the release publishes in
@@ -37,7 +37,7 @@ var (
 	// release — `go install`, or a build from a tree that has moved past its
 	// last tag. There is no version to compare against, so the run is refused
 	// rather than guessed at; --tag is the way to say which release is meant.
-	ErrNotRelease = errors.New("this devctl was not built from a release")
+	ErrNotRelease = errors.New("this canga was not built from a release")
 
 	// ErrBadTag reports a --tag that is not a version.
 	ErrBadTag = errors.New("not a release tag")
@@ -63,7 +63,7 @@ type Options struct {
 	Check bool
 
 	// baseURL and path are test seams, not settings. An environment override
-	// for either would let whoever set it choose both the code devctl installs
+	// for either would let whoever set it choose both the code canga installs
 	// and where it lands.
 	baseURL string
 	path    string
@@ -148,7 +148,7 @@ func wantedTag(opts Options) (string, error) {
 }
 
 // resolveTarget answers which file would be replaced. It runs before the
-// network does, so a devctl that cannot locate itself says that instead of
+// network does, so a canga that cannot locate itself says that instead of
 // downloading six megabytes first.
 func resolveTarget(opts Options) (path, invoked string, err error) {
 	if opts.path != "" {
@@ -169,7 +169,7 @@ func resolveRelease(ctx context.Context, opts Options, wanted string) (release, 
 }
 
 // fetchBinary downloads a release's archive, proves it is the one the release
-// names, and returns the devctl inside it.
+// names, and returns the canga inside it.
 func fetchBinary(ctx context.Context, opts Options, found release) ([]byte, error) {
 	archiveAsset, checksumsAsset, err := pickAssets(found)
 	if err != nil {

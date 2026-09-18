@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package hooks installs a repository's own git hooks, the ones it keeps under
-// .devctl/hooks, into the repository devctl was pointed at.
+// .canga/hooks, into the repository canga was pointed at.
 //
-// The hooks live in the repository rather than in devctl, because a hook is a
+// The hooks live in the repository rather than in canga, because a hook is a
 // property of the project it guards: this repository's pre-commit runs its
-// Makefile, and another project's would run something else. devctl only wires
+// Makefile, and another project's would run something else. canga only wires
 // them up.
 //
 // That placement has a consequence worth stating plainly: installing these
 // hooks means the repository's own tracked content runs on every commit. In a
-// repository edited by an agent, an edit to .devctl/hooks is an edit to what
+// repository edited by an agent, an edit to .canga/hooks is an edit to what
 // executes on the machine doing the committing. Install them in repositories
 // whose contents you would run anyway.
 package hooks
@@ -29,9 +29,14 @@ import (
 	"github.com/brunovenceslau/canga/internal/repo"
 )
 
-// SourceDir is where a repository keeps the hooks devctl installs, relative to
+// SourceDir is where a repository keeps the hooks canga installs, relative to
 // its top level. A forward-slash path because git's core.hooksPath wants one.
-const SourceDir = ".devctl/hooks"
+const SourceDir = ".canga/hooks"
+
+// legacySourceDir is where those hooks lived before the tool was named canga.
+// A core.hooksPath still pointing there was set by this command, so replacing
+// it is not the conflict --force exists to confirm.
+const legacySourceDir = ".devctl/hooks"
 
 const (
 	hooksDirPerm fs.FileMode = 0o755
@@ -42,7 +47,7 @@ var (
 	// ErrNoHooks reports a repository with nothing to install.
 	ErrNoHooks = errors.New("no hooks to install")
 
-	// ErrConflict reports something already in the way that devctl will not
+	// ErrConflict reports something already in the way that canga will not
 	// replace on its own.
 	ErrConflict = errors.New("refusing to replace what is already there")
 )
@@ -101,7 +106,7 @@ func installHooksPath(ctx context.Context, root string, names []string, opts Opt
 		return Report{}, err
 	}
 
-	if set && current != SourceDir && !opts.Force {
+	if set && current != SourceDir && current != legacySourceDir && !opts.Force {
 		return Report{}, fmt.Errorf(
 			"%w: core.hooksPath is already %q, pass --force to replace it", ErrConflict, current)
 	}
@@ -127,7 +132,7 @@ func installHooksPath(ctx context.Context, root string, names []string, opts Opt
 }
 
 // installLinks puts a symlink to each hook in the git hooks directory, so hooks
-// the repository did not get from devctl keep working.
+// the repository did not get from canga keep working.
 func installLinks(ctx context.Context, root string, names []string, opts Options) (Report, error) {
 	report := Report{Root: root, Mode: "symlink"}
 
@@ -178,11 +183,19 @@ func installLinks(ctx context.Context, root string, names []string, opts Options
 			return report, fmt.Errorf("link %s: %w", name, err)
 		}
 
+		// The link a pre-rename install made for this hook, which is ours to
+		// replace just like the current one.
+		legacy, err := filepath.Rel(hooksDir,
+			filepath.Join(root, filepath.FromSlash(legacySourceDir), name))
+		if err != nil {
+			return report, fmt.Errorf("link %s: %w", name, err)
+		}
+
 		// The accumulated report travels WITH the error from here on. Failing on
 		// the third hook after moving the first one aside, and then returning an
 		// empty report, leaves the user hunting for a file they were never told
 		// was renamed.
-		backup, err := clearTarget(target, relative, opts.Force)
+		backup, err := clearTarget(target, relative, legacy, opts.Force)
 		if err != nil {
 			return report, err
 		}
@@ -256,11 +269,13 @@ func sameDir(a, b string) bool {
 
 // clearTarget makes room for a symlink, and reports the backup it made.
 //
-// Nothing is ever deleted. A file in the way is RENAMED to <name>.bak, and an
-// existing .bak is left alone rather than overwritten: the first backup is the
-// pristine one, and losing it to a second run would be the one unrecoverable
-// mistake this function could make.
-func clearTarget(target, want string, force bool) (string, error) {
+// Nothing the user made is ever deleted. A file in the way is RENAMED to
+// <name>.bak, and an existing .bak is left alone rather than overwritten: the
+// first backup is the pristine one, and losing it to a second run would be the
+// one unrecoverable mistake this function could make. The one thing removed
+// outright is a link this command itself made before the rename, into
+// .devctl/hooks, which carries nothing to back up.
+func clearTarget(target, want, legacy string, force bool) (string, error) {
 	existing, err := os.Lstat(target)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
@@ -271,8 +286,19 @@ func clearTarget(target, want string, force bool) (string, error) {
 	}
 
 	if existing.Mode()&fs.ModeSymlink != 0 {
-		if current, err := os.Readlink(target); err == nil && current == want {
+		current, err := os.Readlink(target)
+		if err == nil && current == want {
 			return "", nil // already ours
+		}
+
+		// Ours from before the rename, pointing into .devctl/hooks: replaced
+		// without --force and without a backup, since this command made it.
+		if err == nil && current == legacy {
+			if err := os.Remove(target); err != nil {
+				return "", fmt.Errorf("replace %s: %w", target, err)
+			}
+
+			return "", nil
 		}
 	}
 

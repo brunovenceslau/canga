@@ -110,8 +110,8 @@ func (a *App) open(
 // DEVCTL_REMINDERS_DIR comes first because $HOME is not the same on both sides
 // of the sandbox boundary (/Users/bvenceslau on the host, /home/agent inside):
 // a sandbox is HANDED the path rather than re-deriving a different one from its
-// own environment. agtctl reads the same variable, not one of its own, because
-// it must land on the same store devctl writes. Otherwise it follows XDG, under
+// own environment. Both builds read the same variable, because they must land
+// on the same store. Otherwise it follows XDG, under
 // the DATA directory rather than a cache or state one — a reminder is the
 // user's own data, and an uninstall must not be allowed to take it.
 func RemindersBaseDir() (string, error) {
@@ -135,7 +135,7 @@ func RemindersBaseDir() (string, error) {
 //
 // The write error is deliberately dropped. The only realistic failure is a
 // closed pipe, which Go's runtime already turns into the conventional SIGPIPE
-// death; reporting it instead would make `devctl reminders list | head` look
+// death; reporting it instead would make `canga reminders list | head` look
 // like a broken command rather than a finished one.
 func Printf(cmd *cobra.Command, format string, args ...any) {
 	Fprintf(cmd.OutOrStdout(), format, args...)

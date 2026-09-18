@@ -54,7 +54,7 @@ func TestStampSigning(t *testing.T) {
 
 	// The key must be the MACHINE's, which is why the fallback reads the global
 	// config rather than the effective one: a repo-local key belonging to
-	// whatever repository devctl was invoked in is the wrong answer.
+	// whatever repository canga was invoked in is the wrong answer.
 	t.Run("falls back to the global config", func(t *testing.T) {
 		hermeticGit(t)
 

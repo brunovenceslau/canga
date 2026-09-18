@@ -60,7 +60,7 @@ func TestToken(t *testing.T) {
 	})
 
 	// The reason the fallback exists: on the mac the token is in the keychain
-	// and never in the environment, so without this `devctl upgrade` would not
+	// and never in the environment, so without this `canga upgrade` would not
 	// work on the machine it is for.
 	t.Run("gh auth token answers when the environment does not", func(t *testing.T) {
 		t.Setenv("GH_TOKEN", "")
@@ -120,7 +120,7 @@ func TestClientStatusErrors(t *testing.T) {
 		},
 		{
 			// The repository is public, so 404 means what it says. The message
-			// names the repository it asked, because a devctl built from a fork
+			// names the repository it asked, because a canga built from a fork
 			// still reads releases from this one.
 			name:      "no such release",
 			status:    http.StatusNotFound,
@@ -182,7 +182,7 @@ func TestClientLatestSendsWhatGitHubExpects(t *testing.T) {
 	assert.Equal(t, "Bearer s3cret", got.Header.Get("Authorization"))
 	assert.Equal(t, "application/vnd.github+json", got.Header.Get("Accept"))
 	assert.Equal(t, apiVersion, got.Header.Get("X-GitHub-Api-Version"))
-	assert.Equal(t, "devctl/v0.1.0", got.Header.Get("User-Agent"))
+	assert.Equal(t, "canga/v0.1.0", got.Header.Get("User-Agent"))
 }
 
 // A token is optional, so one GitHub rejects must not refuse an upgrade that
@@ -288,7 +288,7 @@ func TestClientDownloadDropsTheTokenOnRedirect(t *testing.T) {
 	t.Cleanup(api.Close)
 
 	body, err := newClient("s3cret", api.URL, installedVersion).
-		download(t.Context(), asset{ID: 1, Name: "devctl.tar.gz"}, maxArchiveBytes)
+		download(t.Context(), asset{ID: 1, Name: "canga.tar.gz"}, maxArchiveBytes)
 	require.NoError(t, err)
 	assert.Equal(t, "the archive", string(body))
 	assert.Empty(t, authOnSignedURL, "the token must not travel to the signed URL")
@@ -303,7 +303,7 @@ func TestClientDownloadRefusesMoreThanTheReleaseDeclares(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	_, err := newClient("token", server.URL, installedVersion).
-		download(t.Context(), asset{ID: 1, Name: "devctl.tar.gz", Size: 10}, maxArchiveBytes)
+		download(t.Context(), asset{ID: 1, Name: "canga.tar.gz", Size: 10}, maxArchiveBytes)
 	require.ErrorIs(t, err, ErrTooLarge)
 }
 
@@ -316,7 +316,7 @@ func TestClientDownloadKeepsTheSignatureOutOfTheError(t *testing.T) {
 
 	// Port 1 refuses the connection, so the failure happens against the
 	// redirect target rather than against the API.
-	const signedURL = "http://127.0.0.1:1/devctl.tar.gz?X-Amz-Signature=deadbeefsecret"
+	const signedURL = "http://127.0.0.1:1/canga.tar.gz?X-Amz-Signature=deadbeefsecret"
 
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, signedURL, http.StatusFound)
@@ -324,7 +324,7 @@ func TestClientDownloadKeepsTheSignatureOutOfTheError(t *testing.T) {
 	t.Cleanup(api.Close)
 
 	_, err := newClient("s3cret", api.URL, installedVersion).
-		download(t.Context(), asset{ID: 1, Name: "devctl.tar.gz"}, maxArchiveBytes)
+		download(t.Context(), asset{ID: 1, Name: "canga.tar.gz"}, maxArchiveBytes)
 
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "deadbeefsecret", "a signed URL must not reach stderr")

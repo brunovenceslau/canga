@@ -25,7 +25,7 @@ const envAllowProtocol = "GIT_ALLOW_PROTOCOL"
 //
 // They are passed as command-line `-c` options, and that is the whole point: a
 // -c option overrides even a config file setting `protocol.ext.allow=always`, so
-// `devctl clone ext::…` cannot reach the remote-helper transport — which
+// `canga clone ext::…` cannot reach the remote-helper transport — which
 // executes a shell command — however the host's git config is written. The one
 // environment variable that outranks them is handled by gitEnv. Only the
 // documented schemes (ssh, https, scp-like) are meant to travel. `file` is
@@ -96,7 +96,7 @@ func gitEnv(environ []string) []string {
 // git runs one git command in dir and returns its trimmed stdout.
 //
 // refused is the sentinel to report when git RAN and refused, which is the case
-// that means the caller pointed devctl somewhere wrong. A missing binary or a
+// that means the caller pointed canga somewhere wrong. A missing binary or a
 // cancelled context are classified separately; see classify.
 func git(ctx context.Context, dir string, refused error, args ...string) (string, error) {
 	return gitWith(ctx, dir, nil, refused, args...)
@@ -167,11 +167,11 @@ func gitArgs(dir string, flags, args []string) []string {
 // Collapsing every failure into ErrNoOrigin would answer a missing git binary,
 // or a Ctrl-C, with "no origin remote in <dir>" — which is not just misleading
 // but the wrong exit code, since those are runtime failures rather than the
-// caller having pointed devctl at the wrong directory.
+// caller having pointed canga at the wrong directory.
 func classify(ctx context.Context, dir string, refused, err error) error {
 	// Operation-neutral: classify is shared by every git call, and naming one
 	// of them would report an operation that never ran. A Ctrl-C during
-	// `devctl setup hooks` used to say "reading the origin".
+	// `canga setup hooks` used to say "reading the origin".
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("running git in %s: %w", dir, ctxErr)
 	}
@@ -181,7 +181,7 @@ func classify(ctx context.Context, dir string, refused, err error) error {
 	}
 
 	// git ran and refused: not a repository, no such remote, or a repository it
-	// will not read. All three are fixed by pointing devctl somewhere else or by
+	// will not read. All three are fixed by pointing canga somewhere else or by
 	// changing git's configuration, never by running the same command again.
 	if exit, ran := errors.AsType[*exec.ExitError](err); ran {
 		return fmt.Errorf("%w: %s%s", refused, dir, gitSaid(exit))

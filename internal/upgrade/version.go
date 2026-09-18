@@ -25,7 +25,7 @@ var describedBuild = regexp.MustCompile(`-[0-9]+-g[0-9a-f]{7,}(-dirty)?$`)
 // normalizeTag puts a version into the one spelling the rest of this package
 // compares against.
 //
-// The two builds devctl ships spell the same release differently: GoReleaser's
+// The two builds canga ships spell the same release differently: GoReleaser's
 // {{.Version}} drops the leading "v" ("0.1.0") while the Makefile's `git
 // describe` keeps it ("v0.1.0"). That is a historical fact of the releases
 // already published — .goreleaser.yml now stamps {{.Tag}} — so every

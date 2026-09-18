@@ -9,13 +9,15 @@
 
 SHELL := /bin/bash
 
-# Both binaries come from this module and are built, cross-compiled and
-# released together. devctl is the host tool; agtctl is its sandbox-side
-# counterpart and ships for linux only (see .goreleaser.yml).
-BINS     := devctl agtctl
+# One binary, canga, built in two roles from two main packages: cmd/host/canga
+# (everything) and cmd/sandbox/canga (what an agent may run). Both are built,
+# cross-compiled and released together; the sandbox role ships for linux only
+# (see .goreleaser.yml). Each lands in bin/<role>/canga, because they share a
+# name and would otherwise overwrite each other.
+ROLES    := host sandbox
 # Injected into main.version by ldflags. A release overrides it from the tag;
-# a local build reports the git description so `devctl version` never lies about
-# which tree it came from. `devctl upgrade` compares a release against this
+# a local build reports the git description so `canga --version` never lies about
+# which tree it came from. `canga upgrade` compares a release against this
 # value, and refuses to act on a describe-style one: it is not a release, and
 # under semver it sorts BELOW the tag it carries.
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -39,7 +41,7 @@ RACE_STORE_DIR ?=
 # why the test matrix does not need a second operating system to catch a
 # platform-specific compile error.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
-AGTCTL_PLATFORMS ?= linux/arm64 linux/amd64
+SANDBOX_PLATFORMS ?= linux/arm64 linux/amd64
 
 # Prerequisite order is load-bearing in this file, and `make -j` does not keep
 # it: GNU make only promises left-to-right processing in serial mode. `release`
@@ -55,9 +57,9 @@ AGTCTL_PLATFORMS ?= linux/arm64 linux/amd64
 
 help:
 	@echo "Targets:"
-	@echo "  make build    build bin/devctl and bin/agtctl with version/commit stamped in"
+	@echo "  make build    build bin/host/canga and bin/sandbox/canga with version/commit stamped in"
 	@echo "  make cross    compile every binary for every platform a release ships"
-	@echo "  make install  go install devctl into GOBIN (agtctl belongs in a sandbox, not here)"
+	@echo "  make install  go install the host build into GOBIN (the sandbox build belongs in a sandbox)"
 	@echo "  make fmt      apply the configured formatters (gofumpt + goimports)"
 	@echo "  make fix      apply every automatic fix: go fix, the formatters, --fix linters"
 	@echo "  make pre-commit  the fast subset a commit hook runs"
@@ -71,9 +73,9 @@ help:
 	@echo "  make tools    install the pinned dev tools into GOBIN"
 
 build:
-	@set -e; for bin in $(BINS); do \
-	  echo "go build -o bin/$$bin ./cmd/$$bin"; \
-	  go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$$bin ./cmd/$$bin; \
+	@set -e; for role in $(ROLES); do \
+	  echo "go build -o bin/$$role/canga ./cmd/$$role/canga"; \
+	  go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$$role/canga ./cmd/$$role/canga; \
 	done
 
 # CGO_ENABLED=0 matches what .goreleaser.yml sets, so this compiles the way a
@@ -82,15 +84,15 @@ build:
 cross:
 	@set -e; build() { \
 	  goos=$${2%/*}; goarch=$${2#*/}; \
-	  echo "GOOS=$$goos GOARCH=$$goarch go build ./cmd/$$1"; \
+	  echo "GOOS=$$goos GOARCH=$$goarch go build ./cmd/$$1/canga"; \
 	  CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch \
-	    go build -trimpath -ldflags '$(LDFLAGS)' -o /dev/null ./cmd/$$1; \
+	    go build -trimpath -ldflags '$(LDFLAGS)' -o /dev/null ./cmd/$$1/canga; \
 	}; \
-	for platform in $(PLATFORMS); do build devctl $$platform; done; \
-	for platform in $(AGTCTL_PLATFORMS); do build agtctl $$platform; done
+	for platform in $(PLATFORMS); do build host $$platform; done; \
+	for platform in $(SANDBOX_PLATFORMS); do build sandbox $$platform; done
 
 install:
-	go install -trimpath -ldflags '$(LDFLAGS)' ./cmd/devctl
+	go install -trimpath -ldflags '$(LDFLAGS)' ./cmd/host/canga
 
 fmt:
 	golangci-lint fmt ./...
@@ -253,7 +255,7 @@ release-preflight:
 
 # Dev tools are PINNED here and installed with `go install`, not carried as
 # go.mod `tool` directives: golangci-lint and goreleaser each drag a module graph
-# far larger than devctl's own into go.sum, which every `go mod download` in
+# far larger than this module's own into go.sum, which every `go mod download` in
 # every CI job would then pay for. This file is the single version of truth, and
 # `make tool-*` is what CI runs, so CI and a laptop lint with the same binary.
 GOLANGCI_VERSION    ?= v2.13.2

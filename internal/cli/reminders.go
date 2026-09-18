@@ -13,10 +13,10 @@ import (
 
 // Subcommand builds one `reminders` verb against an App.
 //
-// Each binary passes the verbs it exposes to NewRemindersCmd, so the set is a
-// decision made in one visible place per binary. agtctl leaves out rm and
-// reorder: an agent in a sandbox may read the list and add to it, but only the
-// person on the host removes or reorders their own reminders.
+// Each build passes the verbs it exposes to NewRemindersCmd, so the set is a
+// decision made in one visible place per build. The sandbox build leaves out
+// rm, reorder and path: an agent in a sandbox may read the list and add to it,
+// but only the person on the host removes or reorders their own reminders.
 type Subcommand func(*App) *cobra.Command
 
 // NewRemindersCmd builds the `reminders` command with the given verbs.

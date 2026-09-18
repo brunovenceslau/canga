@@ -21,7 +21,7 @@ func newCloneCmd() *cobra.Command {
 			"directory to override that; a relative one is resolved against the\n" +
 			"current directory.\n\n" +
 			"The resolved path is printed on stdout and nothing else is, so `cd\n" +
-			"$(devctl clone <url>)` works. It refuses a target that already holds\n" +
+			"$(canga clone <url>)` works. It refuses a target that already holds\n" +
 			"anything, and never merges into or overwrites an existing tree.\n\n" +
 			"The clone is hardened at the transport level: the ext and fd remote\n" +
 			"helpers, which run a command, are turned off on the command line, so no\n" +
@@ -74,26 +74,26 @@ func reportSigning(cmd *cobra.Command, result repo.CloneResult) {
 	// reported rather than returned for that reason, and named precisely enough
 	// that one `git config` in that directory finishes the job.
 	if result.StampErr != nil {
-		cli.Fprintf(errOut, "devctl: warning: could not stamp signing config in %s: %v\n",
+		cli.Fprintf(errOut, "canga: warning: could not stamp signing config in %s: %v\n",
 			result.Dir, result.StampErr)
 
 		return
 	}
 
 	if result.Signing.Key != "" {
-		cli.Fprintf(errOut, "devctl: signing on (commit.gpgsign=true)\n")
+		cli.Fprintf(errOut, "canga: signing on (commit.gpgsign=true)\n")
 
 		return
 	}
 
 	if result.Signing.Inherited {
-		cli.Fprintf(errOut, "devctl: signing on (commit.gpgsign=true, inherited from git config "+
+		cli.Fprintf(errOut, "canga: signing on (commit.gpgsign=true, inherited from git config "+
 			"outside the clone)\n")
 
 		return
 	}
 
-	cli.Fprintf(errOut, "devctl: signing OFF — set DEVCTL_SIGNING_KEY or a global "+
+	cli.Fprintf(errOut, "canga: signing OFF — set DEVCTL_SIGNING_KEY or a global "+
 		"user.signingkey to sign here\n")
 }
 

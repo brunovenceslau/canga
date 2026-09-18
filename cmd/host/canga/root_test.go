@@ -20,7 +20,7 @@ import (
 // remindersCmd is the subcommand every test below drives.
 const remindersCmd = "reminders"
 
-// execute runs one devctl invocation against a FRESH command tree — cobra
+// execute runs one canga invocation against a FRESH command tree — cobra
 // accumulates flag state across Execute calls, so reusing one would leak the
 // previous test's flags into this one.
 func execute(t *testing.T, args ...string) (string, error) {
@@ -83,7 +83,7 @@ func TestRoot_UsageErrors(t *testing.T) {
 }
 
 // TestRoot_OutsideARepository: a directory with no origin is the caller
-// pointing devctl somewhere wrong, which is a usage error, not a failure.
+// pointing canga somewhere wrong, which is a usage error, not a failure.
 //
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestRoot_OutsideARepository(t *testing.T) {
@@ -104,7 +104,7 @@ func TestRoot_BareCommandsPrintHelp(t *testing.T) {
 }
 
 // TestRoot_RegistersEveryRemindersVerb: the verbs' behaviour is tested where
-// they live, in internal/cli. What is devctl's own is WHICH of them it exposes,
+// they live, in internal/cli. What is canga's own is WHICH of them it exposes,
 // and on the host that is all five.
 func TestRoot_RegistersEveryRemindersVerb(t *testing.T) {
 	t.Parallel()
@@ -130,8 +130,8 @@ func TestCompletionScript(t *testing.T) {
 		shell  string
 		marker string
 	}{
-		{shell: "zsh", marker: "#compdef devctl"},
-		{shell: "bash", marker: "__devctl"},
+		{shell: "zsh", marker: "#compdef canga"},
+		{shell: "bash", marker: "__canga"},
 	}
 
 	for _, tt := range tests {
@@ -140,7 +140,7 @@ func TestCompletionScript(t *testing.T) {
 			require.NoError(t, err)
 			require.Contains(t, out, tt.marker)
 			require.Contains(t, out, "__complete",
-				"the script must call back into devctl, which is what makes the ids real")
+				"the script must call back into canga, which is what makes the ids real")
 
 			shell, err := exec.LookPath(tt.shell)
 			if err != nil {

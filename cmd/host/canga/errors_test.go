@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestExitCode pins what devctl adds to the shared contract, which
+// TestExitCode pins what canga adds to the shared contract, which
 // internal/cli's own test pins: its own sentinels are usage errors, and
 // everything else is decided by cli.ExitCode.
 func TestExitCode(t *testing.T) {

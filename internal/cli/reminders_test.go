@@ -59,7 +59,7 @@ func records(t *testing.T, out string) [][2]string {
 	return parsed
 }
 
-// TestNewRemindersCmd_RegistersOnlyTheVerbsGiven is what agtctl's narrower
+// TestNewRemindersCmd_RegistersOnlyTheVerbsGiven is what the sandbox build's narrower
 // surface rests on: a verb left out is not reachable, not merely undocumented.
 func TestNewRemindersCmd_RegistersOnlyTheVerbsGiven(t *testing.T) {
 	t.Parallel()

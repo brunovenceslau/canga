@@ -350,7 +350,7 @@ func pristineStore(t *testing.T) string {
 	//nolint:usetesting // t.TempDir takes no parent, and pointing the gates at a
 	// chosen filesystem is this helper's entire purpose. When no filesystem is
 	// chosen, parent IS t.TempDir above.
-	dir, err := os.MkdirTemp(parent, "devctl-gate-")
+	dir, err := os.MkdirTemp(parent, "canga-gate-")
 	require.NoError(t, err)
 
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })

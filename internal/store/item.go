@@ -34,7 +34,7 @@ func (i Item) Summary() string {
 
 // encode renders an item as its file: header lines, a blank line, then the body
 // verbatim. Plain text on purpose — the point of one file per item is that the
-// file stays editable by hand, and `devctl reminders path` exists to hand one
+// file stays editable by hand, and `canga reminders path` exists to hand one
 // to an editor.
 func (i Item) encode() string {
 	var out strings.Builder

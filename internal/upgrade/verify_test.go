@@ -95,8 +95,8 @@ func maps(files map[string][]byte) func(func(string) bool) {
 func TestPickAssets(t *testing.T) {
 	t.Parallel()
 
-	archiveName := "devctl_0.1.0" + assetSuffix()
-	otherName := "devctl_0.1.0_plan9_mips.tar.gz"
+	archiveName := "canga-host_0.1.0" + assetSuffix()
+	otherName := "canga-host_0.1.0_plan9_mips.tar.gz"
 
 	tests := []struct {
 		name      string
@@ -110,16 +110,17 @@ func TestPickAssets(t *testing.T) {
 			expected: archiveName,
 		},
 		{
-			// A release carries more than one binary. Another binary's archive
-			// for this very platform must not count as devctl's, or the upgrade
-			// refuses a release that does hold exactly one devctl archive.
-			name:     "another binary's archive for this platform is ignored",
-			assets:   []asset{{ID: 1, Name: "agtctl_0.1.0" + assetSuffix()}, {ID: 2, Name: archiveName}, {ID: 3, Name: checksumsName}},
+			// A release carries both builds, both called canga. The sandbox
+			// build's archive for this very platform must not count as the
+			// host's, or the upgrade refuses a release that does hold exactly
+			// one host archive.
+			name:     "the sandbox build's archive for this platform is ignored",
+			assets:   []asset{{ID: 1, Name: "canga-sandbox_0.1.0" + assetSuffix()}, {ID: 2, Name: archiveName}, {ID: 3, Name: checksumsName}},
 			expected: archiveName,
 		},
 		{
-			name:      "only another binary's archive for this platform",
-			assets:    []asset{{ID: 1, Name: "agtctl_0.1.0" + assetSuffix()}, {ID: 2, Name: checksumsName}},
+			name:      "only the sandbox build's archive for this platform",
+			assets:    []asset{{ID: 1, Name: "canga-sandbox_0.1.0" + assetSuffix()}, {ID: 2, Name: checksumsName}},
 			expectErr: true,
 		},
 		{
@@ -129,7 +130,7 @@ func TestPickAssets(t *testing.T) {
 		},
 		{
 			name:      "two archives for this platform",
-			assets:    []asset{{ID: 1, Name: archiveName}, {ID: 2, Name: "devctl_0.2.0" + assetSuffix()}, {ID: 3, Name: checksumsName}},
+			assets:    []asset{{ID: 1, Name: archiveName}, {ID: 2, Name: "canga-host_0.2.0" + assetSuffix()}, {ID: 3, Name: checksumsName}},
 			expectErr: true,
 		},
 		{
@@ -168,15 +169,15 @@ func TestChecksumFor(t *testing.T) {
 	t.Parallel()
 
 	checksums := []byte("" +
-		"aaaa  devctl_0.1.0_linux_arm64.tar.gz\n" +
-		"bbbb  devctl_0.1.0_linux_amd64.tar.gz\n" +
+		"aaaa  canga-host_0.1.0_linux_arm64.tar.gz\n" +
+		"bbbb  canga-host_0.1.0_linux_amd64.tar.gz\n" +
 		"\n" +
 		"malformed-line-with-one-field\n")
 
 	t.Run("names its own line", func(t *testing.T) {
 		t.Parallel()
 
-		sum, err := checksumFor(checksums, "devctl_0.1.0_linux_amd64.tar.gz")
+		sum, err := checksumFor(checksums, "canga-host_0.1.0_linux_amd64.tar.gz")
 		require.NoError(t, err)
 		assert.Equal(t, "bbbb", sum)
 	})
@@ -184,13 +185,13 @@ func TestChecksumFor(t *testing.T) {
 	t.Run("a file with no line is refused, not defaulted", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := checksumFor(checksums, "devctl_0.1.0_darwin_arm64.tar.gz")
+		_, err := checksumFor(checksums, "canga-host_0.1.0_darwin_arm64.tar.gz")
 		require.ErrorIs(t, err, ErrChecksum)
 	})
 
 	// The filename is matched for equality, and this is the direction that
 	// proves it. An implementation that searched for the asset name as a
-	// PATTERN would compile "devctl_0.1.0_linux_arm64.tar.gz", whose dots are
+	// PATTERN would compile "canga-host_0.1.0_linux_arm64.tar.gz", whose dots are
 	// wildcards, and that pattern matches the line below — so a pattern-based
 	// lookup hands back cccc for an asset that has no checksum of its own.
 	// Written the other way round, with the mangled name as the query, the test
@@ -198,9 +199,9 @@ func TestChecksumFor(t *testing.T) {
 	t.Run("a line that only a pattern would match", func(t *testing.T) {
 		t.Parallel()
 
-		nearMiss := []byte("cccc  devctl_0X1X0_linux_arm64Xtar.gz\n")
+		nearMiss := []byte("cccc  canga-host_0X1X0_linux_arm64Xtar.gz\n")
 
-		_, err := checksumFor(nearMiss, "devctl_0.1.0_linux_arm64.tar.gz")
+		_, err := checksumFor(nearMiss, "canga-host_0.1.0_linux_arm64.tar.gz")
 		require.ErrorIs(t, err, ErrChecksum)
 	})
 }
@@ -209,7 +210,7 @@ func TestVerifyChecksum(t *testing.T) {
 	t.Parallel()
 
 	archive := []byte("the release archive")
-	name := "devctl_0.1.0" + assetSuffix()
+	name := "canga-host_0.1.0" + assetSuffix()
 	checksums := checksumsFile(map[string][]byte{name: archive})
 
 	t.Run("the published sum", func(t *testing.T) {
@@ -240,13 +241,13 @@ func TestVerifyChecksum(t *testing.T) {
 func TestExtractBinary(t *testing.T) {
 	t.Parallel()
 
-	t.Run("takes devctl and ignores the rest", func(t *testing.T) {
+	t.Run("takes canga and ignores the rest", func(t *testing.T) {
 		t.Parallel()
 
 		archive := tarGz(t,
 			tarEntry{name: licenseName, body: licenseBody},
 			tarEntry{name: binaryName, body: binaryBody},
-			tarEntry{name: "README.md", body: "# devctl"})
+			tarEntry{name: "README.md", body: "# canga"})
 
 		binary, err := extractBinary(archive)
 		require.NoError(t, err)
@@ -262,30 +263,30 @@ func TestExtractBinary(t *testing.T) {
 	})
 
 	// The archive's names are never joined onto a path, so a traversing name is
-	// not dangerous here — it is simply not devctl. This proves the entry is
+	// not dangerous here — it is simply not canga. This proves the entry is
 	// skipped rather than trusted, which is the property the comment claims.
-	t.Run("a traversing name is just not devctl", func(t *testing.T) {
+	t.Run("a traversing name is just not canga", func(t *testing.T) {
 		t.Parallel()
 
 		_, err := extractBinary(tarGz(t, tarEntry{name: "../../.ssh/authorized_keys", body: "ssh-ed25519 AAAA"}))
 		require.ErrorIs(t, err, ErrNoBinary)
 	})
 
-	t.Run("a directory named devctl is not a binary", func(t *testing.T) {
+	t.Run("a directory named canga is not a binary", func(t *testing.T) {
 		t.Parallel()
 
 		_, err := extractBinary(tarGz(t, tarEntry{name: binaryName, typeflag: tar.TypeDir}))
 		require.ErrorIs(t, err, ErrNoBinary)
 	})
 
-	t.Run("an empty devctl is refused", func(t *testing.T) {
+	t.Run("an empty canga is refused", func(t *testing.T) {
 		t.Parallel()
 
 		_, err := extractBinary(tarGz(t, tarEntry{name: binaryName}))
 		require.ErrorIs(t, err, ErrNoBinary)
 	})
 
-	t.Run("an archive without devctl", func(t *testing.T) {
+	t.Run("an archive without canga", func(t *testing.T) {
 		t.Parallel()
 
 		_, err := extractBinary(tarGz(t, tarEntry{name: licenseName, body: licenseBody}))
@@ -317,7 +318,7 @@ func TestExtractBinaryStopsAtTheCap(t *testing.T) {
 
 	maxExpandedBytes = 4096
 
-	t.Run("an oversized devctl", func(t *testing.T) {
+	t.Run("an oversized canga", func(t *testing.T) {
 		_, err := extractBinary(tarGz(t, tarEntry{name: binaryName, body: strings.Repeat("A", 8192)}))
 		require.ErrorIs(t, err, ErrTooLarge)
 	})

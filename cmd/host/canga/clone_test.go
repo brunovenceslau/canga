@@ -60,7 +60,7 @@ func cloneSource(t *testing.T) string {
 	return dir
 }
 
-// The path is printed so that `cd $(devctl clone <url>)` works, which it only
+// The path is printed so that `cd $(canga clone <url>)` works, which it only
 // does if NOTHING else reaches stdout — not git's progress, not the signing
 // line, not a warning.
 func TestCloneCmd_PrintsOnlyThePathOnStdout(t *testing.T) {
