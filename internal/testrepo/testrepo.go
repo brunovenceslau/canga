@@ -7,7 +7,9 @@
 // It exists because the reminders tests live in three packages (internal/cli,
 // cmd/devctl and cmd/agtctl), and a helper in a _test.go file cannot be shared
 // across packages. Three copies of the environment it sets would drift, and a
-// copy that forgot DEVCTL_REMINDERS_DIR would read the developer's real store.
+// copy that forgot one of the two store variables would read the developer's
+// real store for that binary: each is configured under its own name, so
+// setting only DEVCTL_REMINDERS_DIR leaves agtctl pointed at the real one.
 package testrepo
 
 import (
@@ -22,8 +24,8 @@ import (
 // New makes a git repository whose origin is origin, and returns its path.
 //
 // It empties git's system and global config, so nothing the developer or the
-// sandbox configured can reach a test, and points DEVCTL_REMINDERS_DIR at a
-// directory of the test's own.
+// sandbox configured can reach a test, and points both binaries' reminders
+// variables at one directory of the test's own.
 //
 // It calls t.Setenv, so a test using it cannot be parallel. That is deliberate:
 // the alternative is reading the developer's real reminders.
@@ -35,7 +37,12 @@ func New(t *testing.T, origin string) string {
 
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	t.Setenv("GIT_CONFIG_GLOBAL", global)
-	t.Setenv("DEVCTL_REMINDERS_DIR", filepath.Join(t.TempDir(), "reminders"))
+	// Both variables, one directory: each binary is configured under its own
+	// name, and a test that drives agtctl against devctl's store is exactly
+	// what a sandbox does through its environment file.
+	store := filepath.Join(t.TempDir(), "reminders")
+	t.Setenv("DEVCTL_REMINDERS_DIR", store)
+	t.Setenv("AGTCTL_REMINDERS_DIR", store)
 
 	dir := filepath.Join(t.TempDir(), "repo")
 

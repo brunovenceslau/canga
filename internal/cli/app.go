@@ -5,10 +5,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/brunovenceslau/devctl/internal/repo"
 	"github.com/brunovenceslau/devctl/internal/store"
@@ -22,6 +24,14 @@ const ScopeRepo = "repo"
 
 // App is what every subcommand needs in order to find the right store.
 type App struct {
+	// Tool is the binary's own name, lowercase: "devctl" or "agtctl". It is
+	// what RemindersBaseDir names the environment variable and the XDG
+	// directory after, so each binary is configured under its own name. The
+	// two never run in the same place — devctl on the host, agtctl inside a
+	// sandbox — so nothing is shared by default; a sandbox is HANDED the
+	// host's store path through its own variable.
+	Tool string
+
 	// RepoDir is the working tree whose origin identifies the repository. It is
 	// a flag rather than always the process's directory so a caller — a hook, a
 	// script, a test — can name the repository without chdir'ing into it.
@@ -46,17 +56,19 @@ func (a *App) BindRepoFlag(root *cobra.Command) {
 // Config derives the store's identity for the repository the App points at.
 // It touches the filesystem only to ask git for the origin URL.
 func (a *App) Config(ctx context.Context) (store.Config, error) {
+	// Before the git subprocess: a nameless App is a programming error, and
+	// reporting it after I/O would bury it under whatever git said.
+	base, err := RemindersBaseDir(a.Tool)
+	if err != nil {
+		return store.Config{}, err
+	}
+
 	origin, err := repo.Origin(ctx, a.RepoDir)
 	if err != nil {
 		return store.Config{}, err
 	}
 
 	name, err := repo.Path(origin)
-	if err != nil {
-		return store.Config{}, err
-	}
-
-	base, err := RemindersBaseDir()
 	if err != nil {
 		return store.Config{}, err
 	}
@@ -105,22 +117,33 @@ func (a *App) open(
 	return fn(reminders)
 }
 
-// RemindersBaseDir resolves the root every repository's store hangs under.
+// ErrNoTool reports an App built without a tool name. It is a programming
+// error, not a user one: without a name there is no variable to read and no
+// directory to fall back to.
+var ErrNoTool = errors.New("no tool name")
+
+// RemindersBaseDir resolves the root every repository's store hangs under, for
+// the binary named by tool.
 //
-// DEVCTL_REMINDERS_DIR comes first because $HOME is not the same on both sides
+// <TOOL>_REMINDERS_DIR comes first because $HOME is not the same on both sides
 // of the sandbox boundary (/Users/bvenceslau on the host, /home/agent inside):
 // a sandbox is HANDED the path rather than re-deriving a different one from its
-// own environment. agtctl reads the same variable, not one of its own, because
-// it must land on the same store devctl writes. Otherwise it follows XDG, under
-// the DATA directory rather than a cache or state one — a reminder is the
-// user's own data, and an uninstall must not be allowed to take it.
-func RemindersBaseDir() (string, error) {
-	if dir := os.Getenv("DEVCTL_REMINDERS_DIR"); dir != "" {
+// own environment. That variable is how agtctl inside a sandbox is pointed at
+// the host store devctl owns; without it each binary keeps a store of its own,
+// under its own name. Otherwise it follows XDG, under the DATA directory rather
+// than a cache or state one — a reminder is the user's own data, and an
+// uninstall must not be allowed to take it.
+func RemindersBaseDir(tool string) (string, error) {
+	if tool == "" {
+		return "", fmt.Errorf("resolve the reminders directory: %w", ErrNoTool)
+	}
+
+	if dir := os.Getenv(strings.ToUpper(tool) + "_REMINDERS_DIR"); dir != "" {
 		return dir, nil
 	}
 
 	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
-		return filepath.Join(dir, "devctl", "reminders"), nil
+		return filepath.Join(dir, tool, "reminders"), nil
 	}
 
 	home, err := os.UserHomeDir()
@@ -128,7 +151,7 @@ func RemindersBaseDir() (string, error) {
 		return "", fmt.Errorf("resolve the reminders directory: %w", err)
 	}
 
-	return filepath.Join(home, ".local", "share", "devctl", "reminders"), nil
+	return filepath.Join(home, ".local", "share", tool, "reminders"), nil
 }
 
 // Printf writes one record to the command's stdout.

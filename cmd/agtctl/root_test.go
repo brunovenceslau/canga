@@ -54,19 +54,50 @@ func TestAgtctl_AddThenList(t *testing.T) {
 	assert.Empty(t, stderr)
 }
 
-// TestAgtctl_SharesDevctlsStore: agtctl must land on the directory devctl
-// resolves, or the host and the sandbox would each be looking at a list the
-// other never sees. Both go through cli.App.Config, so this pins that agtctl
-// does not grow a derivation of its own.
-//
-//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
-func TestAgtctl_SharesDevctlsStore(t *testing.T) {
+// TestAgtctl_ReadsItsOwnVariable: agtctl is configured under its own name, so
+// the two variables must point it at two different stores. Written with them
+// APART, because testrepo points both at one directory: a test that left them
+// equal would pass even if agtctl read devctl's variable, which is the
+// copy-paste this pins against.
+func TestAgtctl_ReadsItsOwnVariable(t *testing.T) {
 	dir := testrepo.New(t, "git@github.com:Acme/Widget.git")
+
+	devctlStore := filepath.Join(t.TempDir(), "devctl-store")
+	agtctlStore := filepath.Join(t.TempDir(), "agtctl-store")
+	t.Setenv("DEVCTL_REMINDERS_DIR", devctlStore)
+	t.Setenv("AGTCTL_REMINDERS_DIR", agtctlStore)
+
+	_, _, err := execute(t, "reminders", "add", "-C", dir, "mine")
+	require.NoError(t, err)
+
+	cfg, err := (&cli.App{Tool: "agtctl", RepoDir: dir}).Config(t.Context())
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(cfg.Dir, agtctlStore), cfg.Dir)
+
+	entries, err := os.ReadDir(filepath.Join(cfg.Dir, "items"))
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+
+	assert.NoDirExists(t, devctlStore,
+		"agtctl must not write into the store devctl's variable names")
+}
+
+// TestAgtctl_SharesTheHostStoreWhenPointedAtIt: handed the host's store root
+// through its own variable, which is what a sandbox's environment file does,
+// agtctl must land on the directory devctl resolves from that same root.
+// Otherwise the host and the sandbox would each see a list the other never
+// does.
+func TestAgtctl_SharesTheHostStoreWhenPointedAtIt(t *testing.T) {
+	dir := testrepo.New(t, "git@github.com:Acme/Widget.git")
+
+	hostStore := filepath.Join(t.TempDir(), "host-store")
+	t.Setenv("DEVCTL_REMINDERS_DIR", hostStore)
+	t.Setenv("AGTCTL_REMINDERS_DIR", hostStore)
 
 	_, _, err := execute(t, "reminders", "add", "-C", dir, "shared")
 	require.NoError(t, err)
 
-	cfg, err := (&cli.App{RepoDir: dir}).Config(t.Context())
+	cfg, err := (&cli.App{Tool: "devctl", RepoDir: dir}).Config(t.Context())
 	require.NoError(t, err)
 
 	entries, err := os.ReadDir(filepath.Join(cfg.Dir, "items"))

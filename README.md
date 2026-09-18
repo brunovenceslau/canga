@@ -377,7 +377,7 @@ which is what a hook or a script should use rather than changing directory.
 ### Where the reminders live
 
 ```
-${DEVCTL_REMINDERS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/devctl/reminders}/
+${DEVCTL_REMINDERS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/devctl/reminders}/   # agtctl: AGTCTL_REMINDERS_DIR, .../agtctl/reminders
   <host>/<owner>/<repo>/<scope>/
     items/<id>.md      # one file per reminder — the unit of atomicity
     order/<N>          # versioned order documents; the highest N is current
@@ -396,7 +396,9 @@ item's `repo:` header.
 
 `DEVCTL_REMINDERS_DIR` exists because `$HOME` is not the same on both sides of a
 sandbox boundary: a sandbox is handed the path rather than left to derive a
-different one. The store sits under the XDG **data** directory, not a cache or
+different one. Each binary is configured under its own name: the root above is
+devctl's, and `agtctl` reads `AGTCTL_REMINDERS_DIR` and falls back to
+`.../agtctl/reminders`. Everything below the root is the same for both. The store sits under the XDG **data** directory, not a cache or
 state directory, because a reminder is your own data and an uninstall must not
 take it.
 
@@ -453,11 +455,26 @@ fails as an unknown command and exits `2`.
 
 ### Where it finds the store
 
-`agtctl` resolves the store exactly as `devctl` does, from the same
-`DEVCTL_REMINDERS_DIR` variable. It has no variable of its own. For the sandbox
-and the host to share one list, the sandbox needs the host's store directory
-mounted, and `DEVCTL_REMINDERS_DIR` set to the path it is mounted at. See
-[Where the reminders live](#where-the-reminders-live) for the layout under it.
+`agtctl` derives a repository's directory exactly as `devctl` does, but under
+its own name: it reads `AGTCTL_REMINDERS_DIR`, and without it falls back to
+`${XDG_DATA_HOME:-$HOME/.local/share}/agtctl/reminders`. devctl and agtctl
+never run in the same place, so neither inherits the other's store by accident.
+
+For the sandbox and the host to share one list, the sandbox needs the host's
+store directory mounted, and `AGTCTL_REMINDERS_DIR` set to the host's store
+root:
+
+```sh
+AGTCTL_REMINDERS_DIR=/path/to/the/host/devctl/reminders agtctl reminders list
+```
+
+See [Where the reminders live](#where-the-reminders-live) for the layout under
+that root; only the root itself differs between the two binaries.
+
+Before v0.5.0, `agtctl` read `DEVCTL_REMINDERS_DIR`. A sandbox still configured
+that way is not an error and says nothing: `agtctl` falls back to a store of its
+own inside the sandbox, and what an agent records there never reaches the host.
+Rename the variable when you upgrade the pin.
 
 ### Install it in a sandbox
 

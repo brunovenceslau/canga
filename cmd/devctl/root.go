@@ -12,7 +12,7 @@ import (
 )
 
 func newRootCmd() *cobra.Command {
-	a := &cli.App{}
+	a := &cli.App{Tool: "devctl"}
 
 	root := &cobra.Command{
 		Use:   "devctl",

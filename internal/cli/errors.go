@@ -5,9 +5,14 @@
 // code contract, the store a command resolves for a repository, and the
 // reminders subcommands themselves.
 //
-// It exists so the two binaries cannot drift. agtctl runs inside a sandbox and
-// devctl on the host, against ONE store; if each derived the store directory
-// on its own, a disagreement between them would split a list silently.
+// It exists so the two binaries cannot drift in how they READ a store: given
+// one root, both derive the same directory for the same repository, and a
+// disagreement there would split a list silently.
+//
+// Which root each one starts from is deliberately separate. devctl runs on the
+// host and agtctl inside a sandbox, so each is configured under its own name
+// (RemindersBaseDir). They share a list only when the sandbox is handed the
+// host's root through AGTCTL_REMINDERS_DIR, which its environment file sets.
 package cli
 
 import (
@@ -81,7 +86,12 @@ func ExitCode(err error) int {
 		// An id that is not one ordinary path segment is a typo on the command
 		// line. Exit 1 would tell a caller to retry, and retrying a typo never
 		// stops.
-		errors.Is(err, store.ErrInvalidID):
+		errors.Is(err, store.ErrInvalidID),
+		// A binary that did not name itself cannot be fixed by running it
+		// again either. It is a programming error, and the codes this
+		// contract offers are "retrying is pointless" and "retrying might
+		// work"; this is the first.
+		errors.Is(err, ErrNoTool):
 		return ExitUsage
 	default:
 		return ExitFailure

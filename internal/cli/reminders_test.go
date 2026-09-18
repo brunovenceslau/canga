@@ -25,7 +25,7 @@ func execute(t *testing.T, args ...string) (string, error) {
 
 	var out bytes.Buffer
 
-	a := &App{}
+	a := &App{Tool: toolDevctl}
 	root := &cobra.Command{Use: "test", SilenceUsage: true, SilenceErrors: true}
 	a.BindRepoFlag(root)
 	root.AddCommand(NewRemindersCmd(a,
@@ -64,7 +64,7 @@ func records(t *testing.T, out string) [][2]string {
 func TestNewRemindersCmd_RegistersOnlyTheVerbsGiven(t *testing.T) {
 	t.Parallel()
 
-	cmd := NewRemindersCmd(&App{}, RemindersAdd, RemindersList)
+	cmd := NewRemindersCmd(&App{Tool: toolDevctl}, RemindersAdd, RemindersList)
 
 	var names []string
 	for _, sub := range cmd.Commands() {
@@ -189,7 +189,7 @@ func TestReminders_Reorder(t *testing.T) {
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestCompleteIDs(t *testing.T) {
 	dir := testrepo.New(t, "git@github.com:acme/widget.git")
-	application := &App{RepoDir: dir}
+	application := &App{Tool: "devctl", RepoDir: dir}
 
 	cmd := &cobra.Command{}
 	cmd.SetContext(t.Context())
