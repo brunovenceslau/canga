@@ -335,7 +335,7 @@ Nothing is created or cloned. Each refusal happens before cmux is called:
 | `CANGA_HOST_ENVS_DIR` is unset | `2` |
 | A URL no `<host>/<owner>/<repo>` can be derived from | `2` |
 | No clone at the derived path. The message suggests `canga git clone <url>` | `1` |
-| No environment directory at the derived path. The message names the path | `1` |
+| No environment directory at the derived path. The message names the path and the fixes: update the checkout that holds the environments, create the directory, or point `CANGA_HOST_ENVS_DIR` at the right root | `1` |
 | `cmux` is not on your PATH | `1` |
 | cmux fails. Its own message is shown | `1` |
 

@@ -110,6 +110,11 @@ func TestResolve_Refusals(t *testing.T) {
 			name: "no environment", url: widgetURL, mkRepo: true,
 			wantErr: ErrNoEnv, wantMsg: filepath.Join("github.com", "Acme", "Widget"),
 		},
+		// The refusal says how to resolve it, not only what is missing.
+		{
+			name: "no environment, hint", url: widgetURL, mkRepo: true,
+			wantErr: ErrNoEnv, wantMsg: "update the checkout that holds the environments",
+		},
 		{
 			name: "bad url", url: "not-a-url", mkRepo: true, mkEnv: true,
 			wantErr: repo.ErrBadURL,
