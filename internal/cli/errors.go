@@ -1,20 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Package cli holds what the devctl and agtctl command trees share: the exit
-// code contract, the store a command resolves for a repository, and the
-// reminders subcommands themselves.
+// Package cli holds what canga's two builds share: the exit code contract, the
+// store a command resolves for a repository, and the reminders subcommands
+// themselves.
 //
-// It exists so the two binaries cannot drift. agtctl runs inside a sandbox and
-// devctl on the host, against ONE store; if each derived the store directory
-// on its own, a disagreement between them would split a list silently.
+// It exists so the host and sandbox builds cannot drift. They run on opposite
+// sides of the sandbox boundary against ONE store; if each derived the store
+// directory on its own, a disagreement between them would split a list
+// silently.
 package cli
 
 import (
 	"errors"
 
-	"github.com/brunovenceslau/devctl/internal/repo"
-	"github.com/brunovenceslau/devctl/internal/store"
+	"github.com/brunovenceslau/canga/internal/repo"
+	"github.com/brunovenceslau/canga/internal/store"
 	"github.com/spf13/cobra"
 )
 

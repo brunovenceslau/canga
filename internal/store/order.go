@@ -330,7 +330,7 @@ func orderFile(version int) string {
 // named "007" parses as 7, but order/7 is not where anything lives. The head
 // that follows cannot be read, which is indistinguishable from one pruned from
 // under us, so every read retries to its bound and the store answers
-// "contended" — permanently. Measured: one stray file, and `devctl reminders
+// "contended" — permanently. Measured: one stray file, and `canga reminders
 // list` exits 1 until someone deletes it by hand.
 func orderVersion(name string) (int, bool) {
 	version, err := strconv.Atoi(name)

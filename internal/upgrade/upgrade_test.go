@@ -25,7 +25,7 @@ type fixture struct {
 }
 
 // releaseFixture builds the release GoReleaser would publish for tag: one
-// archive for this platform, holding a devctl that reports tag, plus the
+// archive for this platform, holding a canga that reports tag, plus the
 // checksums.txt covering it.
 func releaseFixture(t *testing.T, tag string, extra ...tarEntry) fixture {
 	t.Helper()
@@ -41,10 +41,10 @@ func releaseFixture(t *testing.T, tag string, extra ...tarEntry) fixture {
 
 // archiveName is what GoReleaser calls the archive for this platform.
 func archiveName(tag string) string {
-	return "devctl_" + strings.TrimPrefix(tag, "v") + assetSuffix()
+	return "canga-host_" + strings.TrimPrefix(tag, "v") + assetSuffix()
 }
 
-// fakeGitHub serves the three endpoints devctl reads, and nothing else. The
+// fakeGitHub serves the three endpoints canga reads, and nothing else. The
 // first release given is what /releases/latest answers with.
 func fakeGitHub(t *testing.T, releases ...fixture) string {
 	t.Helper()

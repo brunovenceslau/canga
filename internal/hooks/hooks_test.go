@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/brunovenceslau/devctl/internal/repo"
+	"github.com/brunovenceslau/canga/internal/repo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +19,7 @@ import (
 const preCommit = "pre-commit"
 
 // scratchRepo builds a git repository with the given executable hooks under
-// .devctl/hooks, and points git at empty system and global config so nothing
+// .canga/hooks, and points git at empty system and global config so nothing
 // the developer or the sandbox configured can reach the test.
 func scratchRepo(t *testing.T, names ...string) string {
 	t.Helper()
@@ -95,6 +95,20 @@ func TestInstall_HooksPath(t *testing.T) {
 		assert.Equal(t, "core.hooksPath", report.Mode)
 		assert.Equal(t, []string{"commit-msg", preCommit}, report.Installed)
 		assert.Empty(t, report.Warnings)
+
+		value, _, err := repo.Config(t.Context(), root, "core.hooksPath")
+		require.NoError(t, err)
+		assert.Equal(t, SourceDir, value)
+	})
+
+	// A repository set up before the rename points at the old directory. That
+	// value was written by this command, so it is replaced without --force.
+	t.Run("replaces the pre-rename hooks path", func(t *testing.T) {
+		root := scratchRepo(t, preCommit)
+		require.NoError(t, repo.SetConfig(t.Context(), root, "core.hooksPath", ".devctl/hooks"))
+
+		_, err := Install(t.Context(), root, Options{})
+		require.NoError(t, err)
 
 		value, _, err := repo.Config(t.Context(), root, "core.hooksPath")
 		require.NoError(t, err)
@@ -304,4 +318,28 @@ func TestInstall_Symlink(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "pristine\n", string(kept))
 	})
+}
+
+// TestInstall_SymlinkReplacesItsPreRenameLink: a link a pre-rename install made
+// into .devctl/hooks is this command's own, so it is replaced without --force
+// and without a backup.
+//
+//nolint:paralleltest // scratchRepo calls t.Setenv, which the hermetic environment needs
+func TestInstall_SymlinkReplacesItsPreRenameLink(t *testing.T) {
+	root := scratchRepo(t, preCommit)
+
+	hooksDir := filepath.Join(root, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+
+	old := filepath.Join("..", "..", ".devctl", "hooks", preCommit)
+	require.NoError(t, os.Symlink(old, filepath.Join(hooksDir, preCommit)))
+
+	report, err := Install(t.Context(), root, Options{Symlink: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{preCommit}, report.Installed)
+	assert.Empty(t, report.BackedUp, "a link this command made is not backed up")
+
+	target, err := os.Readlink(filepath.Join(hooksDir, preCommit))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join("..", "..", SourceDir, preCommit), target)
 }

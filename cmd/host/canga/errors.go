@@ -6,12 +6,12 @@ package main
 import (
 	"errors"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/hooks"
-	"github.com/brunovenceslau/devctl/internal/upgrade"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/hooks"
+	"github.com/brunovenceslau/canga/internal/upgrade"
 )
 
-// exitCode maps an error to devctl's exit code: devctl's own sentinels first,
+// exitCode maps an error to canga's exit code: canga's own sentinels first,
 // then the contract every binary shares.
 func exitCode(err error) int {
 	switch {

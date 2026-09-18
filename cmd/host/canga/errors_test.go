@@ -9,13 +9,13 @@ import (
 	"io/fs"
 	"testing"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/hooks"
-	"github.com/brunovenceslau/devctl/internal/upgrade"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/hooks"
+	"github.com/brunovenceslau/canga/internal/upgrade"
 	"github.com/stretchr/testify/assert"
 )
 
-// TestExitCode pins what devctl adds to the shared contract, which
+// TestExitCode pins what canga adds to the shared contract, which
 // internal/cli's own test pins: its own sentinels are usage errors, and
 // everything else is decided by cli.ExitCode.
 func TestExitCode(t *testing.T) {

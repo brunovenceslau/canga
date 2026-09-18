@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Package store implements devctl's per-repo reminder store: a directory of
+// Package store implements canga's per-repo reminder store: a directory of
 // one-file-per-item records that many processes, in many sandbox VMs, plus a
 // person on the host, write to at once without ever taking a lock.
 //

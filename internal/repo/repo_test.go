@@ -243,7 +243,7 @@ func TestOrigin(t *testing.T) {
 		assert.Equal(t, "git@github.com:acme/widget.git", got)
 	})
 
-	// git applies url.<base>.insteadOf to `remote get-url`, so what devctl sees
+	// git applies url.<base>.insteadOf to `remote get-url`, so what canga sees
 	// is the EFFECTIVE url, not the configured one. That is harmless precisely
 	// because both spellings collapse to the same path — which is what this
 	// asserts, rather than assuming it.
@@ -297,7 +297,7 @@ func TestOrigin(t *testing.T) {
 	})
 
 	// classify is shared by every git call, so its cancellation message must
-	// not name one of them. A Ctrl-C during `devctl setup hooks`, which never
+	// not name one of them. A Ctrl-C during `canga setup hooks`, which never
 	// asks for a remote, used to report "reading the origin".
 	t.Run("cancellation does not name an operation that never ran", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
@@ -327,7 +327,7 @@ func TestRootAndCommonDir(t *testing.T) {
 	sub := filepath.Join(dir, "a", "b")
 	require.NoError(t, os.MkdirAll(sub, 0o755))
 
-	// Resolved from a SUBDIRECTORY: every devctl command is keyed by a
+	// Resolved from a SUBDIRECTORY: every canga command is keyed by a
 	// repository, and a caller is rarely standing at its top level.
 	root, err := Root(t.Context(), sub)
 	require.NoError(t, err)
@@ -357,11 +357,11 @@ func TestConfigRoundTrip(t *testing.T) {
 	assert.Empty(t, value)
 	assert.False(t, set)
 
-	require.NoError(t, SetConfig(t.Context(), dir, "core.hooksPath", ".devctl/hooks"))
+	require.NoError(t, SetConfig(t.Context(), dir, "core.hooksPath", ".canga/hooks"))
 
 	value, set, err = Config(t.Context(), dir, "core.hooksPath")
 	require.NoError(t, err)
-	assert.Equal(t, ".devctl/hooks", value)
+	assert.Equal(t, ".canga/hooks", value)
 	assert.True(t, set)
 
 	// The distinction the bool exists for: git answers an unset key and a key

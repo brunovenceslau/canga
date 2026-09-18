@@ -4,15 +4,15 @@
 package main
 
 import (
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/hooks"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/hooks"
 	"github.com/spf13/cobra"
 )
 
 func newSetupCmd(a *cli.App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Wire devctl into a repository",
+		Short: "Wire canga into a repository",
 		Args:  cli.UsageArgs(cobra.NoArgs),
 		RunE:  cli.RunHelp,
 	}
@@ -29,11 +29,11 @@ func reportInstall(cmd *cobra.Command, report hooks.Report, failure error) {
 	errOut := cmd.ErrOrStderr()
 
 	for _, warning := range report.Warnings {
-		cli.Fprintf(errOut, "devctl: %s\n", warning)
+		cli.Fprintf(errOut, "canga: %s\n", warning)
 	}
 
 	for _, backup := range report.BackedUp {
-		cli.Fprintf(errOut, "devctl: moved aside to %s\n", backup)
+		cli.Fprintf(errOut, "canga: moved aside to %s\n", backup)
 	}
 
 	// Nothing touched, nothing to summarize. Mode alone is not the test: it is
@@ -47,9 +47,9 @@ func reportInstall(cmd *cobra.Command, report hooks.Report, failure error) {
 	// The summary must not claim success when the run failed part way. What was
 	// already installed is still worth naming, and the error itself follows.
 	if failure != nil {
-		cli.Fprintf(errOut, "devctl: stopped part way through %s in %s\n", report.Mode, report.Root)
+		cli.Fprintf(errOut, "canga: stopped part way through %s in %s\n", report.Mode, report.Root)
 	} else {
-		cli.Fprintf(errOut, "devctl: installed via %s in %s\n", report.Mode, report.Root)
+		cli.Fprintf(errOut, "canga: installed via %s in %s\n", report.Mode, report.Root)
 	}
 
 	for _, name := range report.Installed {
@@ -63,7 +63,7 @@ func newSetupHooksCmd(a *cli.App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hooks",
 		Short: "Install this repository's own git hooks",
-		Long: "hooks installs the git hooks a repository keeps under .devctl/hooks.\n\n" +
+		Long: "hooks installs the git hooks a repository keeps under .canga/hooks.\n\n" +
 			"By default it points git's core.hooksPath at that directory, which\n" +
 			"covers every hook at once and is undone with `git config --unset\n" +
 			"core.hooksPath`. git reads hooks from only ONE directory, so anything\n" +

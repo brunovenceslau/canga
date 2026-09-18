@@ -7,8 +7,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/upgrade"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/upgrade"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -107,7 +107,7 @@ func report(t *testing.T, options upgrade.Options, result upgrade.Result, failur
 func TestReportUpgrade(t *testing.T) {
 	t.Parallel()
 
-	resolved := upgrade.Result{Current: "v0.1.0", Release: "v0.2.0", Path: "/opt/bin/devctl", Newer: true}
+	resolved := upgrade.Result{Current: "v0.1.0", Release: "v0.2.0", Path: "/opt/bin/canga", Newer: true}
 
 	// --check has to name the file it would replace on BOTH branches. The
 	// README promises it, and it used to appear only when nothing was newer —
@@ -117,14 +117,14 @@ func TestReportUpgrade(t *testing.T) {
 
 		_, stderr := report(t, upgrade.Options{Check: true}, resolved, nil)
 		assert.Contains(t, stderr, "v0.2.0 is available")
-		assert.Contains(t, stderr, "it would replace /opt/bin/devctl")
+		assert.Contains(t, stderr, "it would replace /opt/bin/canga")
 
 		uptodate := resolved
 		uptodate.Newer = false
 
 		_, stderr = report(t, upgrade.Options{Check: true}, uptodate, nil)
 		assert.Contains(t, stderr, "newest release")
-		assert.Contains(t, stderr, "it would replace /opt/bin/devctl")
+		assert.Contains(t, stderr, "it would replace /opt/bin/canga")
 	})
 
 	t.Run("the tag is the only thing on stdout", func(t *testing.T) {
@@ -134,8 +134,8 @@ func TestReportUpgrade(t *testing.T) {
 		installed.Installed = true
 
 		stdout, stderr := report(t, upgrade.Options{}, installed, nil)
-		assert.Equal(t, "v0.2.0\n", stdout, "`v=$(devctl upgrade)` has to be the version")
-		assert.Contains(t, stderr, "/opt/bin/devctl")
+		assert.Equal(t, "v0.2.0\n", stdout, "`v=$(canga upgrade)` has to be the version")
+		assert.Contains(t, stderr, "/opt/bin/canga")
 	})
 
 	// A run that failed before resolving anything has nothing to add to the
@@ -155,6 +155,6 @@ func TestReportUpgrade(t *testing.T) {
 
 		stdout, stderr := report(t, upgrade.Options{}, resolved, assert.AnError)
 		assert.Empty(t, stdout)
-		assert.Contains(t, stderr, "stopped while installing v0.2.0 over /opt/bin/devctl")
+		assert.Contains(t, stderr, "stopped while installing v0.2.0 over /opt/bin/canga")
 	})
 }

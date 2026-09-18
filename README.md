@@ -3,9 +3,24 @@ SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# devctl
+# canga
 
-A developer control tool for the repositories and sandboxes of a working day.
+One binary, `canga`, built in two roles for the repositories and sandboxes of a
+working day:
+
+| Build | Runs on | What it does |
+| --- | --- | --- |
+| host | your Mac (darwin and linux builds) | clone, sync, reminders, git hook setup, its own upgrade |
+| sandbox | inside an agent sandbox (linux) | reminders `list` and `add`, nothing else |
+
+Both builds are named `canga` and share one reminders list. The role is fixed
+when the binary is built: the sandbox build does not contain the host's
+commands, so nothing an agent sets at runtime can reach them. `canga --version`
+names the role.
+
+In Brazilian barracks slang, your *canga* is your partner in a pair: the one
+you do not leave and who does not leave you. Each build covers one side, the
+Mac and the sandbox, and neither makes sense without the other.
 
 Every subcommand is keyed by the repository the current directory belongs to,
 derived from its `origin` remote. The derivation is deterministic, so
@@ -15,12 +30,14 @@ derived from its `origin` remote. The derivation is deterministic, so
 
 ## Install
 
-Neither path below needs a GitHub account or a credential.
+These install the host build, on your machine. For a sandbox, see
+[Install it in a sandbox](#install-it-in-a-sandbox). Neither path needs a
+GitHub account or a credential.
 
 ### Build from source
 
 ```sh
-GOBIN="$HOME/.local/bin" go install github.com/brunovenceslau/devctl/cmd/devctl@latest
+GOBIN="$HOME/.local/bin" go install github.com/brunovenceslau/canga/cmd/host/canga@latest
 ```
 
 `GOBIN` puts the binary in a directory on your PATH, because the default,
@@ -35,15 +52,15 @@ checkout with `make install` instead.
 Download, verify against the published checksums, then extract:
 
 ```sh
-releases=https://github.com/brunovenceslau/devctl/releases
+releases=https://github.com/brunovenceslau/canga/releases
 tag=$(basename "$(curl -fsS -o /dev/null -w '%{url_effective}' "$releases/latest")")
-asset=devctl_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64, linux_amd64, linux_arm64
+asset=canga-host_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64, linux_amd64, linux_arm64
 
 curl -fsSLO "$releases/download/$tag/$asset"
 curl -fsSLO "$releases/download/$tag/checksums.txt"
 mkdir -p "$HOME/.local/bin"
 awk -v a="$asset" '$2 == a' checksums.txt | shasum -a 256 -c - \
-  && tar -xzf "$asset" -C "$HOME/.local/bin" devctl
+  && tar -xzf "$asset" -C "$HOME/.local/bin" canga
 ```
 
 `$releases/latest` redirects to the newest release, so `%{url_effective}` names
@@ -61,22 +78,22 @@ rejects empty input rather than reporting success.
 Running the block again in a directory that already holds an earlier download
 overwrites it: `curl -O` replaces a file rather than refusing.
 
-The archive also carries `LICENSE` and `README.md`. Naming `devctl` in the `tar`
+The archive also carries `LICENSE` and `README.md`. Naming `canga` in the `tar`
 command extracts the binary alone.
 
-Confirm the result. It prints the version, the commit it was built from, and the
-Go version:
+Confirm the result. It prints the version, the role (`host`), the commit it was
+built from, and the Go version:
 
 ```sh
-devctl --version
+canga --version
 ```
 
-Do this once. From here on `devctl upgrade` replaces the binary for you.
+Do this once. From here on `canga upgrade` replaces the binary for you.
 
-### macOS reports "Apple could not verify devctl is free of malware"
+### macOS reports "Apple could not verify canga is free of malware"
 
 macOS prints that when Gatekeeper evaluates a binary Apple has not notarized.
-devctl is not notarized. Notarization requires a paid Apple Developer Program
+canga is not notarized. Notarization requires a paid Apple Developer Program
 membership, which this tool does not have.
 
 Gatekeeper only evaluates a file carrying the `com.apple.quarantine` extended
@@ -88,7 +105,7 @@ a binary that runs without a prompt.
 Ask a specific file whether it carries the attribute:
 
 ```sh
-xattr -p com.apple.quarantine <path-to-devctl>
+xattr -p com.apple.quarantine <path-to-canga>
 ```
 
 It prints the attribute, or `No such xattr` when there is none. Use it rather
@@ -99,25 +116,25 @@ that file alone.
 To repair a binary that does carry it, strip the attribute:
 
 ```sh
-xattr -d com.apple.quarantine <path-to-devctl>
+xattr -d com.apple.quarantine <path-to-canga>
 ```
 
 Double-clicking a quarantined archive in Finder copies the attribute onto every
-file it extracts, so the `devctl` it leaves next to the archive is quarantined
+file it extracts, so the `canga` it leaves next to the archive is quarantined
 and stays so when you move it. Extracting the same archive with `tar` on the
 command line does not.
 
-## `devctl clone`
+## `canga clone`
 
 Clones a repository into the deterministic layout, so the same repository lands
 at the same path on every machine, whichever protocol you cloned it with.
 
 ```sh
-devctl clone git@github.com:acme/widget.git
+canga clone git@github.com:acme/widget.git
 # → ~/src/github.com/acme/widget
 
-cd "$(devctl clone https://github.com/acme/widget)"
-devctl clone https://github.com/acme/widget /tmp/scratch   # an explicit target
+cd "$(canga clone https://github.com/acme/widget)"
+canga clone https://github.com/acme/widget /tmp/scratch   # an explicit target
 ```
 
 The resolved path is the only thing printed on stdout. git's progress and every
@@ -127,7 +144,7 @@ safe.
 ### Where a clone lands
 
 ```
-${DEVCTL_BASE_DIR:-$HOME/src}/<host>/<owner>/<repo>
+${CANGA_HOST_BASE_DIR:-$HOME/src}/<host>/<owner>/<repo>
 ```
 
 The three segments come from the URL, with the scheme, any userinfo, any port
@@ -138,9 +155,9 @@ filesystem, encodes case.
 
 | Variable | Default | What it sets |
 | --- | --- | --- |
-| `DEVCTL_BASE_DIR` | `$HOME/src` | Root of the layout. |
-| `DEVCTL_SIGNING_KEY` | `git config --global user.signingkey` | Key stamped into the clone. |
-| `DEVCTL_ALLOWED_SIGNERS` | `git config --global gpg.ssh.allowedSignersFile` | Allowed-signers file wired into the clone, so `git log --show-signature` works there. |
+| `CANGA_HOST_BASE_DIR` | `$HOME/src` | Root of the layout. |
+| `CANGA_HOST_SIGNING_KEY` | `git config --global user.signingkey` | Key stamped into the clone. |
+| `CANGA_HOST_ALLOWED_SIGNERS` | `git config --global gpg.ssh.allowedSignersFile` | Allowed-signers file wired into the clone, so `git log --show-signature` works there. |
 | `CI` | unset | When set to anything, drops git's `\r` progress meter. |
 
 ### What it refuses
@@ -168,7 +185,7 @@ them off on the command line means a machine whose git config sets
 `protocol.ext.allow=always` still refuses one.
 
 One setting outranks a `-c` option: the `GIT_ALLOW_PROTOCOL` environment
-variable, which replaces git's protocol policy when it is set. devctl removes
+variable, which replaces git's protocol policy when it is set. canga removes
 `ext` and `fd` from it before running git and keeps every other entry, so an
 allow-list such as `https:ssh` still restricts what it restricted. A list that
 named only `ext` is left empty, which allows nothing. `file` is left at git's default,
@@ -184,8 +201,8 @@ config: the allowed-signers file when one resolves, and `gpg.format=ssh`,
 `gpg.format` is written rather than inherited. git's default format is openpgp,
 so on a machine that does not set `gpg.format=ssh` globally, a stamped SSH key
 would fail every commit with `gpg: skipped "…": No secret key`. The consequence
-is deliberate: a clone made by `devctl clone` signs with SSH, so do not hand a
-GPG key to `DEVCTL_SIGNING_KEY` or leave one in the global `user.signingkey` and
+is deliberate: a clone made by `canga clone` signs with SSH, so do not hand a
+GPG key to `CANGA_HOST_SIGNING_KEY` or leave one in the global `user.signingkey` and
 expect it to be used here.
 
 The key fallback reads the **global** git config rather than the effective one,
@@ -193,24 +210,24 @@ so the key is the machine's identity and never the local key of whatever
 repository you ran the command in. Nothing global is written.
 
 When neither a key nor an allowed-signers file resolves, the clone is left
-alone rather than pointed at a file that does not exist. `devctl` then reports
+alone rather than pointed at a file that does not exist. `canga` then reports
 on stderr whether the clone signs anyway, because git configuration outside it
 turns `commit.gpgsign` on. A sandbox is that case: its `/etc/gitconfig` carries
 the format, the flag and a key command, and no `user.signingkey`. Otherwise it
 reports `signing OFF` and names what to set.
 
-## `devctl sync`
+## `canga sync`
 
 Fetches every remote with `--prune` and `--tags`, then fast-forwards each local
 branch that tracks an upstream.
 
 ```sh
-devctl sync                                  # the repository you are standing in
-devctl sync -C ~/src/github.com/acme/widget  # or any other
+canga sync                                  # the repository you are standing in
+canga sync -C ~/src/github.com/acme/widget  # or any other
 
 # a sweep across every clone in the layout
 find ~/src -name .git -maxdepth 4 -type d -exec dirname {} \; | while read -r r; do
-  devctl sync -C "$r"
+  canga sync -C "$r"
 done
 ```
 
@@ -251,19 +268,19 @@ advances with `git fetch . <upstream>:<branch>`, and the missing `+` in front of
 that refspec is the safety property itself: without it git refuses a non
 fast-forward update instead of overwriting the branch.
 
-The fetch carries the same transport hardening as `devctl clone`.
+The fetch carries the same transport hardening as `canga clone`.
 
-## `devctl upgrade`
+## `canga upgrade`
 
 Replaces the running binary with a published release, in place.
 
 ```sh
-devctl upgrade                # install the newest release
-devctl upgrade --check        # say what is available, change nothing
-devctl upgrade --tag v0.1.0   # install exactly that release
+canga upgrade                # install the newest release
+canga upgrade --check        # say what is available, change nothing
+canga upgrade --tag v0.1.0   # install exactly that release
 ```
 
-Only the release tag goes to stdout, one line, so `v=$(devctl upgrade)` is the
+Only the release tag goes to stdout, one line, so `v=$(canga upgrade)` is the
 version now installed. Everything else is a diagnostic on stderr.
 
 **This is not `dotfiles-upgrade`.** That one fetches git and updates a checkout.
@@ -283,13 +300,13 @@ beside it. That is integrity, not authenticity.
 
 The new binary is then written beside the old one, flushed to disk, and **run
 once** to confirm it reports the version it was downloaded as. Only then is it
-renamed over the target. An archive holding something that is not devctl, or a
+renamed over the target. An archive holding something that is not canga, or a
 binary for the wrong platform, fails at that step with the working binary
 untouched, instead of after taking its place on your PATH.
 
 Nothing is written outside the directory the binary already lives in, and no
-backup is left behind: the previous release is always one `devctl upgrade --tag`
-away, and a stale `devctl.bak` on PATH is a worse problem than the backup solves.
+backup is left behind: the previous release is always one `canga upgrade --tag`
+away, and a stale `canga.bak` on PATH is a worse problem than the backup solves.
 
 ### Which file it replaces
 
@@ -305,13 +322,13 @@ linux the kernel hands back an already-resolved path, so there is no symlink
 left to mention, while on macOS it does not. The file replaced is the right one
 on both.
 
-The mode of the file being replaced is kept, so a devctl deliberately installed
+The mode of the file being replaced is kept, so a canga deliberately installed
 `0700` does not come back world-executable — only the owner's execute bit is
 restored unconditionally, since an install you cannot run is not one.
 
 ### The token
 
-A GitHub token is optional: with none, `devctl upgrade` reads the release
+A GitHub token is optional: with none, `canga upgrade` reads the release
 anonymously. What a token buys is GitHub's authenticated rate limit, 5000
 requests an hour against 60 for an anonymous client, which one shared outbound
 address can exhaust on its own.
@@ -323,7 +340,7 @@ used on a mac: `gh` keeps it in the keychain. `gh` is optional — export
 runs.
 
 A token GitHub rejects, such as an expired or revoked one, does not stop the
-upgrade. devctl retries that request without it and makes every later request
+upgrade. canga retries that request without it and makes every later request
 anonymously. If the anonymous request fails too, the error names both failures,
 so the stale token is still reported.
 
@@ -336,36 +353,21 @@ published artifact, and `v0.1.0-3-gabc1234` sorts *below* `v0.1.0` under semver
 are refused, and `--tag` is how you say which release you meant:
 
 ```sh
-devctl upgrade --tag v0.1.0
+canga upgrade --tag v0.1.0
 ```
 
-### Upgrading a linux devctl from v0.3.0 or earlier
-
-Releases after v0.3.0 also carry `agtctl` archives for linux. devctl v0.3.0 and
-earlier select an archive by the platform suffix alone, so on linux they find
-two archives and refuse the upgrade with:
-
-```
-devctl: no release asset for this platform: <tag> has 2 assets ending in "_linux_arm64.tar.gz"
-```
-
-Install the new release once by hand, as in
-[Install a release binary](#install-a-release-binary). From then on `devctl
-upgrade` selects its archive by name and works again. devctl on a mac is not
-affected, because no darwin `agtctl` is published.
-
-## `devctl reminders`
+## `canga reminders`
 
 A per-repository TODO store that outlives the session that wrote it. An idea
 raised mid-task, on a topic unrelated to the work at hand, is otherwise lost
 when the session ends.
 
 ```sh
-devctl reminders add drop the temporary debug flag from the parser
-devctl reminders list
-devctl reminders reorder 20260915T142233.482913Z-9f3a1c   # bump one to the top
-devctl reminders path                                     # where they live
-devctl reminders rm 20260915T142233.482913Z-9f3a1c
+canga reminders add drop the temporary debug flag from the parser
+canga reminders list
+canga reminders reorder 20260915T142233.482913Z-9f3a1c   # bump one to the top
+canga reminders path                                     # where they live
+canga reminders rm 20260915T142233.482913Z-9f3a1c
 ```
 
 `list` prints one `<id><TAB><text>` record per line, so it pipes. Diagnostics go
@@ -377,7 +379,7 @@ which is what a hook or a script should use rather than changing directory.
 ### Where the reminders live
 
 ```
-${DEVCTL_REMINDERS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/devctl/reminders}/
+${CANGA_REMINDERS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/canga/reminders}/
   <host>/<owner>/<repo>/<scope>/
     items/<id>.md      # one file per reminder — the unit of atomicity
     order/<N>          # versioned order documents; the highest N is current
@@ -394,14 +396,15 @@ directories on one side and one on the other, so the two sides disagree about
 whether they are looking at the same list. The readable spelling is kept in each
 item's `repo:` header.
 
-`DEVCTL_REMINDERS_DIR` exists because `$HOME` is not the same on both sides of a
-sandbox boundary: a sandbox is handed the path rather than left to derive a
-different one. The store sits under the XDG **data** directory, not a cache or
+`CANGA_REMINDERS_DIR` is read by both builds. It exists because `$HOME` is not
+the same on both sides of a sandbox boundary: a sandbox is handed the host's
+path rather than left to derive a different one. On the host it is normally
+unset. The store sits under the XDG **data** directory, not a cache or
 state directory, because a reminder is your own data and an uninstall must not
 take it.
 
 Each item is a plain file. Editing one by hand is a supported way to use this —
-`devctl reminders path <id>` exists to hand one to an editor — and a file
+`canga reminders path <id>` exists to hand one to an editor — and a file
 dropped into `items/` by any other tool is listed like any other.
 
 ### Concurrency
@@ -429,64 +432,103 @@ crafted id cannot address anything outside it by construction rather than by
 validation. Go 1.27 is a correctness floor, not a preference: before it, a
 symlink opened with a trailing slash escaped a `Root`.
 
-## `agtctl`
+## The sandbox build
 
-`agtctl` is the binary for agents inside a sandbox. It reads and adds to the
-same reminders `devctl` manages on the host, and does nothing else.
+The sandbox build is what an agent inside a sandbox runs. It reads and adds to
+the same reminders the host build manages, and does nothing else.
 
 ```sh
-agtctl reminders list
-agtctl reminders add check the retry budget before merging
+canga reminders list
+canga reminders add check the retry budget before merging
 ```
 
-Both verbs behave exactly as their `devctl reminders` counterparts: `list`
-prints one `<id><TAB><text>` record per line, `add` prints the new id, and `-C`
-names a repository other than the current directory.
+Both verbs behave exactly as on the host: `list` prints one `<id><TAB><text>`
+record per line, `add` prints the new id, and `-C` names a repository other
+than the current directory.
 
 ### What it leaves out
 
-`agtctl` has no `rm`, `reorder` or `path`, and no `clone`, `sync`, `setup`,
-`upgrade` or `completion`. An agent may surface the list and record an idea, but
-the list belongs to the person on the host, so only `devctl` removes or reorders
-it. The verbs are absent from the binary, not hidden: `agtctl reminders rm`
-fails as an unknown command and exits `2`.
+The sandbox build has no `clone`, `sync`, `setup`, `upgrade` or `completion`,
+and no `reminders rm`, `reorder` or `path`. An agent may surface the list and
+record an idea, but the list belongs to the person on the host, so only the
+host build removes or reorders it.
 
-### Where it finds the store
+Those commands are not compiled into the sandbox build. Running one refuses
+with exit `2` and says where it lives, and help does not list them:
 
-`agtctl` resolves the store exactly as `devctl` does, from the same
-`DEVCTL_REMINDERS_DIR` variable. It has no variable of its own. For the sandbox
-and the host to share one list, the sandbox needs the host's store directory
-mounted, and `DEVCTL_REMINDERS_DIR` set to the path it is mounted at. See
-[Where the reminders live](#where-the-reminders-live) for the layout under it.
+```
+$ canga reminders rm 20260918T015659.641699Z-125ec4d3
+canga: reminders rm is available in the host build only, not in the sandbox build
+```
+
+### How a sandbox shares the host's list
+
+The sandbox needs two things from its environment:
+
+1. The host's store directory for that repository, mounted into the sandbox.
+2. `CANGA_REMINDERS_DIR` set to the host's store root, which is a HOST path:
+   inside the sandbox `$HOME` is not the host's home.
+
+```sh
+CANGA_REMINDERS_DIR=/Users/you/.local/share/canga/reminders canga reminders list
+```
+
+Without `CANGA_REMINDERS_DIR`, the sandbox build falls back to a store inside
+the sandbox, which the host never sees. See
+[Where the reminders live](#where-the-reminders-live) for the layout under the
+root.
 
 ### Install it in a sandbox
 
-Releases ship `agtctl` for linux only, because sandboxes are linux VMs. Verify
-the archive against `checksums.txt` before extracting it:
+Releases ship the sandbox build for linux only, because sandboxes are linux
+VMs. Verify the archive against `checksums.txt` before extracting it:
 
 ```sh
-releases=https://github.com/brunovenceslau/devctl/releases
-tag=vX.Y.Z                                   # the release this sandbox pins
-asset=agtctl_${tag#v}_linux_arm64.tar.gz     # or linux_amd64
+releases=https://github.com/brunovenceslau/canga/releases
+tag=vX.Y.Z                                          # the release this sandbox pins
+asset=canga-sandbox_${tag#v}_linux_arm64.tar.gz     # or linux_amd64
 
 curl -fsSLO "$releases/download/$tag/$asset"
 curl -fsSLO "$releases/download/$tag/checksums.txt"
 mkdir -p "$HOME/.local/bin"
 awk -v a="$asset" '$2 == a' checksums.txt | sha256sum -c - \
-  && tar -xzf "$asset" -C "$HOME/.local/bin" agtctl
+  && tar -xzf "$asset" -C "$HOME/.local/bin" canga
 ```
 
 Pin the tag rather than following `latest`, so every sandbox built from one
-definition runs the same binary. `agtctl --version` prints the version, the
-commit, and the Go version.
+definition runs the same binary. `canga --version` prints the version, the role
+(`sandbox`), the commit, and the Go version.
+
+## Moving from devctl and agtctl
+
+canga was two binaries, `devctl` and `agtctl`. What changed, and what you do:
+
+| Before | Now | What to do |
+| --- | --- | --- |
+| `devctl`, `agtctl` | `canga` (host build, sandbox build) | Install the host build once by hand; `devctl upgrade` does not select `canga-host_` archives. |
+| `${XDG_DATA_HOME}/devctl/reminders` | `${XDG_DATA_HOME}/canga/reminders` | Nothing, if you run any `canga reminders` command on the host before starting a sandbox that mounts the new path: that command moves the store in one rename and says so on stderr. |
+| `DEVCTL_REMINDERS_DIR` | `CANGA_REMINDERS_DIR` | Rename it in each sandbox environment file, together with the mount path. The old name is not read. |
+| `DEVCTL_BASE_DIR`, `DEVCTL_SIGNING_KEY`, `DEVCTL_ALLOWED_SIGNERS` | `CANGA_HOST_BASE_DIR`, `CANGA_HOST_SIGNING_KEY`, `CANGA_HOST_ALLOWED_SIGNERS` | Rename them wherever you set them. |
+| `.devctl/hooks` | `.canga/hooks` | Move the directory and run `canga setup hooks`. It replaces its own earlier setup without `--force`: a `core.hooksPath` of `.devctl/hooks`, or, with `--symlink`, links into `.devctl/hooks`. |
+
+The store moves only when the old directory exists, the new one does not, and
+`CANGA_REMINDERS_DIR` is unset. If the rename fails, the command stops rather
+than start an empty store beside the old one. Shell completion never moves it.
+
+If the new directory already exists, for example because a sandbox that mounts
+it was created first, nothing is moved: renaming over a mounted directory would
+swap it out from under the running sandbox. Every `canga reminders` command then
+names both directories on stderr until you move each repository's items across
+by hand and remove the old directory.
 
 ## Shell completion
 
 ```sh
-devctl completion zsh > "${XDG_CACHE_HOME:-$HOME/.cache}/devctl/_devctl"
+canga completion zsh > "${XDG_CACHE_HOME:-$HOME/.cache}/canga/_canga"
 ```
 
-Generate it once, at install time, and source the cached file — never `eval` a
+This is the host build's; the sandbox build has no `completion` command. Generate
+it once, at install time, and source the cached file — never `eval` a
 generator on the shell startup path.
 
 `rm` and `reorder` complete **real stored ids**, each shown with its reminder's
@@ -529,7 +571,7 @@ attaches them to it, and never edits the release or its notes. The split exists
 to keep GitHub's generated notes, which is the reason to create the release
 there in the first place.
 
-Two things have to be installed. `gh` you already have, since it is how devctl
+Two things have to be installed. `gh` you already have, since it is how canga
 is installed. GoReleaser is pinned in the `Makefile` and installed once:
 
 ```sh
@@ -556,7 +598,8 @@ To publish a version:
    make release
    ```
 
-The last line reports what landed:
+The last line reports what landed: four `canga-host_` archives (darwin and
+linux, amd64 and arm64) and two `canga-sandbox_` archives (linux):
 
 ```
 release: v0.2.0 now carries 6 archives and checksums.txt
@@ -600,14 +643,14 @@ the workflow now that the local path exists, is still open.
 
 `make release` calls GoReleaser rather than packaging with `tar` and `shasum`,
 so `.goreleaser.yml` stays the single definition of the artifact format. The
-reason is `devctl upgrade`: it finds its asset by the `devctl_` prefix and the
+reason is `canga upgrade`: it finds its asset by the `canga-host_` prefix and the
 `_<os>_<arch>.tar.gz` suffix, and reads `checksums.txt` by exact filename. A second packaging
 implementation that drifted from the first would break upgrading, for whoever
 ran it next, rather than releasing, for whoever changed it.
 
 ### Commit hook
 
-`.devctl/hooks/pre-commit` runs `make pre-commit`, which applies every fix a
+`.canga/hooks/pre-commit` runs `make pre-commit`, which applies every fix a
 tool can apply on its own, and then refuses the commit if anything changed. It
 refuses rather than amending on purpose: a hook that rewrites files and lets the
 commit through commits something you never read.
@@ -615,13 +658,13 @@ commit through commits something you never read.
 Install it:
 
 ```sh
-devctl setup hooks
+canga setup hooks
 ```
 
-That points git's `core.hooksPath` at `.devctl/hooks`, which covers every hook
+That points git's `core.hooksPath` at `.canga/hooks`, which covers every hook
 at once and is undone with `git config --unset core.hooksPath`. git reads hooks
 from only one directory, so anything already in `.git/hooks` stops running;
-`devctl setup hooks` says so when that is the case, and `--symlink` links each
+`canga setup hooks` says so when that is the case, and `--symlink` links each
 hook individually instead, which keeps them.
 
 `--force` replaces a conflicting setting and moves any file in the way to
@@ -641,7 +684,7 @@ guards nothing.
 
 ## License
 
-    devctl, a developer control tool for repositories and sandboxes
+    canga, a developer control tool for repositories and sandboxes
     Copyright (C) 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 
     This program is free software: you can redistribute it and/or modify

@@ -108,7 +108,7 @@ func TestStore_ReadsAHandWrittenFile(t *testing.T) {
 	reminders := newTestStore(t)
 
 	// The point of one plain file per item: an editor, or another tool, can put
-	// one there and devctl lists it.
+	// one there and canga lists it.
 	require.NoError(t, writeItemFile(reminders, "hand-written", "dropped in by hand\n"))
 
 	items, err := reminders.List()

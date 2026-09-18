@@ -15,8 +15,8 @@ import (
 // says. Naming the key explicitly is the predictable answer: it is never derived
 // from the ssh-agent or from the repository being cloned.
 const (
-	envSigningKey     = "DEVCTL_SIGNING_KEY"
-	envAllowedSigners = "DEVCTL_ALLOWED_SIGNERS"
+	envSigningKey     = "CANGA_HOST_SIGNING_KEY"
+	envAllowedSigners = "CANGA_HOST_ALLOWED_SIGNERS"
 )
 
 // Signing reports what StampSigning wrote into a repository's local config.
@@ -92,7 +92,7 @@ func StampSigning(ctx context.Context, dir string) (Signing, error) {
 	// configuration is SSH signing by definition — it is what the key and the
 	// allowed-signers file are — so the clone says so instead of depending on
 	// the machine to have said it. The cost is deliberate: a machine that signs
-	// with GPG must not hand its key over through DEVCTL_SIGNING_KEY or a global
+	// with GPG must not hand its key over through CANGA_HOST_SIGNING_KEY or a global
 	// user.signingkey, because the clone will be configured for SSH regardless.
 	settings := [][2]string{
 		{"gpg.format", "ssh"},

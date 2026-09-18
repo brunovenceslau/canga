@@ -17,12 +17,12 @@ import (
 //
 // It is a runtime failure rather than a usage error: the command was well
 // formed, and the answer is to move or remove what is there, or to name another
-// directory. What it is NOT is a thing devctl resolves on its own — nothing here
+// directory. What it is NOT is a thing canga resolves on its own — nothing here
 // ever merges into or overwrites an existing tree.
 var ErrTargetNotEmpty = errors.New("refusing to clone into a non-empty path")
 
 // envBaseDir overrides the root of the deterministic clone layout.
-const envBaseDir = "DEVCTL_BASE_DIR"
+const envBaseDir = "CANGA_HOST_BASE_DIR"
 
 // clonePerm is what the PARENT directories of a clone are created with. git
 // creates the clone itself, under the caller's umask, and this does not touch it.
@@ -102,7 +102,7 @@ func Clone(ctx context.Context, url string, opts CloneOptions) (CloneResult, err
 }
 
 // TargetDir is where Clone puts a repository when no directory is named:
-// ${DEVCTL_BASE_DIR:-$HOME/src} joined with the URL's "<host>/<owner>/<repo>".
+// ${CANGA_HOST_BASE_DIR:-$HOME/src} joined with the URL's "<host>/<owner>/<repo>".
 //
 // The tail keeps its readable spelling here, and is deliberately NOT passed
 // through EscapePath the way the reminder store's directory is. A clone is a
@@ -126,9 +126,9 @@ func TargetDir(url string) (string, error) {
 
 // BaseDir is the root of the deterministic clone layout, as an absolute path.
 //
-// Absolute even when DEVCTL_BASE_DIR is not, because the derived path is
-// PRINTED for a caller to use: `cd $(devctl clone <url>)` from another directory
-// needs an answer that does not depend on where devctl was standing. It is also
+// Absolute even when CANGA_HOST_BASE_DIR is not, because the derived path is
+// PRINTED for a caller to use: `cd $(canga clone <url>)` from another directory
+// needs an answer that does not depend on where canga was standing. It is also
 // what makes the non-empty check and the clone itself agree about one place.
 func BaseDir() (string, error) {
 	dir := os.Getenv(envBaseDir)
@@ -168,7 +168,7 @@ func resolveTarget(url, dir string) (string, error) {
 // requireEmpty refuses a target that already holds something.
 //
 // An EXISTING EMPTY directory is accepted, which is not an oversight: `mkdir
-// ~/src/thing && devctl clone … ~/src/thing` is a normal thing to do, and git
+// ~/src/thing && canga clone … ~/src/thing` is a normal thing to do, and git
 // accepts it too.
 func requireEmpty(target string) error {
 	entries, err := os.ReadDir(target)

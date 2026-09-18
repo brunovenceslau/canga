@@ -7,16 +7,16 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/brunovenceslau/devctl/internal/store"
+	"github.com/brunovenceslau/canga/internal/store"
 	"github.com/spf13/cobra"
 )
 
 // Subcommand builds one `reminders` verb against an App.
 //
-// Each binary passes the verbs it exposes to NewRemindersCmd, so the set is a
-// decision made in one visible place per binary. agtctl leaves out rm and
-// reorder: an agent in a sandbox may read the list and add to it, but only the
-// person on the host removes or reorders their own reminders.
+// Each build passes the verbs it exposes to NewRemindersCmd, so the set is a
+// decision made in one visible place per build. The sandbox build leaves out
+// rm, reorder and path: an agent in a sandbox may read the list and add to it,
+// but only the person on the host removes or reorders their own reminders.
 type Subcommand func(*App) *cobra.Command
 
 // NewRemindersCmd builds the `reminders` command with the given verbs.
@@ -139,7 +139,13 @@ func RemindersPath(a *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				// Deliberately does not open the store: asking where something
-				// would live must not bring it into being.
+				// would live must not bring it into being. It does move a store
+				// the rename left behind, so the path printed is where the
+				// reminders actually are.
+				if err := a.ReconcileLegacyStore(cmd); err != nil {
+					return err
+				}
+
 				cfg, err := a.Config(cmd.Context())
 				if err != nil {
 					return err
@@ -199,7 +205,9 @@ func (a *App) completeIDs(
 	// A completion must never be noisy: outside a repository, or with no store
 	// yet, it offers nothing rather than printing a diagnostic into the line the
 	// user is still typing. The error is dropped for that reason alone.
-	_ = a.WithStore(cmd, func(reminders *store.Store) error {
+	// a.open, not WithStore: completion must never move the legacy store,
+	// because its stderr is discarded and nobody would learn it happened.
+	_ = a.open(cmd, store.OpenExisting, func(reminders *store.Store) error {
 		items, err := reminders.List()
 		if err != nil {
 			return err

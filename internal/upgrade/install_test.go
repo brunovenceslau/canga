@@ -12,19 +12,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeBinary is a program that reports version the way `devctl --version`
+// fakeBinary is a program that reports version the way `canga --version`
 // does. A shell script is enough: what the sanity check exercises is that the
 // staged file RUNS and answers for itself, not that it is an ELF.
 func fakeBinary(version string) []byte {
 	return []byte("#!/bin/sh\necho \"" + version + " (abc1234, go1.27.0)\"\n")
 }
 
-// installedBinary lays down a file standing in for the devctl being replaced,
+// installedBinary lays down a file standing in for the canga being replaced,
 // and returns its path.
 func installedBinary(t *testing.T, dir, version string) string {
 	t.Helper()
 
-	path := filepath.Join(dir, "devctl")
+	path := filepath.Join(dir, "canga")
 	require.NoError(t, os.WriteFile(path, fakeBinary(version), 0o755))
 
 	return path
@@ -34,7 +34,7 @@ func installedBinary(t *testing.T, dir, version string) string {
 func stagingLeftovers(t *testing.T, dir string) []string {
 	t.Helper()
 
-	left, err := filepath.Glob(filepath.Join(dir, ".devctl-upgrade-*"))
+	left, err := filepath.Glob(filepath.Join(dir, ".canga-upgrade-*"))
 	require.NoError(t, err)
 
 	return left
@@ -79,7 +79,7 @@ func TestReplace(t *testing.T) {
 		assert.Equal(t, defaultBinaryPerm, info.Mode().Perm(), "the replacement has to be executable")
 	})
 
-	// An upgrade changes the version, not the policy. A devctl deliberately
+	// An upgrade changes the version, not the policy. A canga deliberately
 	// kept private on a shared host must not come back world-executable.
 	t.Run("keeps the mode of the install it replaces", func(t *testing.T) {
 		t.Parallel()

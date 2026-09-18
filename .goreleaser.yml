@@ -4,17 +4,20 @@
 # GoReleaser — cross-compiled binaries attached to a GitHub release on a v* tag.
 version: 2
 
-project_name: devctl
+project_name: canga
 
 builds:
-  - id: devctl
-    main: ./cmd/devctl
-    binary: devctl
+  # Two builds of one binary name. canga's role is chosen at build time: each
+  # role is its own main package, and the sandbox one does not contain the
+  # host's commands, so an agent cannot reach them.
+  - id: host
+    main: ./cmd/host/canga
+    binary: canga
     env:
       - CGO_ENABLED=0
     # The macs are darwin/{arm64,amd64}. linux stays because the tests and the
     # cross-compile gate run there, and a release that builds for it proves
-    # nothing platform-specific crept into the host tool.
+    # nothing platform-specific crept into the host build.
     goos: [darwin, linux]
     goarch: [amd64, arm64]
     flags:
@@ -23,23 +26,17 @@ builds:
       - -s -w
       # {{.Tag}}, not {{.Version}}: Version drops the leading "v", so a release
       # used to report "0.1.0" while `make build` reported "v0.1.0" for the same
-      # commit. `devctl upgrade` compares these two spellings against each
+      # commit. `canga upgrade` compares these two spellings against each
       # other, and normalizes them for the releases already published — but one
       # spelling is what they should have been all along.
       - -X main.version={{.Tag}}
       - -X main.commit={{.Commit}}
 
-  # agtctl is the binary the agent sandboxes get. They are linux VMs, so linux
-  # is the whole platform list.
-  #
-  # devctl <= v0.3.0 picks an archive by platform suffix alone. On a mac the
-  # suffix still names exactly one file, because there is no darwin agtctl, so
-  # those versions keep upgrading there. On linux it names two, and a linux
-  # devctl <= v0.3.0 refuses the upgrade; the README's upgrade section says how
-  # to recover. Shipping agtctl for darwin would extend that to the macs.
-  - id: agtctl
-    main: ./cmd/agtctl
-    binary: agtctl
+  # The build the agent sandboxes get. They are linux VMs, so linux is the
+  # whole platform list.
+  - id: sandbox
+    main: ./cmd/sandbox/canga
+    binary: canga
     env:
       - CGO_ENABLED=0
     goos: [linux]
@@ -51,18 +48,19 @@ builds:
       - -X main.version={{.Tag}}
       - -X main.commit={{.Commit}}
 
-# One archive per binary. The binary's name leads each archive name, and
-# `devctl upgrade` selects its archive by that prefix, so the templates below
-# are part of that contract rather than cosmetics.
+# One archive per role. Both hold a file named canga, so the role in the
+# archive name is the only thing that tells them apart: `canga upgrade`
+# selects the canga-host_ archive by that prefix, and the sandbox kit pins a
+# canga-sandbox_ one. The templates below are part of that contract.
 archives:
-  - id: devctl
-    ids: [devctl]
+  - id: host
+    ids: [host]
     formats: [tar.gz]
-    name_template: "devctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-  - id: agtctl
-    ids: [agtctl]
+    name_template: "canga-host_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: sandbox
+    ids: [sandbox]
     formats: [tar.gz]
-    name_template: "agtctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "canga-sandbox_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt

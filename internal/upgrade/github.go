@@ -18,14 +18,14 @@ import (
 )
 
 // Where a release comes from. These are CONSTANTS on purpose: an environment
-// variable pointing devctl at another host would be a downgrade vector, since
+// variable pointing canga at another host would be a downgrade vector, since
 // whoever set it would decide which code this binary replaces itself with. The
 // only seam is Options.baseURL, which nothing outside this package's own tests
 // can reach.
 const (
 	apiBase    = "https://api.github.com"
 	apiOwner   = "brunovenceslau"
-	apiRepo    = "devctl"
+	apiRepo    = "canga"
 	apiVersion = "2022-11-28"
 )
 
@@ -76,13 +76,13 @@ type asset struct {
 	Size int64  `json:"size"`
 }
 
-// release is the subset of GitHub's release document devctl reads.
+// release is the subset of GitHub's release document canga reads.
 type release struct {
 	Tag    string  `json:"tag_name"`
 	Assets []asset `json:"assets"`
 }
 
-// client reads releases of the one repository devctl upgrades itself from.
+// client reads releases of the one repository canga upgrades itself from.
 type client struct {
 	http    *http.Client
 	token   string
@@ -99,7 +99,7 @@ func newClient(token, baseURL, current string) *client {
 		http:    &http.Client{Timeout: httpTimeout},
 		token:   token,
 		baseURL: strings.TrimSuffix(baseURL, "/"),
-		agent:   "devctl/" + normalizeTag(current),
+		agent:   "canga/" + normalizeTag(current),
 	}
 }
 

@@ -32,12 +32,12 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	envRole   = "DEVCTL_TEST_ROLE"
-	envStore  = "DEVCTL_TEST_STORE"
-	envWorker = "DEVCTL_TEST_WORKER"
-	envItems  = "DEVCTL_TEST_ITEMS"
-	envSpace  = "DEVCTL_TEST_SPACE"
-	envDone   = "DEVCTL_TEST_DONE"
+	envRole   = "CANGA_TEST_ROLE"
+	envStore  = "CANGA_TEST_STORE"
+	envWorker = "CANGA_TEST_WORKER"
+	envItems  = "CANGA_TEST_ITEMS"
+	envSpace  = "CANGA_TEST_SPACE"
+	envDone   = "CANGA_TEST_DONE"
 
 	roleWriter  = "writer"
 	roleReader  = "reader"
@@ -350,7 +350,7 @@ func pristineStore(t *testing.T) string {
 	//nolint:usetesting // t.TempDir takes no parent, and pointing the gates at a
 	// chosen filesystem is this helper's entire purpose. When no filesystem is
 	// chosen, parent IS t.TempDir above.
-	dir, err := os.MkdirTemp(parent, "devctl-gate-")
+	dir, err := os.MkdirTemp(parent, "canga-gate-")
 	require.NoError(t, err)
 
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })

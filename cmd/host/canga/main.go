@@ -1,8 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Command devctl is a developer control tool: small, deterministic operations
-// on the repositories and sandboxes a working day is spent in.
+// Command canga, in its host build, is the developer's side of canga: small,
+// deterministic operations on the repositories and sandboxes a working day is
+// spent in, and the owner of the reminders list.
+//
+// The sandbox build (cmd/sandbox/canga) shares the name and some commands. It
+// is a separate main package, so everything here that it must not have - this
+// package's clone, sync, setup and upgrade commands, and the hooks and upgrade
+// packages behind them - is simply not compiled into it.
 package main
 
 import (
@@ -12,11 +18,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
+	"github.com/brunovenceslau/canga/internal/cli"
 )
 
 // Stamped in by ldflags at build time; see the Makefile and .goreleaser.yml.
-// `devctl upgrade` compares a published release against version, so a build
+// `canga upgrade` compares a published release against version, so a build
 // that reported a hardcoded string would upgrade itself in circles.
 var (
 	version = "dev"
@@ -30,7 +36,7 @@ func main() {
 }
 
 func run() int {
-	// The cancelled context reaches every git subprocess devctl starts, so a
+	// The cancelled context reaches every git subprocess canga starts, so a
 	// Ctrl-C does not leave one behind.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -38,7 +44,7 @@ func run() int {
 	if err := newRootCmd().ExecuteContext(ctx); err != nil {
 		// SilenceErrors is on, so this is the ONLY place an error is printed,
 		// and it goes to stderr — stdout stays a clean, pipeable record stream.
-		fmt.Fprintf(os.Stderr, "devctl: %v\n", err)
+		fmt.Fprintf(os.Stderr, "canga: %v\n", err)
 
 		return exitCode(err)
 	}

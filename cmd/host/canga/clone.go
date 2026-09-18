@@ -6,8 +6,8 @@ package main
 import (
 	"os"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/repo"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/repo"
 	"github.com/spf13/cobra"
 )
 
@@ -15,13 +15,13 @@ func newCloneCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clone <url> [dir]",
 		Short: "Clone a repository into the deterministic layout",
-		Long: "clone puts a repository at ${DEVCTL_BASE_DIR:-$HOME/src} followed by the\n" +
+		Long: "clone puts a repository at ${CANGA_HOST_BASE_DIR:-$HOME/src} followed by the\n" +
 			"<host>/<owner>/<repo> derived from its URL, so a repository lands at the\n" +
 			"same path whatever protocol it was cloned with, on every machine. Name a\n" +
 			"directory to override that; a relative one is resolved against the\n" +
 			"current directory.\n\n" +
 			"The resolved path is printed on stdout and nothing else is, so `cd\n" +
-			"$(devctl clone <url>)` works. It refuses a target that already holds\n" +
+			"$(canga clone <url>)` works. It refuses a target that already holds\n" +
 			"anything, and never merges into or overwrites an existing tree.\n\n" +
 			"The clone is hardened at the transport level: the ext and fd remote\n" +
 			"helpers, which run a command, are turned off on the command line, so no\n" +
@@ -29,7 +29,7 @@ func newCloneCmd() *cobra.Command {
 			"GIT_ALLOW_PROTOCOL, which would otherwise outrank that. Objects are\n" +
 			"checked on both sides of the fetch.\n\n" +
 			"Afterwards SSH signing is written into the clone's own config, from\n" +
-			"DEVCTL_SIGNING_KEY and DEVCTL_ALLOWED_SIGNERS, or from the machine's\n" +
+			"CANGA_HOST_SIGNING_KEY and CANGA_HOST_ALLOWED_SIGNERS, or from the machine's\n" +
 			"global git config. When neither resolves nothing is stamped, and the\n" +
 			"command says whether git configuration outside the clone signs anyway.",
 		Args:              cli.UsageArgs(cobra.RangeArgs(1, 2)),
@@ -74,26 +74,26 @@ func reportSigning(cmd *cobra.Command, result repo.CloneResult) {
 	// reported rather than returned for that reason, and named precisely enough
 	// that one `git config` in that directory finishes the job.
 	if result.StampErr != nil {
-		cli.Fprintf(errOut, "devctl: warning: could not stamp signing config in %s: %v\n",
+		cli.Fprintf(errOut, "canga: warning: could not stamp signing config in %s: %v\n",
 			result.Dir, result.StampErr)
 
 		return
 	}
 
 	if result.Signing.Key != "" {
-		cli.Fprintf(errOut, "devctl: signing on (commit.gpgsign=true)\n")
+		cli.Fprintf(errOut, "canga: signing on (commit.gpgsign=true)\n")
 
 		return
 	}
 
 	if result.Signing.Inherited {
-		cli.Fprintf(errOut, "devctl: signing on (commit.gpgsign=true, inherited from git config "+
+		cli.Fprintf(errOut, "canga: signing on (commit.gpgsign=true, inherited from git config "+
 			"outside the clone)\n")
 
 		return
 	}
 
-	cli.Fprintf(errOut, "devctl: signing OFF — set DEVCTL_SIGNING_KEY or a global "+
+	cli.Fprintf(errOut, "canga: signing OFF — set CANGA_HOST_SIGNING_KEY or a global "+
 		"user.signingkey to sign here\n")
 }
 

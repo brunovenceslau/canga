@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Package repo owns the git working trees devctl operates on: their
+// Package repo owns the git working trees canga operates on: their
 // deterministic identity — the URL of the origin remote and the
 // "<host>/<owner>/<repo>" path tail every per-repo artifact is keyed by — and
 // the two operations that bring a tree into existence and advance it, Clone and
 // Sync.
 //
 // The tail is what makes the layout deterministic: the same three segments
-// address the clone on disk, the reminder store, and the planned `devctl open`,
+// address the clone on disk, the reminder store, and the planned `canga open`,
 // whatever protocol the repository was cloned with.
 //
 // dotfiles-host still carries the original zsh implementation (zsh/dev.zsh),
-// which is retired there once a devctl release is installed on both machines.
+// which is retired there once a canga release is installed on both machines.
 // Until then the derivation exists twice, and the two are cross-checked against
 // the same cases as its tests/dev_test.sh.
 package repo
@@ -43,7 +43,7 @@ var (
 	ErrGitMissing = errors.New("git is not installed")
 
 	// ErrNotARepository reports a directory that is not inside a git working
-	// tree. Every devctl subcommand is keyed by a repository, so this is the
+	// tree. Every canga subcommand is keyed by a repository, so this is the
 	// caller standing in the wrong place rather than anything having failed.
 	ErrNotARepository = errors.New("not inside a git repository")
 )
@@ -115,7 +115,7 @@ func CommonDir(ctx context.Context, dir string) (string, error) {
 // setting resolve Root first, which is where the real refusal happens.
 //
 // SetConfig, by contrast, writes LOCALLY. Reading what git will obey and
-// writing only where devctl was invited are deliberately different scopes.
+// writing only where canga was invited are deliberately different scopes.
 func Config(ctx context.Context, dir, key string) (value string, set bool, err error) {
 	out, err := gitCommand(ctx, dir, nil, []string{"config", "--get", key}).Output()
 	if err == nil {
@@ -136,7 +136,7 @@ func Config(ctx context.Context, dir, key string) (value string, set bool, err e
 // a flag on it. Config reads the EFFECTIVE value, so inside a repository it
 // reports that repository's own setting; this is asked for the identity of the
 // MACHINE — the signing key a new clone should inherit — and a repo-local key
-// belonging to whatever repository devctl happened to be invoked in is exactly
+// belonging to whatever repository canga happened to be invoked in is exactly
 // the wrong answer. Ported from zsh/dev.zsh, where the `--global` on those two
 // reads carries the same comment.
 func GlobalConfig(ctx context.Context, key string) (string, error) {

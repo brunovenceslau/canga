@@ -4,8 +4,8 @@
 package main
 
 import (
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/repo"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/repo"
 	"github.com/spf13/cobra"
 )
 
@@ -48,7 +48,7 @@ func reportSync(cmd *cobra.Command, dir string, result repo.SyncResult) {
 	errOut := cmd.ErrOrStderr()
 
 	if result.Dirty {
-		cli.Fprintf(errOut, "devctl: skip (dirty working tree): %s\n", dir)
+		cli.Fprintf(errOut, "canga: skip (dirty working tree): %s\n", dir)
 
 		return
 	}
@@ -64,12 +64,12 @@ func reportSync(cmd *cobra.Command, dir string, result repo.SyncResult) {
 			// incoming commit that would overwrite an untracked file both land
 			// here, and "not a fast-forward" would send the user looking for
 			// something that is not there.
-			cli.Fprintf(errOut, "devctl: skip %s: %v\n", branch.Branch, branch.Refusal)
+			cli.Fprintf(errOut, "canga: skip %s: %v\n", branch.Branch, branch.Refusal)
 
 		case repo.BranchUpstreamGone:
 			// Reported, not dropped: the upstream was usually deleted after a
 			// merge, and the branch may still hold commits that were not.
-			cli.Fprintf(errOut, "devctl: skip %s: upstream %s is gone\n", branch.Branch, branch.Upstream)
+			cli.Fprintf(errOut, "canga: skip %s: upstream %s is gone\n", branch.Branch, branch.Upstream)
 
 		case repo.BranchUpToDate:
 			// Silent on purpose: a branch with nothing to bring in is the

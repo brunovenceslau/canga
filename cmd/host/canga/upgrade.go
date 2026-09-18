@@ -4,8 +4,8 @@
 package main
 
 import (
-	"github.com/brunovenceslau/devctl/internal/cli"
-	"github.com/brunovenceslau/devctl/internal/upgrade"
+	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/upgrade"
 	"github.com/spf13/cobra"
 )
 
@@ -15,7 +15,7 @@ func newUpgradeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Replace this binary with a published release",
-		Long: "upgrade downloads the newest devctl release and replaces the running\n" +
+		Long: "upgrade downloads the newest canga release and replaces the running\n" +
 			"binary with it, in place.\n\n" +
 			"This is NOT dotfiles-upgrade. That one fetches git and updates a\n" +
 			"checkout; this one swaps an executable file for a release artifact.\n\n" +
@@ -55,7 +55,7 @@ func newUpgradeCmd() *cobra.Command {
 }
 
 // reportUpgrade prints what a run did. Only the release tag goes to stdout, one
-// line, so `v=$(devctl upgrade)` is the version that is now installed;
+// line, so `v=$(canga upgrade)` is the version that is now installed;
 // everything else is a diagnostic and belongs on stderr.
 func reportUpgrade(cmd *cobra.Command, options upgrade.Options, result upgrade.Result, failure error) {
 	// Nothing was resolved, so there is nothing to say that the error itself
@@ -69,26 +69,26 @@ func reportUpgrade(cmd *cobra.Command, options upgrade.Options, result upgrade.R
 	// Said whenever the two differ, because the file being replaced is then not
 	// the path the user typed — ~/.local/bin is full of symlinks.
 	if result.Invoked != "" {
-		cli.Fprintf(errOut, "devctl: %s resolves to %s\n", result.Invoked, result.Path)
+		cli.Fprintf(errOut, "canga: %s resolves to %s\n", result.Invoked, result.Path)
 	}
 
 	switch {
 	case failure != nil:
 		// The error itself follows, from main. What this adds is how far the run
 		// got, which the error does not carry.
-		cli.Fprintf(errOut, "devctl: stopped while installing %s over %s\n", result.Release, result.Path)
+		cli.Fprintf(errOut, "canga: stopped while installing %s over %s\n", result.Release, result.Path)
 
 		return
 	case result.Installed:
-		cli.Fprintf(errOut, "devctl: installed %s over %s at %s\n", result.Release, result.Current, result.Path)
+		cli.Fprintf(errOut, "canga: installed %s over %s at %s\n", result.Release, result.Current, result.Path)
 	case options.Check:
-		cli.Fprintf(errOut, "devctl: %s\n", checkSummary(result))
+		cli.Fprintf(errOut, "canga: %s\n", checkSummary(result))
 		// On its own line, and on BOTH branches. Saying what would happen
 		// without saying where is half an answer, and the file replaced is
 		// resolved through symlinks, so it is not always the path that was typed.
-		cli.Fprintf(errOut, "devctl: it would replace %s\n", result.Path)
+		cli.Fprintf(errOut, "canga: it would replace %s\n", result.Path)
 	default:
-		cli.Fprintf(errOut, "devctl: %s is the newest release; nothing to do\n", result.Release)
+		cli.Fprintf(errOut, "canga: %s is the newest release; nothing to do\n", result.Release)
 	}
 
 	cli.Printf(cmd, "%s\n", result.Release)
@@ -97,7 +97,7 @@ func reportUpgrade(cmd *cobra.Command, options upgrade.Options, result upgrade.R
 // checkSummary is the line --check prints above the path.
 func checkSummary(result upgrade.Result) string {
 	if result.Newer {
-		return result.Release + " is available, " + result.Current + " is installed; run `devctl upgrade`"
+		return result.Release + " is available, " + result.Current + " is installed; run `canga upgrade`"
 	}
 
 	return result.Release + " is the newest release, " + result.Current + " is installed"

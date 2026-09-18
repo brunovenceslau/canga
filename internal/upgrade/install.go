@@ -18,7 +18,7 @@ import (
 
 // defaultBinaryPerm is what a replacement is left as when there is nothing to
 // inherit from. The archive's own mode is deliberately not honoured: what
-// devctl writes is devctl's decision, not the archive's.
+// canga writes is canga's decision, not the archive's.
 const defaultBinaryPerm fs.FileMode = 0o755
 
 // ownerExec is the one bit an install cannot do without. Whatever else is
@@ -40,8 +40,8 @@ const execTimeout = 30 * time.Second
 // How many times the sanity check retries ETXTBSY, and how long it waits first.
 //
 // "text file busy" is what the kernel answers when a file is executed while
-// some process still holds it open for writing. devctl closes the staged file
-// before running it, so the writer is never devctl itself: it is a fork that
+// some process still holds it open for writing. canga closes the staged file
+// before running it, so the writer is never canga itself: it is a fork that
 // happened to inherit another thread's write descriptor in the window before
 // its exec. That is a race against the runtime, not a property of the file,
 // and it was MEASURED here — the parallel install tests reproduced it — rather
@@ -54,7 +54,7 @@ const (
 
 // ErrWrongBinary reports a staged file that does not run, or does not report
 // the version it was downloaded as. It is the check that turns a wrong-platform
-// download into a refusal instead of an unusable devctl on PATH.
+// download into a refusal instead of an unusable canga on PATH.
 var ErrWrongBinary = errors.New("the downloaded binary does not report the expected version")
 
 // target resolves the file this process is running from.
@@ -65,7 +65,7 @@ var ErrWrongBinary = errors.New("the downloaded binary does not report the expec
 // and break that layer's contract.
 //
 // invoked is the unresolved path, and it is reported only when it differs —
-// which depends on the operating system, not on how devctl was invoked. On
+// which depends on the operating system, not on how canga was invoked. On
 // linux os.Executable reads /proc/self/exe, which the kernel has ALREADY
 // resolved, so the two are always equal there and nothing is reported even when
 // a symlink was used. On darwin the kernel hands back the path as given, so a
@@ -74,7 +74,7 @@ var ErrWrongBinary = errors.New("the downloaded binary does not report the expec
 func target() (path, invoked string, err error) {
 	invoked, err = os.Executable()
 	if err != nil {
-		return "", "", fmt.Errorf("locate the running devctl: %w", err)
+		return "", "", fmt.Errorf("locate the running canga: %w", err)
 	}
 
 	path, err = filepath.EvalSymlinks(invoked)
@@ -103,7 +103,7 @@ func target() (path, invoked string, err error) {
 // unix the running process keeps its own inode alive, so replacing the file
 // under it is safe.
 func replace(ctx context.Context, path string, binary []byte, wantTag string) (err error) {
-	staged, err := os.CreateTemp(filepath.Dir(path), ".devctl-upgrade-*")
+	staged, err := os.CreateTemp(filepath.Dir(path), ".canga-upgrade-*")
 	if err != nil {
 		return fmt.Errorf("stage a new binary beside %s: %w", path, err)
 	}
@@ -115,7 +115,7 @@ func replace(ctx context.Context, path string, binary []byte, wantTag string) (e
 	// return, which is worse for being invisible.
 	defer func() { _ = staged.Close() }()
 
-	// A run that fails must leave NOTHING behind: a stale .devctl-upgrade-*
+	// A run that fails must leave NOTHING behind: a stale .canga-upgrade-*
 	// beside the binary is confusing at best and executable at worst.
 	defer func() {
 		if err != nil {
@@ -142,7 +142,7 @@ func replace(ctx context.Context, path string, binary []byte, wantTag string) (e
 // replaces already carries.
 //
 // Inheriting rather than imposing 0o755 is the difference between an upgrade
-// and a quiet policy change. A devctl deliberately installed 0o700 on a shared
+// and a quiet policy change. A canga deliberately installed 0o700 on a shared
 // host would otherwise become world-executable on the first upgrade, with
 // nothing said about it — a decision the user made, undone by a command that
 // was only asked to change the version.
@@ -184,7 +184,7 @@ func writeStaged(staged *os.File, binary []byte, perm fs.FileMode) error {
 //
 // It runs only AFTER the checksum has been verified — never before — so this is
 // not a new trust decision, it is a last check that the file is what it claims:
-// a binary for the wrong platform, or an archive entry that is not devctl at
+// a binary for the wrong platform, or an archive entry that is not canga at
 // all, fails here instead of after it has taken the place of a working install.
 // The version it prints comes from the new binary itself, so what the command
 // reports afterwards is observed rather than assumed.
@@ -197,8 +197,8 @@ func verifyRuns(ctx context.Context, path, wantTag string) error {
 		return fmt.Errorf("%w: %s did not run: %w", ErrWrongBinary, filepath.Base(path), err)
 	}
 
-	// `devctl --version` prints "<version> (<commit>, <goversion>)", so the
-	// first field is the whole of the claim being checked.
+	// `canga --version` prints "<version> (<role>, <commit>, <goversion>)", so
+	// the first field is the whole of the claim being checked.
 	reported, _, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
 	if !sameTag(reported, wantTag) {
 		return fmt.Errorf("%w: it reports %q, not %s", ErrWrongBinary, reported, wantTag)

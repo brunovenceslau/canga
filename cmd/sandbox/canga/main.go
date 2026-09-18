@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Command agtctl is devctl's counterpart for the agents inside a sandbox.
+// Command canga, in its sandbox build, is what an agent inside a sandbox runs.
 //
-// It is a separate binary rather than devctl with some commands hidden, so
-// that what an agent can do is decided by what was compiled in: a sandbox that
-// only has agtctl cannot clone, sync, install hooks or replace a binary, and
-// can read and add reminders but not remove or reorder them.
+// It is the same binary name as the host build and a different program: this
+// package imports only the reminders commands, so what an agent can do is
+// decided by what was compiled in. It cannot clone, sync, install hooks or
+// replace a binary, and it can read and add reminders but not remove or
+// reorder them. Choosing the role at runtime instead would hand those commands
+// to anyone who could set a variable.
 package main
 
 import (
@@ -16,7 +18,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/brunovenceslau/devctl/internal/cli"
+	"github.com/brunovenceslau/canga/internal/cli"
 )
 
 // Stamped in by ldflags at build time; see the Makefile and .goreleaser.yml.
@@ -40,7 +42,7 @@ func run() int {
 	if err := newRootCmd().ExecuteContext(ctx); err != nil {
 		// SilenceErrors is on, so this is the ONLY place an error is printed,
 		// and it goes to stderr — stdout stays a clean, pipeable record stream.
-		fmt.Fprintf(os.Stderr, "agtctl: %v\n", err)
+		fmt.Fprintf(os.Stderr, "canga: %v\n", err)
 
 		return cli.ExitCode(err)
 	}
