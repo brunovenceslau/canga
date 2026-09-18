@@ -70,6 +70,17 @@ var (
 	// repository has no reminders yet", which is an ordinary state, from "a file
 	// under the store vanished", which is not.
 	ErrNoStore = errors.New("no reminder store")
+
+	// ErrSymlinkedStore reports a store directory that is itself a symbolic
+	// link. os.Root keeps every path BELOW the directory inside it, but the
+	// directory's own path is followed, so a link there would carry every
+	// read and write to wherever it points.
+	ErrSymlinkedStore = errors.New("reminder store directory is a symbolic link")
+
+	// errStoreReplaced reports a store directory swapped for another between
+	// the symlink check and the open. Unexported: no caller acts on it
+	// differently, and it exists so the test can name the refusal it expects.
+	errStoreReplaced = errors.New("reminder store directory was replaced while it was being opened")
 )
 
 // Config is the identity of a store. Every field is required: Dir says where
@@ -128,6 +139,13 @@ func open(cfg Config, create bool, opts []Option) (*Store, error) {
 		return nil, errors.New("store: no directory configured")
 	}
 
+	// Refused BEFORE MkdirAll and OpenRoot, the two calls that would follow
+	// the link. Checked here, a dangling link is named for what it is instead
+	// of surfacing as MkdirAll's "file exists" or as an empty store.
+	if err := refuseSymlink(cfg.Dir); err != nil {
+		return nil, err
+	}
+
 	// The tree is created BEFORE the root is opened, since os.Root can only
 	// contain paths beneath a directory that already exists.
 	if create {
@@ -143,6 +161,12 @@ func open(cfg Config, create bool, opts []Option) (*Store, error) {
 		}
 
 		return nil, fmt.Errorf("open store: %w", err)
+	}
+
+	if err := checkRoot(root, cfg.Dir); err != nil {
+		_ = root.Close()
+
+		return nil, err
 	}
 
 	// Created even when the caller did not ask for a new store: a store dir left
@@ -161,6 +185,54 @@ func open(cfg Config, create bool, opts []Option) (*Store, error) {
 	}
 
 	return store, nil
+}
+
+// refuseSymlink fails when dir is a symbolic link, dangling or not. A missing
+// dir passes: Open goes on to create it, and OpenExisting to answer ErrNoStore.
+// Only dir itself is checked. A link higher up the path, such as a symlinked
+// ~/.local/share, is the user's own layout and stays legal.
+func refuseSymlink(dir string) error {
+	info, err := os.Lstat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s", ErrSymlinkedStore, dir)
+	}
+
+	return nil
+}
+
+// checkRoot confirms that root is the directory at dir NOW, reached without a
+// link. refuseSymlink alone leaves a window between its Lstat and OpenRoot, in
+// which a link can be swapped in and back out again. Comparing the open handle
+// with a fresh Lstat closes it: the handle pins its directory's identity for
+// as long as it is open, and a link never shares that identity.
+func checkRoot(root *os.Root, dir string) error {
+	opened, err := root.Stat(".")
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+
+	current, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+
+	if current.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s", ErrSymlinkedStore, dir)
+	}
+
+	if !os.SameFile(opened, current) {
+		return fmt.Errorf("%w: %s", errStoreReplaced, dir)
+	}
+
+	return nil
 }
 
 // Close releases the store's directory handle.
