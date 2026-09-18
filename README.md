@@ -605,13 +605,17 @@ Before you start:
 
 - The sandbox has `curl`, from its image or from a kit listed before this one.
   The kit stops with `canga: curl is not installed` when it is missing.
-- sbx accepts kits from GitHub. By default it loads kits from `docker.io/`
-  only. This command replaces the whole list, so repeat any source you already
-  allow:
+- sbx allows kits from this repository's owner. By default sbx loads kits
+  from `docker.io/` only, and refuses this kit until `kit.allowedSources`
+  names `github.com/brunovenceslau/`. The command replaces the whole list, so
+  repeat every source you already allow:
 
   ```sh
   sbx settings set kit.allowedSources '["docker.io/","github.com/brunovenceslau/"]'
   ```
+
+  `'["*"]'` also works, and allows kits from any remote source. Prefer the
+  narrow entry.
 
 To add the kit:
 
@@ -621,14 +625,23 @@ To add the kit:
    git ls-remote https://github.com/brunovenceslau/canga.git refs/heads/main
    ```
 
-2. List the kit in your environment file, with that commit as `ref`:
+2. Check that sbx accepts the kit at that commit:
+
+   ```sh
+   sbx kit validate "git+https://github.com/brunovenceslau/canga.git#ref=<commit>&dir=sbx-kit"
+   ```
+
+   An allowlist problem shows up here instead of when the sandbox starts. See
+   [sbx says the kit's source is not in your allowlist](#sbx-says-the-kits-source-is-not-in-your-allowlist).
+
+3. List the kit in your environment file, with that commit as `ref`:
 
    ```yaml
    kits:
      - git+https://github.com/brunovenceslau/canga.git#ref=<commit>&dir=sbx-kit
    ```
 
-3. Start the sandbox. The kit's install step ends by printing
+4. Start the sandbox. The kit's install step ends by printing
    `canga --version`, such as `v0.8.0 (sandbox, <commit>, <go>)`.
 
 Pin a commit rather than a branch or a tag. The kit's release pin moves in a
@@ -640,6 +653,27 @@ needs the mount and the variable described in
 [How a sandbox shares the host's list](#how-a-sandbox-shares-the-hosts-list).
 The kit does not register a Claude Code hook: sbx manages the sandbox's
 `~/.claude/settings.json`, and a kit has no field for hooks.
+
+#### sbx says the kit's source is not in your allowlist
+
+`sbx kit validate`, and any command that loads the kit, refuses it when
+`kit.allowedSources` does not name `github.com/brunovenceslau/`:
+
+```
+INVALID: kit "git+https://github.com/brunovenceslau/canga.git#ref=<commit>&dir=sbx-kit" cannot be installed — its source is not in your allowlist.
+
+Your current kit.allowedSources:
+  - docker.io/
+...
+ERROR: artifact validation failed
+```
+
+The message lists your current allowlist. Add `github.com/brunovenceslau/` to
+it, keeping every entry it already lists, then run the command again:
+
+```sh
+sbx settings set kit.allowedSources '["docker.io/","github.com/brunovenceslau/"]'
+```
 
 ### Upgrade it in a sandbox
 
