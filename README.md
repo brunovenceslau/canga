@@ -548,7 +548,7 @@ commands sat at the top level. What changed, and what you do:
 | `${XDG_DATA_HOME}/devctl/reminders` | `${XDG_DATA_HOME}/canga/reminders` | Nothing, if you run any `canga reminders` command on the host before starting a sandbox that mounts the new path: that command moves the store in one rename and says so on stderr. |
 | `DEVCTL_REMINDERS_DIR` | `CANGA_REMINDERS_DIR` | Rename it in each sandbox environment file, together with the mount path. The old name is not read. |
 | `DEVCTL_BASE_DIR`, `DEVCTL_SIGNING_KEY`, `DEVCTL_ALLOWED_SIGNERS` | `CANGA_HOST_BASE_DIR`, `CANGA_HOST_SIGNING_KEY`, `CANGA_HOST_ALLOWED_SIGNERS` | Rename them wherever you set them. |
-| `canga clone`, `canga sync`, `canga setup hooks` (v0.5.0) | `canga git clone`, `canga git sync`, `canga git setup-hooks` | Use the new names wherever you call them. The old names were removed, not aliased, and fail as an unknown command with exit `2`. |
+| `canga clone`, `canga sync`, `canga setup hooks` (v0.5.0) | `canga git clone`, `canga git sync`, `canga git setup-hooks` | Use the new names wherever you call them. The old names were removed, not aliased, and fail with a usage error (exit `2`). |
 | `.devctl/hooks` | `.canga/hooks` | Move the directory and run `canga git setup-hooks`. It replaces its own earlier setup without `--force`: a `core.hooksPath` of `.devctl/hooks`, or, with `--symlink`, links into `.devctl/hooks`. |
 
 The store moves only when the old directory exists, the new one does not, and
