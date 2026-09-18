@@ -23,7 +23,7 @@ const role = "sandbox"
 // lives instead of reporting an unknown command, and no host code is compiled
 // in to back them.
 var hostOnly = map[string][]string{
-	"":          {"clone", "completion", "setup", "sync", "upgrade"},
+	"":          {"completion", "git", "upgrade"},
 	"reminders": {"path", "reorder", "rm"},
 }
 

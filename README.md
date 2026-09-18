@@ -10,7 +10,7 @@ working day:
 
 | Build | Runs on | What it does |
 | --- | --- | --- |
-| host | your Mac (darwin and linux builds) | clone, sync, reminders, git hook setup, its own upgrade |
+| host | your Mac (darwin and linux builds) | `git` (clone, sync, hook setup), reminders, its own upgrade |
 | sandbox | inside an agent sandbox (linux) | reminders `list` and `add`, nothing else |
 
 Both builds are named `canga` and share one reminders list. The role is fixed
@@ -145,17 +145,17 @@ file it extracts, so the `canga` it leaves next to the archive is quarantined
 and stays so when you move it. Extracting the same archive with `tar` on the
 command line does not.
 
-## `canga clone`
+## `canga git clone`
 
 Clones a repository into the deterministic layout, so the same repository lands
 at the same path on every machine, whichever protocol you cloned it with.
 
 ```sh
-canga clone git@github.com:acme/widget.git
+canga git clone git@github.com:acme/widget.git
 # → ~/src/github.com/acme/widget
 
-cd "$(canga clone https://github.com/acme/widget)"
-canga clone https://github.com/acme/widget /tmp/scratch   # an explicit target
+cd "$(canga git clone https://github.com/acme/widget)"
+canga git clone https://github.com/acme/widget /tmp/scratch   # an explicit target
 ```
 
 The resolved path is the only thing printed on stdout. git's progress and every
@@ -222,7 +222,7 @@ config: the allowed-signers file when one resolves, and `gpg.format=ssh`,
 `gpg.format` is written rather than inherited. git's default format is openpgp,
 so on a machine that does not set `gpg.format=ssh` globally, a stamped SSH key
 would fail every commit with `gpg: skipped "…": No secret key`. The consequence
-is deliberate: a clone made by `canga clone` signs with SSH, so do not hand a
+is deliberate: a clone made by `canga git clone` signs with SSH, so do not hand a
 GPG key to `CANGA_HOST_SIGNING_KEY` or leave one in the global `user.signingkey` and
 expect it to be used here.
 
@@ -237,18 +237,18 @@ turns `commit.gpgsign` on. A sandbox is that case: its `/etc/gitconfig` carries
 the format, the flag and a key command, and no `user.signingkey`. Otherwise it
 reports `signing OFF` and names what to set.
 
-## `canga sync`
+## `canga git sync`
 
 Fetches every remote with `--prune` and `--tags`, then fast-forwards each local
 branch that tracks an upstream.
 
 ```sh
-canga sync                                  # the repository you are standing in
-canga sync -C ~/src/github.com/acme/widget  # or any other
+canga git sync                                  # the repository you are standing in
+canga git sync -C ~/src/github.com/acme/widget  # or any other
 
 # a sweep across every clone in the layout
 find ~/src -name .git -maxdepth 4 -type d -exec dirname {} \; | while read -r r; do
-  canga sync -C "$r"
+  canga git sync -C "$r"
 done
 ```
 
@@ -289,7 +289,7 @@ advances with `git fetch . <upstream>:<branch>`, and the missing `+` in front of
 that refspec is the safety property itself: without it git refuses a non
 fast-forward update instead of overwriting the branch.
 
-The fetch carries the same transport hardening as `canga clone`.
+The fetch carries the same transport hardening as `canga git clone`.
 
 ## `canga upgrade`
 
@@ -474,10 +474,10 @@ than the current directory.
 
 ### What it leaves out
 
-The sandbox build has no `clone`, `sync`, `setup`, `upgrade` or `completion`,
-and no `reminders rm`, `reorder` or `path`. An agent may surface the list and
-record an idea, but the list belongs to the person on the host, so only the
-host build removes or reorders it.
+The sandbox build has no `git`, `upgrade` or `completion`, and no `reminders
+rm`, `reorder` or `path`. An agent may surface the list and record an idea, but
+the list belongs to the person on the host, so only the host build removes or
+reorders it.
 
 Those commands are not compiled into the sandbox build. Running one refuses
 with exit `2` and says where it lives, and help does not list them:
@@ -539,7 +539,8 @@ definition runs the same binary. `canga --version` prints the version, the role
 
 ## Moving from devctl and agtctl
 
-canga was two binaries, `devctl` and `agtctl`. What changed, and what you do:
+canga was two binaries, `devctl` and `agtctl`, and up to v0.5.0 its git
+commands sat at the top level. What changed, and what you do:
 
 | Before | Now | What to do |
 | --- | --- | --- |
@@ -547,7 +548,8 @@ canga was two binaries, `devctl` and `agtctl`. What changed, and what you do:
 | `${XDG_DATA_HOME}/devctl/reminders` | `${XDG_DATA_HOME}/canga/reminders` | Nothing, if you run any `canga reminders` command on the host before starting a sandbox that mounts the new path: that command moves the store in one rename and says so on stderr. |
 | `DEVCTL_REMINDERS_DIR` | `CANGA_REMINDERS_DIR` | Rename it in each sandbox environment file, together with the mount path. The old name is not read. |
 | `DEVCTL_BASE_DIR`, `DEVCTL_SIGNING_KEY`, `DEVCTL_ALLOWED_SIGNERS` | `CANGA_HOST_BASE_DIR`, `CANGA_HOST_SIGNING_KEY`, `CANGA_HOST_ALLOWED_SIGNERS` | Rename them wherever you set them. |
-| `.devctl/hooks` | `.canga/hooks` | Move the directory and run `canga setup hooks`. It replaces its own earlier setup without `--force`: a `core.hooksPath` of `.devctl/hooks`, or, with `--symlink`, links into `.devctl/hooks`. |
+| `canga clone`, `canga sync`, `canga setup hooks` (v0.5.0) | `canga git clone`, `canga git sync`, `canga git setup-hooks` | Use the new names wherever you call them. The old names were removed, not aliased, and fail with a usage error (exit `2`). |
+| `.devctl/hooks` | `.canga/hooks` | Move the directory and run `canga git setup-hooks`. It replaces its own earlier setup without `--force`: a `core.hooksPath` of `.devctl/hooks`, or, with `--symlink`, links into `.devctl/hooks`. |
 
 The store moves only when the old directory exists, the new one does not, and
 `CANGA_REMINDERS_DIR` is unset. If the rename fails, the command stops rather
@@ -572,7 +574,7 @@ generator on the shell startup path.
 `rm` and `reorder` complete **real stored ids**, each shown with its reminder's
 first line as the description.
 
-`-C` and `clone`'s optional target complete directories only. `clone`'s URL
+`-C` and `git clone`'s optional target complete directories only. Its URL
 position completes nothing: a half-typed URL is not a path, and a shell that
 fell back to file completion there would offer the current directory's
 contents.
@@ -696,13 +698,13 @@ commit through commits something you never read.
 Install it:
 
 ```sh
-canga setup hooks
+canga git setup-hooks
 ```
 
 That points git's `core.hooksPath` at `.canga/hooks`, which covers every hook
 at once and is undone with `git config --unset core.hooksPath`. git reads hooks
 from only one directory, so anything already in `.git/hooks` stops running;
-`canga setup hooks` says so when that is the case, and `--symlink` links each
+`canga git setup-hooks` says so when that is the case, and `--symlink` links each
 hook individually instead, which keeps them.
 
 `--force` replaces a conflicting setting and moves any file in the way to

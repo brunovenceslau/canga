@@ -13,12 +13,16 @@ import (
 	"github.com/brunovenceslau/canga/internal/testrepo"
 
 	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // remindersCmd is the subcommand every test below drives.
 const remindersCmd = "reminders"
+
+// gitCmd is the group that holds clone, sync and setup-hooks, spelled once.
+const gitCmd = "git"
 
 // execute runs one canga invocation against a FRESH command tree — cobra
 // accumulates flag state across Execute calls, so reusing one would leak the
@@ -71,6 +75,7 @@ func TestRoot_UsageErrors(t *testing.T) {
 		{name: "add with no text", args: []string{remindersCmd, "add"}},
 		{name: "rm with no id", args: []string{remindersCmd, "rm"}},
 		{name: "path with too many ids", args: []string{remindersCmd, "path", "a", "b"}},
+		{name: "unknown git subcommand", args: []string{gitCmd, "bogus"}},
 	}
 
 	for _, tt := range tests {
@@ -96,7 +101,7 @@ func TestRoot_OutsideARepository(t *testing.T) {
 
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestRoot_BareCommandsPrintHelp(t *testing.T) {
-	for _, args := range [][]string{{}, {remindersCmd}} {
+	for _, args := range [][]string{{}, {remindersCmd}, {gitCmd}} {
 		out, err := execute(t, args...)
 		require.NoError(t, err)
 		assert.Contains(t, out, "Usage:")
@@ -111,13 +116,66 @@ func TestRoot_RegistersEveryRemindersVerb(t *testing.T) {
 
 	reminders, _, err := newRootCmd().Find([]string{remindersCmd})
 	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"add", "list", "rm", "path", "reorder"}, commandNames(reminders))
+}
 
-	names := make([]string, 0, len(reminders.Commands()))
-	for _, sub := range reminders.Commands() {
+// TestRoot_OldGitNamesAreGone: the names the git commands had before the
+// group are removed, not aliased, so each is an unknown command. Every
+// argument points into a temporary directory and git is isolated, so a
+// regression that brought one back fails here without cloning, fetching or
+// touching the developer's own repositories.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
+func TestRoot_OldGitNamesAreGone(t *testing.T) {
+	hermeticGit(t)
+	t.Setenv("CANGA_HOST_BASE_DIR", t.TempDir())
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	target := filepath.Join(t.TempDir(), "target")
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "clone", args: []string{"clone", missing, target}},
+		{name: "sync", args: []string{"sync", "-C", t.TempDir()}},
+		{name: "setup", args: []string{"setup", "hooks", "-C", t.TempDir()}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := execute(t, tt.args...)
+			require.Error(t, err)
+			assert.Equal(t, cli.ExitUsage, exitCode(err))
+			assert.Contains(t, err.Error(), `unknown command "`+tt.name+`" for "canga"`)
+			assert.NoDirExists(t, target)
+		})
+	}
+}
+
+// TestRoot_CommandTree pins the root's commands and the git group's. The
+// sandbox build refuses host-only commands by name, one stub per root
+// command, so a command added to the root here needs a stub there; adding it
+// under git needs nothing. Both halves are checked so neither drifts silently.
+func TestRoot_CommandTree(t *testing.T) {
+	t.Parallel()
+
+	root := newRootCmd()
+	assert.ElementsMatch(t, []string{gitCmd, remindersCmd, "upgrade"}, commandNames(root))
+
+	git, _, err := root.Find([]string{gitCmd})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"clone", "setup-hooks", "sync"}, commandNames(git))
+}
+
+// commandNames lists a command's direct subcommands by name.
+func commandNames(cmd *cobra.Command) []string {
+	names := make([]string, 0, len(cmd.Commands()))
+	for _, sub := range cmd.Commands() {
 		names = append(names, sub.Name())
 	}
 
-	assert.ElementsMatch(t, []string{"add", "list", "rm", "path", "reorder"}, names)
+	return names
 }
 
 // TestCompletionScript asserts the generated completion rather than eyeballing

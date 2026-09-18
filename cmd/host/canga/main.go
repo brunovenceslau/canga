@@ -7,8 +7,8 @@
 //
 // The sandbox build (cmd/sandbox/canga) shares the name and some commands. It
 // is a separate main package, so everything here that it must not have - this
-// package's clone, sync, setup and upgrade commands, and the hooks and upgrade
-// packages behind them - is simply not compiled into it.
+// package's git and upgrade commands, and the hooks and upgrade packages
+// behind them - is simply not compiled into it.
 package main
 
 import (

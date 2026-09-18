@@ -25,7 +25,7 @@ const envAllowProtocol = "GIT_ALLOW_PROTOCOL"
 //
 // They are passed as command-line `-c` options, and that is the whole point: a
 // -c option overrides even a config file setting `protocol.ext.allow=always`, so
-// `canga clone ext::…` cannot reach the remote-helper transport — which
+// `canga git clone ext::…` cannot reach the remote-helper transport — which
 // executes a shell command — however the host's git config is written. The one
 // environment variable that outranks them is handled by gitEnv. Only the
 // documented schemes (ssh, https, scp-like) are meant to travel. `file` is
@@ -171,7 +171,7 @@ func gitArgs(dir string, flags, args []string) []string {
 func classify(ctx context.Context, dir string, refused, err error) error {
 	// Operation-neutral: classify is shared by every git call, and naming one
 	// of them would report an operation that never ran. A Ctrl-C during
-	// `canga setup hooks` used to say "reading the origin".
+	// `canga git setup-hooks` used to say "reading the origin".
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("running git in %s: %w", dir, ctxErr)
 	}

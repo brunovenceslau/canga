@@ -60,7 +60,7 @@ func cloneSource(t *testing.T) string {
 	return dir
 }
 
-// The path is printed so that `cd $(canga clone <url>)` works, which it only
+// The path is printed so that `cd $(canga git clone <url>)` works, which it only
 // does if NOTHING else reaches stdout — not git's progress, not the signing
 // line, not a warning.
 func TestCloneCmd_PrintsOnlyThePathOnStdout(t *testing.T) {
@@ -69,7 +69,7 @@ func TestCloneCmd_PrintsOnlyThePathOnStdout(t *testing.T) {
 
 	t.Setenv("CANGA_HOST_SIGNING_KEY", "a-key")
 
-	stdout, stderr, err := executeSplit(t, "clone", source, target)
+	stdout, stderr, err := executeSplit(t, gitCmd, "clone", source, target)
 	require.NoError(t, err)
 	assert.Equal(t, target+"\n", stdout)
 	assert.Contains(t, stderr, "signing on")
@@ -83,7 +83,7 @@ func TestCloneCmd_SaysWhenSigningIsOff(t *testing.T) {
 	t.Setenv("CANGA_HOST_SIGNING_KEY", "")
 	t.Setenv("CANGA_HOST_ALLOWED_SIGNERS", "")
 
-	_, stderr, err := executeSplit(t, "clone", source, target)
+	_, stderr, err := executeSplit(t, gitCmd, "clone", source, target)
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "signing OFF")
 	assert.Contains(t, stderr, "CANGA_HOST_SIGNING_KEY",
@@ -103,7 +103,7 @@ func TestCloneCmd_SaysWhenSigningIsInherited(t *testing.T) {
 	t.Setenv("CANGA_HOST_SIGNING_KEY", "")
 	t.Setenv("CANGA_HOST_ALLOWED_SIGNERS", "")
 
-	_, stderr, err := executeSplit(t, "clone", source, target)
+	_, stderr, err := executeSplit(t, gitCmd, "clone", source, target)
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "signing on")
 	assert.Contains(t, stderr, "inherited")
@@ -119,22 +119,22 @@ func TestCloneCmd_ExitCodes(t *testing.T) {
 	occupied := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(occupied, "x"), []byte("x"), 0o600))
 
-	_, err := execute(t, "clone", source, occupied)
+	_, err := execute(t, gitCmd, "clone", source, occupied)
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitFailure, exitCode(err))
 
 	t.Setenv("CANGA_HOST_BASE_DIR", t.TempDir())
 
-	_, err = execute(t, "clone", "not-a-url")
+	_, err = execute(t, gitCmd, "clone", "not-a-url")
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitUsage, exitCode(err))
 
 	// Wrong argument count is cobra's own refusal, and must exit 2 as well.
-	_, err = execute(t, "clone")
+	_, err = execute(t, gitCmd, "clone")
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitUsage, exitCode(err))
 
-	_, err = execute(t, "clone", "a", "b", "c")
+	_, err = execute(t, gitCmd, "clone", "a", "b", "c")
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitUsage, exitCode(err))
 }
@@ -150,11 +150,11 @@ func TestCloneCmd_Completion(t *testing.T) {
 	noFiles := ":" + strconv.Itoa(int(cobra.ShellCompDirectiveNoFileComp))
 	dirsOnly := ":" + strconv.Itoa(int(cobra.ShellCompDirectiveFilterDirs))
 
-	out, err := execute(t, "__complete", "clone", "")
+	out, err := execute(t, "__complete", gitCmd, "clone", "")
 	require.NoError(t, err)
 	assert.Contains(t, out, noFiles, "the url position offers nothing, not files")
 
-	out, err = execute(t, "__complete", "clone", "https://example.com/o/r", "")
+	out, err = execute(t, "__complete", gitCmd, "clone", "https://example.com/o/r", "")
 	require.NoError(t, err)
 	assert.Contains(t, out, dirsOnly, "the target position offers directories")
 
@@ -169,7 +169,7 @@ func TestCloneCmd_Completion(t *testing.T) {
 func TestCloneCmd_IsRegistered(t *testing.T) {
 	t.Parallel()
 
-	out, err := execute(t, "help", "clone")
+	out, err := execute(t, "help", gitCmd, "clone")
 	require.NoError(t, err)
 	assert.Contains(t, out, "CANGA_HOST_BASE_DIR")
 	assert.Contains(t, out, "clone <url> [dir]")

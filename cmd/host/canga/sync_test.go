@@ -38,7 +38,7 @@ func syncFixture(t *testing.T) (upstream, local string) {
 func TestSyncCmd_RecordsOnStdout(t *testing.T) {
 	_, local := syncFixture(t)
 
-	stdout, stderr, err := executeSplit(t, "sync", "-C", local)
+	stdout, stderr, err := executeSplit(t, gitCmd, "sync", "-C", local)
 	require.NoError(t, err)
 	assert.Equal(t, "main\torigin/main\n", stdout)
 	assert.Empty(t, stderr, "a clean sync has nothing to warn about")
@@ -56,7 +56,7 @@ func TestSyncCmd_ReportsAGoneUpstream(t *testing.T) {
 	gitRun(t, "-C", local, "branch", "feature", "origin/feature")
 	gitRun(t, "-C", upstream, "branch", "-q", "-D", "feature")
 
-	stdout, stderr, err := executeSplit(t, "sync", "-C", local)
+	stdout, stderr, err := executeSplit(t, gitCmd, "sync", "-C", local)
 	require.NoError(t, err)
 	assert.Equal(t, "main\torigin/main\n", stdout, "the other branch still syncs")
 	assert.Contains(t, stderr, "skip feature: upstream origin/feature is gone")
@@ -69,7 +69,7 @@ func TestSyncCmd_ReportsWhatItRefused(t *testing.T) {
 	// A local commit diverges the branch, so the fast-forward is refused.
 	gitCommit(t, local, "mine", "mine\n")
 
-	stdout, stderr, err := executeSplit(t, "sync", "-C", local)
+	stdout, stderr, err := executeSplit(t, gitCmd, "sync", "-C", local)
 	require.NoError(t, err, "a diverged branch is a normal outcome, not a failure")
 	assert.Empty(t, stdout, "nothing moved, so there is no record")
 	assert.Contains(t, stderr, "skip main")
@@ -81,7 +81,7 @@ func TestSyncCmd_SkipsADirtyTree(t *testing.T) {
 	_, local := syncFixture(t)
 	require.NoError(t, os.WriteFile(filepath.Join(local, "file"), []byte("mine\n"), 0o600))
 
-	stdout, stderr, err := executeSplit(t, "sync", "-C", local)
+	stdout, stderr, err := executeSplit(t, gitCmd, "sync", "-C", local)
 	require.NoError(t, err, "a dirty tree exits 0: there is nothing wrong, just nothing to do")
 	assert.Empty(t, stdout)
 	assert.Contains(t, stderr, "dirty working tree")
@@ -94,12 +94,12 @@ func TestSyncCmd_SkipsADirtyTree(t *testing.T) {
 func TestSyncCmd_ExitCodes(t *testing.T) {
 	hermeticGit(t)
 
-	_, err := execute(t, "sync", "-C", t.TempDir())
+	_, err := execute(t, gitCmd, "sync", "-C", t.TempDir())
 	require.ErrorIs(t, err, repo.ErrNotARepository)
 	assert.Equal(t, cli.ExitUsage, exitCode(err))
 
 	// sync takes no positional argument: the repository is named with -C.
-	_, err = execute(t, "sync", "/some/path")
+	_, err = execute(t, gitCmd, "sync", "/some/path")
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitUsage, exitCode(err))
 }
@@ -114,7 +114,7 @@ func TestSyncCmd_AFailedFetchIsARuntimeFailure(t *testing.T) {
 	upstream, local := syncFixture(t)
 	require.NoError(t, os.RemoveAll(upstream))
 
-	_, err := execute(t, "sync", "-C", local)
+	_, err := execute(t, gitCmd, "sync", "-C", local)
 	require.ErrorIs(t, err, repo.ErrFetchFailed)
 	assert.Equal(t, cli.ExitFailure, exitCode(err))
 }
@@ -127,10 +127,10 @@ func TestSyncCmd_SaysNothingWhenThereIsNothingToDo(t *testing.T) {
 	_, local := syncFixture(t)
 
 	// Sync once to catch up, then again with nothing left to do.
-	_, _, err := executeSplit(t, "sync", "-C", local)
+	_, _, err := executeSplit(t, gitCmd, "sync", "-C", local)
 	require.NoError(t, err)
 
-	stdout, stderr, err := executeSplit(t, "sync", "-C", local)
+	stdout, stderr, err := executeSplit(t, gitCmd, "sync", "-C", local)
 	require.NoError(t, err)
 	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)
@@ -139,7 +139,7 @@ func TestSyncCmd_SaysNothingWhenThereIsNothingToDo(t *testing.T) {
 func TestSyncCmd_IsRegistered(t *testing.T) {
 	t.Parallel()
 
-	out, err := execute(t, "help", "sync")
+	out, err := execute(t, "help", gitCmd, "sync")
 	require.NoError(t, err)
 	assert.Contains(t, out, "never resets")
 	assert.Contains(t, out, "-C")
