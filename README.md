@@ -509,9 +509,10 @@ the tag to pin and installs a root-owned `canga` in `/usr/local/bin`:
 curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_sandbox.sh | sh -s -- vX.Y.Z
 ```
 
-Root ownership keeps an agent in the sandbox from rewriting the binary. The
-script verifies the archive against `checksums.txt` the same way the host
-script does.
+Root ownership keeps a process without root from replacing the binary. It is
+no boundary against an agent with sudo, which a Docker Sandbox grants its agent
+user. The script verifies the archive against `checksums.txt` the same way the
+host script does.
 
 By hand, verify the archive against `checksums.txt` before extracting it:
 

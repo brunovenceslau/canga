@@ -16,8 +16,9 @@ main() {
 	set -eu
 
 	releases=https://github.com/brunovenceslau/canga/releases
-	# Root-owned in /usr/local/bin: an agent in the sandbox cannot rewrite the
-	# binary that hooks and the operator rely on.
+	# /usr/local/bin, root-owned: on PATH for every user, and out of reach of a
+	# process without root. That is no boundary against an agent that has sudo,
+	# which a Docker Sandbox grants its agent user.
 	dir=/usr/local/bin
 
 	if [ $# -ne 1 ]; then
