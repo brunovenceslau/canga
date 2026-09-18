@@ -8,7 +8,7 @@
 // Sync.
 //
 // The tail is what makes the layout deterministic: the same three segments
-// address the clone on disk, the reminder store, and the planned `canga open`,
+// address the clone on disk, the reminder store, and `canga workspace`,
 // whatever protocol the repository was cloned with.
 //
 // dotfiles-host still carries the original zsh implementation (zsh/dev.zsh),

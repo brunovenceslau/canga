@@ -161,7 +161,7 @@ func TestRoot_CommandTree(t *testing.T) {
 	t.Parallel()
 
 	root := newRootCmd()
-	assert.ElementsMatch(t, []string{gitCmd, remindersCmd, "upgrade"}, commandNames(root))
+	assert.ElementsMatch(t, []string{gitCmd, remindersCmd, "upgrade", "workspace"}, commandNames(root))
 
 	git, _, err := root.Find([]string{gitCmd})
 	require.NoError(t, err)

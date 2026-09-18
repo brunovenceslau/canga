@@ -99,6 +99,7 @@ func TestSandbox_RefusesHostOnlyCommands(t *testing.T) {
 		{gitCmd, "sync", "-C", dir},
 		{gitCmd, "setup-hooks", "--symlink"},
 		{"completion", "zsh"},
+		{"workspace", "https://github.com/acme/widget"},
 	}
 
 	for _, args := range tests {
@@ -114,7 +115,7 @@ func TestSandbox_RefusesHostOnlyCommands(t *testing.T) {
 		out, _, err := execute(t, args...)
 		require.NoError(t, err)
 
-		for _, name := range []string{gitCmd, "completion", "reorder", "path"} {
+		for _, name := range []string{gitCmd, "completion", "reorder", "path", "workspace"} {
 			// Anchored at a line start, where help lists a command: "git"
 			// also appears mid-line, in the description of -C.
 			assert.NotContains(t, out, "\n  "+name+" ", "help must not list %q", name)

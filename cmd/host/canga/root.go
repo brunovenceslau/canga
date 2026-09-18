@@ -47,7 +47,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(newGitCmd(a), cli.NewRemindersCmd(a,
 		cli.RemindersAdd, cli.RemindersList, cli.RemindersRemove, cli.RemindersPath, cli.RemindersReorder,
-	), cli.NewUpgradeCmd(role, version))
+	), cli.NewUpgradeCmd(role, version), newWorkspaceCmd())
 
 	return root
 }
