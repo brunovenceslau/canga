@@ -453,6 +453,11 @@ crafted id cannot address anything outside it by construction rather than by
 validation. Go 1.27 is a correctness floor, not a preference: before it, a
 symlink opened with a trailing slash escaped a `Root`.
 
+The store directory itself must be a real directory. A `Root` follows its own
+path, so a symbolic link there would carry every read and write to wherever it
+points; canga refuses to open a store whose directory is a link. Links higher
+up the path, such as a symlinked `~/.local/share`, still work.
+
 ## The sandbox build
 
 The sandbox build is what an agent inside a sandbox runs. It reads and adds to

@@ -699,6 +699,140 @@ func TestOpen_RejectsAnEmptyDir(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestOpen_RefusesASymlinkedDir pins the refusal for both openers and both
+// kinds of link, and checks that nothing reached the link's target: a refusal
+// that came after a write would still have carried a reminder out.
+func TestOpen_RefusesASymlinkedDir(t *testing.T) {
+	t.Parallel()
+
+	openers := []struct {
+		name string
+		open func(Config, ...Option) (*Store, error)
+	}{
+		{name: "Open", open: Open},
+		{name: "OpenExisting", open: OpenExisting},
+	}
+
+	tests := []struct {
+		name         string
+		targetExists bool
+	}{
+		{name: "link to a directory", targetExists: true},
+		{name: "dangling link", targetExists: false},
+	}
+
+	for _, opener := range openers {
+		for _, tt := range tests {
+			t.Run(opener.name+"/"+tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				base := t.TempDir()
+				target := filepath.Join(base, "elsewhere")
+				dir := filepath.Join(base, "store")
+
+				if tt.targetExists {
+					require.NoError(t, os.Mkdir(target, dirPerm))
+				}
+
+				require.NoError(t, os.Symlink(target, dir))
+
+				_, err := opener.open(Config{Dir: dir})
+				require.ErrorIs(t, err, ErrSymlinkedStore)
+
+				if !tt.targetExists {
+					_, err := os.Lstat(target)
+					assert.ErrorIs(t, err, fs.ErrNotExist, "a refused open created the link's target")
+
+					return
+				}
+
+				entries, err := os.ReadDir(target)
+				require.NoError(t, err)
+				assert.Empty(t, entries, "a refused open wrote into the link's target")
+			})
+		}
+	}
+}
+
+// TestOpen_RefusesADirReplacedWhileOpening covers the window refuseSymlink
+// cannot: the directory at the path changing between the symlink check and
+// OpenRoot. The hook lands the swap right after OpenRoot, which is the same
+// state as a swap before it, since the root then holds a directory that no
+// longer sits at the path. It goes through Open, so dropping the checkRoot
+// call from open fails here and not only in a test of the helper.
+func TestOpen_RefusesADirReplacedWhileOpening(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// swap changes what sits at dir after the root was opened on it.
+		swap func(dir string) error
+		want error
+	}{
+		{
+			name: "directory replaced by another",
+			swap: func(dir string) error {
+				if err := os.Rename(dir, dir+".old"); err != nil {
+					return err
+				}
+
+				return os.Mkdir(dir, dirPerm)
+			},
+			want: errStoreReplaced,
+		},
+		{
+			// The link leads to the very directory the root holds. It is
+			// refused either way; the sentinel pins that it is named a link
+			// rather than a replacement.
+			name: "directory replaced by a link to itself",
+			swap: func(dir string) error {
+				if err := os.Rename(dir, dir+".old"); err != nil {
+					return err
+				}
+
+				return os.Symlink(dir+".old", dir)
+			},
+			want: ErrSymlinkedStore,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := filepath.Join(t.TempDir(), "store")
+
+			var swapErr error
+
+			_, err := Open(Config{Dir: dir}, func(s *Store) {
+				s.hookAfterOpenRoot = func() { swapErr = tt.swap(dir) }
+			})
+
+			require.NoError(t, swapErr)
+			require.ErrorIs(t, err, tt.want)
+		})
+	}
+}
+
+// TestOpen_FollowsALinkAboveTheDir pins the other half of the rule: only the
+// store directory itself is refused. A symlinked ~/.local/share is ordinary,
+// and t.TempDir() covers it only by accident on macOS, where /var is a link.
+func TestOpen_FollowsALinkAboveTheDir(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	target := filepath.Join(base, "real")
+	require.NoError(t, os.Mkdir(target, dirPerm))
+	require.NoError(t, os.Symlink(target, filepath.Join(base, "link")))
+
+	reminders, err := Open(Config{Dir: filepath.Join(base, "link", "store")})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reminders.Close()) })
+
+	_, err = os.Stat(filepath.Join(target, "store", itemsDir))
+	assert.NoError(t, err, "the store was not created through the link above it")
+}
+
 // TestRootContainment pins the containment the store relies on instead of
 // assuming it. Every refusal below is a measured one; the last is the reason
 // this module's floor is Go 1.27 rather than the 1.24 that introduced os.Root.
