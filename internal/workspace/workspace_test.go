@@ -52,6 +52,20 @@ func TestResolve(t *testing.T) {
 	assert.Equal(t, Target{Name: "Acme/Widget", EnvDir: envDir, RepoDir: repoDir}, got)
 }
 
+// A nested group keeps every group in the name: two repositories under
+// same-named subgroups of different groups must not open under one name.
+//
+//nolint:paralleltest // t.Setenv forbids it
+func TestResolve_NestedGroupName(t *testing.T) {
+	base, envs := layout(t)
+	tail := filepath.Join("gitlab.com", "acme", "platform", "widget")
+	mkdirs(t, filepath.Join(base, tail), filepath.Join(envs, tail))
+
+	got, err := Resolve("https://gitlab.com/acme/platform/widget.git")
+	require.NoError(t, err)
+	assert.Equal(t, "acme/platform/widget", got.Name)
+}
+
 // A relative root is resolved against the current directory once, here,
 // rather than handed to cmux, which would resolve it against its own.
 func TestResolve_RelativeEnvsDir(t *testing.T) {

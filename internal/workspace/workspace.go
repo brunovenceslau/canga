@@ -16,8 +16,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/brunovenceslau/canga/internal/repo"
 )
@@ -49,8 +49,10 @@ var (
 // Target is what a workspace opens: a name for it and the two directories its
 // panes start in, both absolute.
 type Target struct {
-	// Name is "<owner>/<repo>", which is what tells two workspaces apart in a
-	// sidebar. The host is left out: it is github.com for nearly everything.
+	// Name is the path after the host, "<owner>/<repo>" or, for a nested
+	// group, every group down to the repo, which is what tells two workspaces
+	// apart in a sidebar. The host is left out: it is github.com for nearly
+	// everything.
 	Name string
 
 	// EnvDir holds the repository's sandbox environment.
@@ -79,11 +81,14 @@ func Resolve(url string) (Target, error) {
 		return Target{}, err
 	}
 
+	// repo.Path always yields "<host>/" plus at least two segments.
+	_, name, _ := strings.Cut(tail, "/")
+
 	// The tail keeps its case, as it does for the clone: the environments are
 	// laid out by the same readable <host>/<owner>/<repo> spelling. repo.Path
 	// has already refused "." and "..", which keeps this join inside root.
 	target := Target{
-		Name:    path.Join(path.Base(path.Dir(tail)), path.Base(tail)),
+		Name:    name,
 		EnvDir:  filepath.Join(root, filepath.FromSlash(tail)),
 		RepoDir: repoDir,
 	}
