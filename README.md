@@ -591,6 +591,90 @@ Pin the tag rather than following `latest`, so every sandbox built from one
 definition runs the same binary. `canga --version` prints the version, the role
 (`sandbox`), the commit, and the Go version.
 
+### Use the sbx kit
+
+With [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`), you
+can let a kit install the sandbox build instead of writing the provisioning
+step yourself. The kit is the [`sbx-kit/`](sbx-kit/spec.yaml) directory of this
+repository. It installs the release it pins, verified against that release's
+sha256, as a root-owned `/usr/local/bin/canga`, and allows the egress canga
+needs: `github.com`, `api.github.com` and
+`release-assets.githubusercontent.com`.
+
+Before you start:
+
+- The sandbox has `curl`, from its image or from a kit listed before this one.
+  The kit stops with `canga: curl is not installed` when it is missing.
+- sbx allows kits from this repository's owner. By default sbx loads kits
+  from `docker.io/` only, and refuses this kit until `kit.allowedSources`
+  names `github.com/brunovenceslau/`. The command replaces the whole list, so
+  repeat every source you already allow:
+
+  ```sh
+  sbx settings set kit.allowedSources '["docker.io/","github.com/brunovenceslau/"]'
+  ```
+
+  `'["*"]'` also works, and allows kits from any remote source. Prefer the
+  narrow entry.
+
+To add the kit:
+
+1. Pick the commit to pin, such as the current head of `main`:
+
+   ```sh
+   git ls-remote https://github.com/brunovenceslau/canga.git refs/heads/main
+   ```
+
+2. Check that sbx accepts the kit at that commit:
+
+   ```sh
+   sbx kit validate "git+https://github.com/brunovenceslau/canga.git#ref=<commit>&dir=sbx-kit"
+   ```
+
+   An allowlist problem shows up here instead of when the sandbox starts. See
+   [sbx says the kit's source is not in your allowlist](#sbx-says-the-kits-source-is-not-in-your-allowlist).
+
+3. List the kit in your environment file, with that commit as `ref`:
+
+   ```yaml
+   kits:
+     - git+https://github.com/brunovenceslau/canga.git#ref=<commit>&dir=sbx-kit
+   ```
+
+4. Start the sandbox. The kit's install step ends by printing
+   `canga --version`, such as `v0.8.0 (sandbox, <commit>, <go>)`.
+
+Pin a commit rather than a branch or a tag. The kit's release pin moves in a
+commit after each release, so a tag's kit names the release before it, and
+a branch changes under you.
+
+The kit installs the binary only. Sharing the host's reminders list still
+needs the mount and the variable described in
+[How a sandbox shares the host's list](#how-a-sandbox-shares-the-hosts-list).
+The kit does not register a Claude Code hook: sbx manages the sandbox's
+`~/.claude/settings.json`, and a kit has no field for hooks.
+
+#### sbx says the kit's source is not in your allowlist
+
+`sbx kit validate`, and any command that loads the kit, refuses it when
+`kit.allowedSources` does not name `github.com/brunovenceslau/`:
+
+```
+INVALID: kit "git+https://github.com/brunovenceslau/canga.git#ref=<commit>&dir=sbx-kit" cannot be installed — its source is not in your allowlist.
+
+Your current kit.allowedSources:
+  - docker.io/
+...
+ERROR: artifact validation failed
+```
+
+The message lists your current allowlist. Add `github.com/brunovenceslau/` to
+it, keeping every entry it already lists, then run the command again:
+
+```sh
+sbx settings set kit.allowedSources '["docker.io/","github.com/brunovenceslau/"]'
+```
+
 ### Upgrade it in a sandbox
 
 `canga upgrade` moves a running sandbox to a newer release of the sandbox
@@ -787,6 +871,20 @@ reason is `canga upgrade`: each build finds its asset by its own prefix
 reads `checksums.txt` by exact filename. A second packaging implementation that
 drifted from the first would break upgrading, for whoever
 ran it next, rather than releasing, for whoever changed it.
+
+#### Move the sbx kit's pin
+
+After each release, move the sbx kit to it in a pull request of its own. In
+`sbx-kit/spec.yaml`, change `CANGA_VERSION` and both `sha256` values, copied
+from the release's `checksums.txt`:
+
+```sh
+gh release download vX.Y.Z -p checksums.txt -O - | grep canga-sandbox_
+```
+
+The kit cannot move in the release commit itself, because `checksums.txt`
+exists only after the release is built. Users pin the commit this pull request
+merges ([Use the sbx kit](#use-the-sbx-kit)).
 
 ### Commit hook
 
