@@ -127,7 +127,7 @@ safe.
 ### Where a clone lands
 
 ```
-${DEVCTL_BASE_DIR:-$HOME/src}/<host>/<owner>/<repo>
+${CANGA_HOST_BASE_DIR:-$HOME/src}/<host>/<owner>/<repo>
 ```
 
 The three segments come from the URL, with the scheme, any userinfo, any port
@@ -138,9 +138,9 @@ filesystem, encodes case.
 
 | Variable | Default | What it sets |
 | --- | --- | --- |
-| `DEVCTL_BASE_DIR` | `$HOME/src` | Root of the layout. |
-| `DEVCTL_SIGNING_KEY` | `git config --global user.signingkey` | Key stamped into the clone. |
-| `DEVCTL_ALLOWED_SIGNERS` | `git config --global gpg.ssh.allowedSignersFile` | Allowed-signers file wired into the clone, so `git log --show-signature` works there. |
+| `CANGA_HOST_BASE_DIR` | `$HOME/src` | Root of the layout. |
+| `CANGA_HOST_SIGNING_KEY` | `git config --global user.signingkey` | Key stamped into the clone. |
+| `CANGA_HOST_ALLOWED_SIGNERS` | `git config --global gpg.ssh.allowedSignersFile` | Allowed-signers file wired into the clone, so `git log --show-signature` works there. |
 | `CI` | unset | When set to anything, drops git's `\r` progress meter. |
 
 ### What it refuses
@@ -185,7 +185,7 @@ config: the allowed-signers file when one resolves, and `gpg.format=ssh`,
 so on a machine that does not set `gpg.format=ssh` globally, a stamped SSH key
 would fail every commit with `gpg: skipped "…": No secret key`. The consequence
 is deliberate: a clone made by `devctl clone` signs with SSH, so do not hand a
-GPG key to `DEVCTL_SIGNING_KEY` or leave one in the global `user.signingkey` and
+GPG key to `CANGA_HOST_SIGNING_KEY` or leave one in the global `user.signingkey` and
 expect it to be used here.
 
 The key fallback reads the **global** git config rather than the effective one,

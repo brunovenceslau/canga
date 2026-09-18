@@ -15,7 +15,7 @@ func newCloneCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clone <url> [dir]",
 		Short: "Clone a repository into the deterministic layout",
-		Long: "clone puts a repository at ${DEVCTL_BASE_DIR:-$HOME/src} followed by the\n" +
+		Long: "clone puts a repository at ${CANGA_HOST_BASE_DIR:-$HOME/src} followed by the\n" +
 			"<host>/<owner>/<repo> derived from its URL, so a repository lands at the\n" +
 			"same path whatever protocol it was cloned with, on every machine. Name a\n" +
 			"directory to override that; a relative one is resolved against the\n" +
@@ -29,7 +29,7 @@ func newCloneCmd() *cobra.Command {
 			"GIT_ALLOW_PROTOCOL, which would otherwise outrank that. Objects are\n" +
 			"checked on both sides of the fetch.\n\n" +
 			"Afterwards SSH signing is written into the clone's own config, from\n" +
-			"DEVCTL_SIGNING_KEY and DEVCTL_ALLOWED_SIGNERS, or from the machine's\n" +
+			"CANGA_HOST_SIGNING_KEY and CANGA_HOST_ALLOWED_SIGNERS, or from the machine's\n" +
 			"global git config. When neither resolves nothing is stamped, and the\n" +
 			"command says whether git configuration outside the clone signs anyway.",
 		Args:              cli.UsageArgs(cobra.RangeArgs(1, 2)),
@@ -93,7 +93,7 @@ func reportSigning(cmd *cobra.Command, result repo.CloneResult) {
 		return
 	}
 
-	cli.Fprintf(errOut, "canga: signing OFF — set DEVCTL_SIGNING_KEY or a global "+
+	cli.Fprintf(errOut, "canga: signing OFF — set CANGA_HOST_SIGNING_KEY or a global "+
 		"user.signingkey to sign here\n")
 }
 

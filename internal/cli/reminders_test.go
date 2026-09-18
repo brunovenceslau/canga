@@ -141,7 +141,7 @@ func TestReminders_PathCreatesNothing(t *testing.T) {
 	out, err := execute(t, "path", "-C", dir)
 	require.NoError(t, err)
 
-	base := os.Getenv("DEVCTL_REMINDERS_DIR")
+	base := os.Getenv(ReminderDirVar)
 	assert.Equal(t, filepath.Join(base, "github.com", "acme", "widget", ScopeRepo), strings.TrimSpace(out))
 
 	_, err = os.Stat(base)
@@ -224,4 +224,166 @@ func TestCompleteIDs(t *testing.T) {
 
 	completions, _ = application.completeIDs(cmd, nil, "nosuchprefix")
 	assert.Empty(t, completions)
+}
+
+// TestReminders_MovesALegacyStore drives a real command against a store left
+// at the pre-rename default: the first command moves it, the reminder in it is
+// listed, stdout carries only records, and the next command says nothing.
+func TestReminders_MovesALegacyStore(t *testing.T) {
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
+
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	t.Setenv(ReminderDirVar, "")
+
+	// Record a reminder at the OLD default, the way devctl <= v0.5 would.
+	legacy := filepath.Join(data, "devctl", "reminders")
+	t.Setenv(ReminderDirVar, legacy)
+
+	out, err := execute(t, "add", "-C", dir, "from before the rename")
+	require.NoError(t, err)
+
+	id := strings.TrimSpace(out)
+
+	t.Setenv(ReminderDirVar, "")
+
+	run := func() (string, string) {
+		var stdout, stderr bytes.Buffer
+
+		a := &App{}
+		root := &cobra.Command{Use: "test", SilenceUsage: true, SilenceErrors: true}
+		a.BindRepoFlag(root)
+		root.AddCommand(NewRemindersCmd(a, RemindersList))
+		root.SetOut(&stdout)
+		root.SetErr(&stderr)
+		root.SetArgs([]string{"reminders", "list", "-C", dir})
+		require.NoError(t, root.ExecuteContext(t.Context()))
+
+		return stdout.String(), stderr.String()
+	}
+
+	stdout, stderr := run()
+	assert.Equal(t, [][2]string{{id, "from before the rename"}}, records(t, stdout))
+	assert.Contains(t, stderr, "moved the reminders store from "+legacy)
+	assert.NoDirExists(t, filepath.Dir(legacy), "the emptied devctl directory is tidied up")
+	assert.DirExists(t, filepath.Join(data, Project, "reminders"))
+
+	stdout, stderr = run()
+	assert.Len(t, records(t, stdout), 1)
+	assert.Empty(t, stderr, "a store already moved is not mentioned again")
+}
+
+// TestReminders_AFailedMoveStopsTheCommand: if the old store cannot be moved,
+// the command must not go on to create an empty store at the new root, after
+// which the old one would never be looked at again.
+func TestReminders_AFailedMoveStopsTheCommand(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the directory permission this case relies on")
+	}
+
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
+
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	t.Setenv(ReminderDirVar, "")
+
+	legacy := filepath.Join(data, "devctl", "reminders")
+	require.NoError(t, os.MkdirAll(legacy, 0o700))
+
+	// The data directory refuses new entries, so neither the new root nor the
+	// rename into it can happen.
+	require.NoError(t, os.Chmod(data, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(data, 0o700) })
+
+	_, err := execute(t, "add", "-C", dir, "must not land in a fresh store")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "move the reminders store")
+
+	assert.DirExists(t, legacy)
+	assert.NoDirExists(t, filepath.Join(data, Project))
+}
+
+// legacyFixture records one reminder at the pre-rename default and returns the
+// repository, the reminder's id, and the old and new store roots.
+func legacyFixture(t *testing.T) (dir, id, legacyRoot, currentRoot string) {
+	t.Helper()
+
+	dir = testrepo.New(t, "git@github.com:acme/widget.git")
+
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+
+	legacyRoot = filepath.Join(data, "devctl", "reminders")
+	currentRoot = filepath.Join(data, Project, "reminders")
+
+	t.Setenv(ReminderDirVar, legacyRoot)
+
+	out, err := execute(t, "add", "-C", dir, "from before the rename")
+	require.NoError(t, err)
+
+	t.Setenv(ReminderDirVar, "")
+
+	return dir, strings.TrimSpace(out), legacyRoot, currentRoot
+}
+
+// TestReminders_WarnsAboutAStrandedLegacyStore: when the new root already
+// exists, the old store is never moved over it (it may be a directory a
+// running sandbox has mounted), and every command says so on stderr.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
+func TestReminders_WarnsAboutAStrandedLegacyStore(t *testing.T) {
+	dir, _, legacyRoot, currentRoot := legacyFixture(t)
+	require.NoError(t, os.MkdirAll(currentRoot, 0o700))
+
+	for range 2 {
+		var stdout, stderr bytes.Buffer
+
+		a := &App{}
+		root := &cobra.Command{Use: "test", SilenceUsage: true, SilenceErrors: true}
+		a.BindRepoFlag(root)
+		root.AddCommand(NewRemindersCmd(a, RemindersList))
+		root.SetOut(&stdout)
+		root.SetErr(&stderr)
+		root.SetArgs([]string{"reminders", "list", "-C", dir})
+		require.NoError(t, root.ExecuteContext(t.Context()))
+
+		assert.Empty(t, stdout.String())
+		assert.Contains(t, stderr.String(), legacyRoot)
+		assert.Contains(t, stderr.String(), "are not read")
+	}
+
+	assert.DirExists(t, legacyRoot, "a stranded store is reported, never moved")
+}
+
+// TestReminders_PathMovesALegacyStore: `path` prints where the reminders are,
+// so it moves a store the rename left behind before answering.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
+func TestReminders_PathMovesALegacyStore(t *testing.T) {
+	dir, _, legacyRoot, currentRoot := legacyFixture(t)
+
+	out, err := execute(t, "path", "-C", dir)
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "moved the reminders store")
+	// execute merges both streams: the notice first, then the path on stdout.
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	assert.True(t, strings.HasPrefix(lines[len(lines)-1], currentRoot), out)
+	assert.NoDirExists(t, legacyRoot)
+}
+
+// TestCompleteIDs_NeverMovesALegacyStore: completion runs with stderr
+// discarded, so a move there would happen unannounced, and a failure unseen.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
+func TestCompleteIDs_NeverMovesALegacyStore(t *testing.T) {
+	dir, _, legacyRoot, currentRoot := legacyFixture(t)
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+
+	completions, _ := (&App{RepoDir: dir}).completeIDs(cmd, nil, "")
+	assert.Empty(t, completions, "the new root is still empty")
+	assert.DirExists(t, legacyRoot)
+	assert.NoDirExists(t, currentRoot)
 }

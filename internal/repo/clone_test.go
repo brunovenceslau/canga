@@ -264,7 +264,7 @@ func TestGitEnv(t *testing.T) {
 }
 
 func TestTargetDir(t *testing.T) {
-	t.Run("honours DEVCTL_BASE_DIR", func(t *testing.T) {
+	t.Run("honours CANGA_HOST_BASE_DIR", func(t *testing.T) {
 		t.Setenv(envBaseDir, "/tmp/elsewhere")
 
 		got, err := TargetDir("git@github.com:owner/repo.git")
@@ -283,7 +283,7 @@ func TestTargetDir(t *testing.T) {
 	})
 
 	// The path is printed for `cd $(canga clone …)` to consume, so a relative
-	// DEVCTL_BASE_DIR must not produce a relative answer.
+	// CANGA_HOST_BASE_DIR must not produce a relative answer.
 	t.Run("absolutizes a relative base", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		t.Setenv(envBaseDir, "relative-base")

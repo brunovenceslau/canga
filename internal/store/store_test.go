@@ -32,12 +32,12 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	envRole   = "DEVCTL_TEST_ROLE"
-	envStore  = "DEVCTL_TEST_STORE"
-	envWorker = "DEVCTL_TEST_WORKER"
-	envItems  = "DEVCTL_TEST_ITEMS"
-	envSpace  = "DEVCTL_TEST_SPACE"
-	envDone   = "DEVCTL_TEST_DONE"
+	envRole   = "CANGA_TEST_ROLE"
+	envStore  = "CANGA_TEST_STORE"
+	envWorker = "CANGA_TEST_WORKER"
+	envItems  = "CANGA_TEST_ITEMS"
+	envSpace  = "CANGA_TEST_SPACE"
+	envDone   = "CANGA_TEST_DONE"
 
 	roleWriter  = "writer"
 	roleReader  = "reader"

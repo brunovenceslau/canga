@@ -22,7 +22,7 @@ import (
 var ErrTargetNotEmpty = errors.New("refusing to clone into a non-empty path")
 
 // envBaseDir overrides the root of the deterministic clone layout.
-const envBaseDir = "DEVCTL_BASE_DIR"
+const envBaseDir = "CANGA_HOST_BASE_DIR"
 
 // clonePerm is what the PARENT directories of a clone are created with. git
 // creates the clone itself, under the caller's umask, and this does not touch it.
@@ -102,7 +102,7 @@ func Clone(ctx context.Context, url string, opts CloneOptions) (CloneResult, err
 }
 
 // TargetDir is where Clone puts a repository when no directory is named:
-// ${DEVCTL_BASE_DIR:-$HOME/src} joined with the URL's "<host>/<owner>/<repo>".
+// ${CANGA_HOST_BASE_DIR:-$HOME/src} joined with the URL's "<host>/<owner>/<repo>".
 //
 // The tail keeps its readable spelling here, and is deliberately NOT passed
 // through EscapePath the way the reminder store's directory is. A clone is a
@@ -126,7 +126,7 @@ func TargetDir(url string) (string, error) {
 
 // BaseDir is the root of the deterministic clone layout, as an absolute path.
 //
-// Absolute even when DEVCTL_BASE_DIR is not, because the derived path is
+// Absolute even when CANGA_HOST_BASE_DIR is not, because the derived path is
 // PRINTED for a caller to use: `cd $(canga clone <url>)` from another directory
 // needs an answer that does not depend on where canga was standing. It is also
 // what makes the non-empty check and the clone itself agree about one place.

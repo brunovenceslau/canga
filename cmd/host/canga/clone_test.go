@@ -67,7 +67,7 @@ func TestCloneCmd_PrintsOnlyThePathOnStdout(t *testing.T) {
 	source := cloneSource(t)
 	target := filepath.Join(t.TempDir(), "clone")
 
-	t.Setenv("DEVCTL_SIGNING_KEY", "a-key")
+	t.Setenv("CANGA_HOST_SIGNING_KEY", "a-key")
 
 	stdout, stderr, err := executeSplit(t, "clone", source, target)
 	require.NoError(t, err)
@@ -80,13 +80,13 @@ func TestCloneCmd_SaysWhenSigningIsOff(t *testing.T) {
 	source := cloneSource(t)
 	target := filepath.Join(t.TempDir(), "clone")
 
-	t.Setenv("DEVCTL_SIGNING_KEY", "")
-	t.Setenv("DEVCTL_ALLOWED_SIGNERS", "")
+	t.Setenv("CANGA_HOST_SIGNING_KEY", "")
+	t.Setenv("CANGA_HOST_ALLOWED_SIGNERS", "")
 
 	_, stderr, err := executeSplit(t, "clone", source, target)
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "signing OFF")
-	assert.Contains(t, stderr, "DEVCTL_SIGNING_KEY",
+	assert.Contains(t, stderr, "CANGA_HOST_SIGNING_KEY",
 		"the message must name what to set to fix it")
 }
 
@@ -100,8 +100,8 @@ func TestCloneCmd_SaysWhenSigningIsInherited(t *testing.T) {
 	system := filepath.Join(t.TempDir(), "gitconfig")
 	require.NoError(t, os.WriteFile(system, []byte("[commit]\n\tgpgSign = true\n"), 0o600))
 	t.Setenv("GIT_CONFIG_SYSTEM", system)
-	t.Setenv("DEVCTL_SIGNING_KEY", "")
-	t.Setenv("DEVCTL_ALLOWED_SIGNERS", "")
+	t.Setenv("CANGA_HOST_SIGNING_KEY", "")
+	t.Setenv("CANGA_HOST_ALLOWED_SIGNERS", "")
 
 	_, stderr, err := executeSplit(t, "clone", source, target)
 	require.NoError(t, err)
@@ -123,7 +123,7 @@ func TestCloneCmd_ExitCodes(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitFailure, exitCode(err))
 
-	t.Setenv("DEVCTL_BASE_DIR", t.TempDir())
+	t.Setenv("CANGA_HOST_BASE_DIR", t.TempDir())
 
 	_, err = execute(t, "clone", "not-a-url")
 	require.Error(t, err)
@@ -171,6 +171,6 @@ func TestCloneCmd_IsRegistered(t *testing.T) {
 
 	out, err := execute(t, "help", "clone")
 	require.NoError(t, err)
-	assert.Contains(t, out, "DEVCTL_BASE_DIR")
+	assert.Contains(t, out, "CANGA_HOST_BASE_DIR")
 	assert.Contains(t, out, "clone <url> [dir]")
 }
