@@ -10,7 +10,7 @@ working day:
 
 | Build | Runs on | What it does |
 | --- | --- | --- |
-| host | your Mac (darwin and linux builds) | `git` (clone, sync, hook setup), reminders, its own upgrade |
+| host | your Mac (darwin and linux builds) | `git` (clone, sync, hook setup), `workspace` (a repository beside its sandbox environment in cmux), reminders, its own upgrade |
 | sandbox | inside an agent sandbox (linux) | reminders `list` and `add`, its own upgrade |
 
 Both builds are named `canga` and share one reminders list. The role is fixed
@@ -291,6 +291,56 @@ fast-forward update instead of overwriting the branch.
 
 The fetch carries the same transport hardening as `canga git clone`.
 
+## `canga workspace`
+
+Opens a repository and its sandbox environment side by side, in one new
+[cmux](https://github.com/manaflow-ai/cmux) workspace:
+
+```sh
+export CANGA_HOST_ENVS_DIR="$HOME/src/github.com/acme/sandboxes/envs"
+canga workspace https://github.com/acme/widget
+```
+
+The workspace is named `acme/widget` and is focused when it opens. It has two
+panes:
+
+| Pane | Starts in |
+| --- | --- |
+| Left | `$CANGA_HOST_ENVS_DIR/github.com/acme/widget`, the environment |
+| Right, focused | `~/src/github.com/acme/widget`, the clone, where `canga git clone` puts it |
+
+Use it when you keep each repository's sandbox environment outside the
+repository, so that an agent in the sandbox cannot edit the environment that
+runs it. Both paths come from the URL, so the command needs nothing else.
+
+### Requirements
+
+- cmux 0.64.23 or later. The workspace is created with one `cmux new-workspace
+  --layout` call, checked against 0.64.23 and 0.64.25.
+- Run it from a terminal inside cmux. cmux's default socket mode accepts
+  commands only from its own terminals, and its refusal is printed as it is.
+- `CANGA_HOST_ENVS_DIR` set to the directory that holds one
+  `<host>/<owner>/<repo>` directory per environment. It has no default,
+  because where the environments live is a personal choice. A relative value
+  is resolved against the current directory. The segments keep their case,
+  as the clone's do.
+- The clone and the environment directory already exist.
+
+### What it refuses
+
+Nothing is created or cloned. Each refusal happens before cmux is called:
+
+| Situation | Exit |
+| --- | --- |
+| `CANGA_HOST_ENVS_DIR` is unset | `2` |
+| A URL no `<host>/<owner>/<repo>` can be derived from | `2` |
+| No clone at the derived path. The message suggests `canga git clone <url>` | `1` |
+| No environment directory at the derived path. The message names the path | `1` |
+| `cmux` is not on your PATH | `1` |
+| cmux fails. Its own message is shown | `1` |
+
+On success, stdout carries cmux's own reply, such as `OK workspace:3`.
+
 ## `canga upgrade`
 
 Replaces the running binary with a published release, in place. Each build
@@ -478,7 +528,7 @@ than the current directory.
 
 ### What it leaves out
 
-The sandbox build has no `git` or `completion`, and no `reminders rm`,
+The sandbox build has no `git`, `workspace` or `completion`, and no `reminders rm`,
 `reorder` or `path`. An agent may surface the list and record an idea, but
 the list belongs to the person on the host, so only the host build removes or
 reorders it.
@@ -623,8 +673,8 @@ generator on the shell startup path.
 `rm` and `reorder` complete **real stored ids**, each shown with its reminder's
 first line as the description.
 
-`-C` and `git clone`'s optional target complete directories only. Its URL
-position completes nothing: a half-typed URL is not a path, and a shell that
+`-C` and `git clone`'s optional target complete directories only. The URL
+positions of `git clone` and `workspace` complete nothing: a half-typed URL is not a path, and a shell that
 fell back to file completion there would offer the current directory's
 contents.
 
@@ -633,8 +683,8 @@ contents.
 | Code | Meaning |
 | --- | --- |
 | `0` | success |
-| `1` | a runtime failure, a clone target that already holds something, or an id with nothing behind it |
-| `2` | a bad invocation, a directory that is not a repository or has no usable `origin`, or an upgrade with no release to work from |
+| `1` | a runtime failure, a clone target that already holds something, an id with nothing behind it, or a workspace whose clone or environment directory is missing |
+| `2` | a bad invocation, a directory that is not a repository or has no usable `origin`, an upgrade with no release to work from, or `workspace` with `CANGA_HOST_ENVS_DIR` unset |
 
 ## Development
 
