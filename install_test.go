@@ -312,7 +312,7 @@ func (e env) run(t *testing.T, shell []string, script string, args []string, var
 	var res result
 
 	err := cmd.Run()
-	if exitErr := (*exec.ExitError)(nil); errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		res.exit = exitErr.ExitCode()
 	} else {
 		require.NoError(t, err, "the shell could not be run")
