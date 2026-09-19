@@ -304,10 +304,14 @@ canga workspace https://github.com/acme/widget
 The workspace is named `acme/widget` and is focused when it opens. It has two
 panes:
 
-| Pane | Starts in |
-| --- | --- |
-| Left | `$CANGA_HOST_ENVS_DIR/github.com/acme/widget`, the environment |
-| Right, focused | `~/src/github.com/acme/widget`, the clone, where `canga git clone` puts it |
+| Pane | Starts in | Runs |
+| --- | --- | --- |
+| Left | `$CANGA_HOST_ENVS_DIR/github.com/acme/widget`, the environment | `sbx env run --clone`, the repository's sandbox |
+| Right, focused | `~/src/github.com/acme/widget`, the clone, where `canga git clone` puts it | nothing |
+
+cmux types `sbx env run --clone` into the left pane's shell once that shell is
+ready, the way you would. When the sandbox exits, the pane keeps its shell in
+the environment directory, so you can start the sandbox again from there.
 
 Use it when you keep each repository's sandbox environment outside the
 repository, so that an agent in the sandbox cannot edit the environment that
@@ -325,6 +329,8 @@ runs it. Both paths come from the URL, so the command needs nothing else.
   is resolved against the current directory. The segments keep their case,
   as the clone's do.
 - The clone and the environment directory already exist.
+- `sbx` on the `PATH` of the shells cmux opens. canga does not check for it:
+  if it is missing, the left pane shows that shell's `command not found`.
 
 ### What it refuses
 

@@ -67,16 +67,19 @@ func TestOpenCmux(t *testing.T) {
 	assert.Equal(t, layoutNode{
 		Direction: "horizontal",
 		Children: []layoutNode{
-			{Pane: &layoutPane{Surfaces: []layoutSurface{{Type: "terminal", Cwd: target.EnvDir}}}},
+			{Pane: &layoutPane{Surfaces: []layoutSurface{
+				{Type: "terminal", Cwd: target.EnvDir, Command: "sbx env run --clone"},
+			}}},
 			{Pane: &layoutPane{Surfaces: []layoutSurface{{Type: "terminal", Cwd: target.RepoDir, Focus: true}}}},
 		},
-	}, got, "env on the left, clone on the right and focused")
+	}, got, "env on the left running its sandbox, clone on the right and focused")
 
 	// The keys cmux reads, spelled as it spells them; a struct-to-struct round
 	// trip would pass with any tag.
 	for _, key := range []string{
 		`"direction":"horizontal"`, `"children":`, `"pane":`,
 		`"surfaces":`, `"type":"terminal"`, `"cwd":`, `"focus":true`,
+		`"command":"sbx env run --clone"`,
 	} {
 		assert.Contains(t, args[8], key)
 	}

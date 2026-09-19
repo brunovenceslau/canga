@@ -15,8 +15,10 @@ func newWorkspaceCmd() *cobra.Command {
 		Short: "Open a repository beside its sandbox environment in cmux",
 		Long: "workspace opens a new cmux workspace with two panes side by side: on\n" +
 			"the left, the repository's sandbox environment directory,\n" +
-			"$" + workspace.EnvsDirVar + "/<host>/<owner>/<repo>; on the right, focused, its\n" +
-			"clone, where `canga git clone` puts it.\n\n" +
+			"$" + workspace.EnvsDirVar + "/<host>/<owner>/<repo>, running `sbx env run\n" +
+			"--clone`; on the right, focused, its clone, where `canga git clone` puts it.\n" +
+			"The sandbox command is typed into the left pane's shell, so the pane stays\n" +
+			"open when sbx exits, and sbx must be on that shell's PATH.\n\n" +
 			workspace.EnvsDirVar + " has no default: set it to the directory that holds\n" +
 			"the environments. Nothing is created: a missing clone or environment\n" +
 			"directory is refused before cmux is called.\n\n" +
