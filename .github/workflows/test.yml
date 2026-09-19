@@ -43,6 +43,12 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+      # -diff never touches the tree; per `go help fix` it prints the unified
+      # diff and exits non-zero when it is not empty, so a pending `go fix`
+      # rewrite fails the gate instead of drifting in unnoticed.
+      - name: Check go fix
+        run: go fix -diff ./...
+
       - name: Test
         run: make test
 
