@@ -4,14 +4,10 @@
 # Dependabot. Two ecosystems, both weekly and both grouped by minor+patch so a
 # routine bump lands as one PR instead of one per dependency.
 #
-# The github-actions ecosystem is what keeps commit 2's SHA pins current: each
-# `uses:` line is pinned to a full commit SHA with the tag it names kept as a
-# trailing `# vX.Y.Z` comment (see .github/workflows/*.yml), and Dependabot
-# reads that comment to know which SHA a new release maps to and rewrites
-# both the SHA and the comment together. Without this ecosystem enabled, a
-# SHA pin only ever protects against the tag moving underneath it — it stops
-# tracking new releases entirely, which trades one problem (a mutable ref)
-# for another (a frozen one).
+# The github-actions ecosystem is what keeps the SHA pins in
+# .github/workflows/*.yml current: each `uses:` line is pinned to a commit
+# SHA with a trailing `# vX.Y.Z` comment, and Dependabot reads that comment
+# to update both together when a new release ships.
 version: 2
 updates:
   - package-ecosystem: "gomod"
