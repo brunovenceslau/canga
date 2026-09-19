@@ -139,7 +139,7 @@ func TestClientStatusErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				for key, value := range tt.headers {
 					w.Header().Set(key, value)
 				}
@@ -147,7 +147,7 @@ func TestClientStatusErrors(t *testing.T) {
 				w.WriteHeader(tt.status)
 				_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
 			}))
-			t.Cleanup(server.Close)
+			server.Start()
 
 			_, err := newClient("token", server.URL, installedVersion).latest(t.Context())
 			require.Error(t, err)
@@ -166,11 +166,11 @@ func TestClientLatestSendsWhatGitHubExpects(t *testing.T) {
 
 	var got *http.Request
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Clone(r.Context())
 		_, _ = w.Write([]byte(`{"tag_name":"v0.2.0","assets":[{"id":7,"name":"checksums.txt","size":9}]}`))
 	}))
-	t.Cleanup(server.Close)
+	server.Start()
 
 	found, err := newClient("s3cret", server.URL, "0.1.0").latest(t.Context())
 	require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestClientRetriesAnonymouslyWhenTheTokenIsRejected(t *testing.T) {
 		auths []string
 	)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 
 		auths = append(auths, r.Header.Get("Authorization"))
@@ -211,7 +211,7 @@ func TestClientRetriesAnonymouslyWhenTheTokenIsRejected(t *testing.T) {
 
 		_, _ = w.Write([]byte(`{"tag_name":"v0.2.0","assets":[]}`))
 	}))
-	t.Cleanup(server.Close)
+	server.Start()
 
 	api := newClient("expired", server.URL, installedVersion)
 
@@ -234,7 +234,7 @@ func TestClientRetriesAnonymouslyWhenTheTokenIsRejected(t *testing.T) {
 func TestClientReportsBothFailuresWhenTheRetryFails(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {
 			w.WriteHeader(http.StatusUnauthorized)
 
@@ -244,7 +244,7 @@ func TestClientReportsBothFailuresWhenTheRetryFails(t *testing.T) {
 		w.Header().Set("X-RateLimit-Remaining", "0")
 		w.WriteHeader(http.StatusForbidden)
 	}))
-	t.Cleanup(server.Close)
+	server.Start()
 
 	_, err := newClient("expired", server.URL, installedVersion).latest(t.Context())
 	require.ErrorIs(t, err, ErrUnauthorized)
@@ -255,10 +255,10 @@ func TestClientReportsBothFailuresWhenTheRetryFails(t *testing.T) {
 func TestClientRejectsAReleaseWithNoTag(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"assets":[]}`))
 	}))
-	t.Cleanup(server.Close)
+	server.Start()
 
 	_, err := newClient("token", server.URL, installedVersion).latest(t.Context())
 	require.ErrorIs(t, err, ErrNoRelease)
@@ -274,18 +274,18 @@ func TestClientDownloadDropsTheTokenOnRedirect(t *testing.T) {
 
 	var authOnSignedURL string
 
-	signed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	signed := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authOnSignedURL = r.Header.Get("Authorization")
 		_, _ = w.Write([]byte("the archive"))
 	}))
-	t.Cleanup(signed.Close)
+	signed.Start()
 
 	// 127.0.0.1 and [::1] are different hosts to the redirect policy, which is
 	// what makes this a cross-host redirect without needing real DNS.
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	api := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, strings.Replace(signed.URL, "127.0.0.1", "localhost", 1), http.StatusFound)
 	}))
-	t.Cleanup(api.Close)
+	api.Start()
 
 	body, err := newClient("s3cret", api.URL, installedVersion).
 		download(t.Context(), asset{ID: 1, Name: "canga.tar.gz"}, maxArchiveBytes)
@@ -297,10 +297,10 @@ func TestClientDownloadDropsTheTokenOnRedirect(t *testing.T) {
 func TestClientDownloadRefusesMoreThanTheReleaseDeclares(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(strings.Repeat("A", 100)))
 	}))
-	t.Cleanup(server.Close)
+	server.Start()
 
 	_, err := newClient("token", server.URL, installedVersion).
 		download(t.Context(), asset{ID: 1, Name: "canga.tar.gz", Size: 10}, maxArchiveBytes)
@@ -318,10 +318,10 @@ func TestClientDownloadKeepsTheSignatureOutOfTheError(t *testing.T) {
 	// redirect target rather than against the API.
 	const signedURL = "http://127.0.0.1:1/canga.tar.gz?X-Amz-Signature=deadbeefsecret"
 
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	api := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, signedURL, http.StatusFound)
 	}))
-	t.Cleanup(api.Close)
+	api.Start()
 
 	_, err := newClient("s3cret", api.URL, installedVersion).
 		download(t.Context(), asset{ID: 1, Name: "canga.tar.gz"}, maxArchiveBytes)
