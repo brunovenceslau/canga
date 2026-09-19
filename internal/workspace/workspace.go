@@ -10,6 +10,9 @@
 // repository's URL: the repository's own clone, and the directory for its
 // <host>/<owner>/<repo> tail under the envs/ directory of the repository that
 // holds the environments. Opening the pair takes the URL and nothing else.
+//
+// One repository cannot be kept apart this way: the one that holds the
+// environments. Its own environment lives inside its own clone.
 package workspace
 
 import (
@@ -140,26 +143,36 @@ func Resolve(url string) (Target, error) {
 // repository that holds the environments for the repository whose layout tail
 // is tail.
 //
-// A set EnvsRepoVar must be relative and name real segments: an absolute path
-// or a ".." would take the environment pane outside the clone base, which is
-// the one place this command promises to stay in.
+// A set EnvsRepoVar must be relative, and every segment must pass the same
+// rule a URL's segments do (repo.IsSafeSegment): an absolute path or a ".."
+// would take the environment pane outside the clone base, which is the one
+// place this command promises to stay in, and a URL pasted by mistake is
+// refused rather than turned into a directory name.
+//
+// The value is never repeated in the error: a URL pasted by mistake can carry
+// a credential.
 func envsRepoPath(tail string) (string, error) {
-	value := strings.TrimRight(os.Getenv(EnvsRepoVar), "/")
-	if value == "" {
-		// repo.Path yields "<host>/<owner>.../<repo>"; the environments'
-		// repository sits beside the opened one, under the same owner.
+	raw := os.Getenv(EnvsRepoVar)
+	if raw == "" {
+		// repo.Path yields "<host>/<group>.../<repo>"; the environments'
+		// repository sits beside the opened one, in the same (innermost)
+		// group.
 		return path.Join(path.Dir(tail), defaultEnvsRepoName), nil
 	}
 
-	if filepath.IsAbs(value) || strings.HasPrefix(value, "/") {
-		return "", fmt.Errorf("%w: %q is absolute; use a path such as "+
-			"github.com/<owner>/%s", ErrBadEnvsRepo, value, defaultEnvsRepoName)
+	// Checked before the trailing slashes are trimmed, so "/" is refused as
+	// absolute instead of trimming to nothing and falling back to the default.
+	if filepath.IsAbs(raw) || strings.HasPrefix(raw, "/") {
+		return "", fmt.Errorf("%w: it is an absolute path; use a path such as "+
+			"github.com/<owner>/%s", ErrBadEnvsRepo, defaultEnvsRepoName)
 	}
 
+	value := strings.TrimRight(raw, "/")
 	for segment := range strings.SplitSeq(value, "/") {
-		if segment == "" || segment == "." || segment == ".." {
-			return "", fmt.Errorf("%w: %q has an empty, \".\" or \"..\" segment",
-				ErrBadEnvsRepo, value)
+		if !repo.IsSafeSegment(segment) {
+			return "", fmt.Errorf("%w: use a path such as github.com/<owner>/%s, "+
+				"not a URL, with no empty, \".\" or \"..\" segment",
+				ErrBadEnvsRepo, defaultEnvsRepoName)
 		}
 	}
 

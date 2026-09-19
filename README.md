@@ -330,10 +330,13 @@ ${CANGA_HOST_BASE_DIR:-$HOME/src}/<environments repository>/envs/<host>/<owner>/
 
 | Variable | Default | What it sets |
 | --- | --- | --- |
-| `CANGA_HOST_ENVS_REPO` | `<host>/<owner>/docker-sbx`, the `docker-sbx` of the opened repository's owner | The environments repository, as its path under the base directory, such as `github.com/acme/sandboxes`. |
+| `CANGA_HOST_ENVS_REPO` | `<host>/<owner>/docker-sbx`, the `docker-sbx` beside the opened repository | The environments repository, as its path under the base directory, such as `github.com/acme/sandboxes`. |
 
 With the default, `github.com/acme/widget` finds its environment in
-`github.com/acme/docker-sbx`, so nothing needs configuring. Set
+`github.com/acme/docker-sbx`, so nothing needs configuring. For a repository in
+a nested group, the default is the `docker-sbx` in the same innermost group:
+`gitlab.com/acme/platform/widget` looks in `gitlab.com/acme/platform/docker-sbx`,
+not in `gitlab.com/acme/docker-sbx`. Set
 `CANGA_HOST_ENVS_REPO` when the environments live elsewhere, for example to open
 a repository of another owner with your own environments:
 
@@ -342,9 +345,15 @@ export CANGA_HOST_ENVS_REPO=github.com/brunovenceslau/docker-sbx
 canga workspace https://github.com/acme/widget
 ```
 
-The value must stay under the base directory: an absolute path, or one with an
-empty, `.` or `..` segment, is refused. The `<host>/<owner>/<repo>` segments
-keep their case, as the clone's do.
+The value is a path, not a URL, and must stay under the base directory. Each
+segment follows the rule a URL's segments do: letters, digits and `._~+-`, and
+never `.` or `..` alone. An absolute path is refused too. The error does not
+repeat the value, so a URL pasted by mistake does not print its credential.
+The `<host>/<owner>/<repo>` segments keep their case, as the clone's do.
+
+The environments repository is the one repository whose environment cannot live
+apart from it: opening `github.com/acme/docker-sbx` itself finds its
+environment inside its own clone.
 
 ### Requirements
 
@@ -363,7 +372,7 @@ Nothing is created or cloned. Each refusal happens before cmux is called:
 
 | Situation | Exit |
 | --- | --- |
-| `CANGA_HOST_ENVS_REPO` is absolute or has an empty, `.` or `..` segment | `2` |
+| `CANGA_HOST_ENVS_REPO` is absolute, a URL, or has an empty, `.`, `..` or otherwise invalid segment | `2` |
 | A URL no `<host>/<owner>/<repo>` can be derived from | `2` |
 | No clone at the derived path. The message suggests `canga git clone <url>` | `1` |
 | No environment directory at the derived path. The message names the path and the fixes: clone the environments repository with `canga git clone`, update it with `canga git sync`, create the directory, or set `CANGA_HOST_ENVS_REPO` | `1` |

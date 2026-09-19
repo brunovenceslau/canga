@@ -114,11 +114,32 @@ func TestResolve_Refusals(t *testing.T) {
 	}{
 		{
 			name: "envs repo absolute", url: widgetURL, envsRepo: "/srv/sandboxes",
-			mkRepo: true, mkEnv: true, wantErr: ErrBadEnvsRepo, wantMsg: "is absolute",
+			mkRepo: true, mkEnv: true, wantErr: ErrBadEnvsRepo, wantMsg: "absolute path",
+		},
+		// "/" trims to nothing; it must still be refused, not fall back to
+		// the default.
+		{
+			name: "envs repo is the root", url: widgetURL, envsRepo: "///",
+			mkRepo: true, mkEnv: true, wantErr: ErrBadEnvsRepo, wantMsg: "absolute path",
 		},
 		{
 			name: "envs repo leaves the base", url: widgetURL, envsRepo: "../sandboxes",
-			mkRepo: true, mkEnv: true, wantErr: ErrBadEnvsRepo, wantMsg: `"../sandboxes"`,
+			mkRepo: true, mkEnv: true, wantErr: ErrBadEnvsRepo, wantMsg: "not a URL",
+		},
+		{
+			name: "envs repo with a dot segment", url: widgetURL, envsRepo: "github.com/acme/.",
+			mkRepo: true, mkEnv: true, wantErr: ErrBadEnvsRepo,
+		},
+		{
+			name: "envs repo as an scp-style url", url: widgetURL,
+			envsRepo: "git@github.com:acme/docker-sbx", mkRepo: true, mkEnv: true,
+			wantErr: ErrBadEnvsRepo, wantMsg: "not a URL",
+		},
+		// A credential in the variable must not reach the message.
+		{
+			name: "envs repo as a url with a credential", url: widgetURL,
+			envsRepo: "https://bob:s3cret@github.com/acme/docker-sbx", mkRepo: true, mkEnv: true,
+			wantErr: ErrBadEnvsRepo,
 		},
 		{
 			name: "envs repo with a dot-dot segment", url: widgetURL,

@@ -55,13 +55,15 @@ var (
 // Compiled once, at package scope, because compiling a regexp allocates.
 var segmentPattern = regexp.MustCompile(`^[A-Za-z0-9._~+-]+$`)
 
-// isSafeSegment reports whether one path segment may be joined onto a root.
+// IsSafeSegment reports whether one path segment may be joined onto a root.
+// It is exported for the other places that join a user-supplied path onto the
+// clone base, so every such path is held to the same rule as a URL's.
 //
 // "." and ".." are checked SEPARATELY from segmentPattern rather than excluded
 // by it: a dot is perfectly legal inside a segment — every hostname has one,
 // and so does a repo named "dotfiles.git" — so the pattern has to admit it, and
 // only these two exact spellings are traversal.
-func isSafeSegment(segment string) bool {
+func IsSafeSegment(segment string) bool {
 	if segment == "." || segment == ".." {
 		return false
 	}
@@ -212,7 +214,7 @@ func Path(rawURL string) (string, error) {
 	redacted := Redact(rawURL)
 
 	for _, segment := range segments {
-		if !isSafeSegment(segment) {
+		if !IsSafeSegment(segment) {
 			// The offending segment is a substring of the RAW url, so quoting it
 			// is only safe when nothing was redacted out of that url. A
 			// credential holding an unencoded "/" is split by `split` and its
