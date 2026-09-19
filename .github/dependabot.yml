@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Dependabot. Two ecosystems, both weekly and both grouped by minor+patch so a
+# routine bump lands as one PR instead of one per dependency.
+#
+# The github-actions ecosystem is what keeps commit 2's SHA pins current: each
+# `uses:` line is pinned to a full commit SHA with the tag it names kept as a
+# trailing `# vX.Y.Z` comment (see .github/workflows/*.yml), and Dependabot
+# reads that comment to know which SHA a new release maps to and rewrites
+# both the SHA and the comment together. Without this ecosystem enabled, a
+# SHA pin only ever protects against the tag moving underneath it — it stops
+# tracking new releases entirely, which trades one problem (a mutable ref)
+# for another (a frozen one).
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "ci(deps)"
