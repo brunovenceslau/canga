@@ -4,6 +4,7 @@
 package upgrade
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -91,9 +92,7 @@ type client struct {
 }
 
 func newClient(token, baseURL, current string) *client {
-	if baseURL == "" {
-		baseURL = apiBase
-	}
+	baseURL = cmp.Or(baseURL, apiBase)
 
 	return &client{
 		http:    &http.Client{Timeout: httpTimeout},

@@ -23,7 +23,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/brunovenceslau/canga/internal/repo"
@@ -349,7 +349,7 @@ func hookNames(root string) ([]string, error) {
 		return nil, fmt.Errorf("%w: %s holds no executable file", ErrNoHooks, dir)
 	}
 
-	sort.Strings(names)
+	slices.Sort(names)
 
 	return names, nil
 }

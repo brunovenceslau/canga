@@ -266,8 +266,8 @@ func split(url string) (host, rest string, err error) {
 // the disagreement is real rather than theoretical, and it disappears when
 // `dev clone` moves into this repo and only one implementation is left.
 func hostOf(authority string) string {
-	if at := strings.LastIndex(authority, "@"); at >= 0 {
-		authority = authority[at+1:]
+	if _, after, ok := strings.CutLast(authority, "@"); ok {
+		authority = after
 	}
 
 	host, _, _ := strings.Cut(authority, ":")
@@ -339,8 +339,8 @@ func Redact(url string) string {
 		scheme, url = before+"://", after
 	}
 
-	if at := strings.LastIndex(url, "@"); at >= 0 {
-		url = url[at+1:]
+	if _, after, ok := strings.CutLast(url, "@"); ok {
+		url = after
 	}
 
 	return scheme + url

@@ -111,8 +111,8 @@ func fakeGitHub(t *testing.T, releases ...fixture) string {
 		_, _ = w.Write(bodies[id])
 	})
 
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	server := httptest.NewTestServer(t, mux)
+	server.Start()
 
 	return server.URL
 }
@@ -182,10 +182,10 @@ func TestRunRefusesAnUnknownRole(t *testing.T) {
 			opts := runOptions(t, installedVersion, releaseFixture(t, newerVersion))
 			opts.Role = role
 
-			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 				t.Error("an unknown role must be refused before any request")
 			}))
-			t.Cleanup(server.Close)
+			server.Start()
 
 			opts.baseURL = server.URL
 
