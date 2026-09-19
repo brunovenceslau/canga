@@ -309,9 +309,12 @@ panes:
 | Left | `$CANGA_HOST_ENVS_DIR/github.com/acme/widget`, the environment | `sbx env run --clone`, the repository's sandbox |
 | Right, focused | `~/src/github.com/acme/widget`, the clone, where `canga git clone` puts it | nothing |
 
-cmux types `sbx env run --clone` into the left pane's shell once that shell is
-ready, the way you would. When the sandbox exits, the pane keeps its shell in
-the environment directory, so you can start the sandbox again from there.
+cmux types `sbx env run --clone` into the left pane when its terminal starts,
+the way you would. When the sandbox exits, the pane keeps its shell in the
+environment directory, so you can start the sandbox again from there. If the
+left pane shows a prompt and no sandbox, cmux gave up waiting for the terminal
+(it waits a few seconds and drops the command without a message): type
+`sbx env run --clone` yourself.
 
 Use it when you keep each repository's sandbox environment outside the
 repository, so that an agent in the sandbox cannot edit the environment that

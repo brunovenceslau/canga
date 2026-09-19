@@ -45,7 +45,9 @@ type (
 		// An absolute cwd is used as is; cmux resolves a relative one against
 		// the workspace's --cwd.
 		Cwd string `json:"cwd"`
-		// Command is typed into the terminal once its shell is ready.
+		// Command is typed into the terminal once cmux has created it. cmux
+		// waits a few seconds for that (its debug log says 3s) and drops the
+		// command, silently in release builds, if the terminal is still missing.
 		Command string `json:"command,omitempty"`
 		Focus   bool   `json:"focus,omitempty"`
 	}
