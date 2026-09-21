@@ -5,10 +5,14 @@
 // runs agents on it, as one workspace of a terminal multiplexer.
 //
 // The two live apart on purpose: an environment file kept inside the tree it
-// edits is one an agent in that sandbox could rewrite. Both paths are derived
-// from the repository's URL, the clone by the same layout `canga git clone`
-// uses and the environment by the same <host>/<owner>/<repo> tail under a root
-// only the host knows, so opening the pair takes the URL and nothing else.
+// edits is one an agent in that sandbox could rewrite. Both are clones under
+// the same base directory `canga git clone` uses, and both paths come from the
+// repository's URL: the repository's own clone, and the directory for its
+// <host>/<owner>/<repo> tail under the envs/ directory of the repository that
+// holds the environments. Opening the pair takes the URL and nothing else.
+//
+// One repository cannot be kept apart this way: the one that holds the
+// environments. Its own environment lives inside its own clone.
 package workspace
 
 import (
@@ -16,25 +20,37 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/brunovenceslau/canga/internal/repo"
 )
 
-// EnvsDirVar names the root the sandbox environments hang under.
+// EnvsRepoVar names the repository that holds the sandbox environments, as its
+// path under the clone base, for example "github.com/acme/docker-sbx".
 //
-// It is host-only and has no default. The environments live in whatever
-// repository the user keeps them in, checked out wherever they chose, so any
-// guess would be someone else's layout, and a wrong guess would open a pane in
-// a directory that merely happens to exist.
-const EnvsDirVar = "CANGA_HOST_ENVS_DIR"
+// Unset, it is the docker-sbx repository of the same owner as the repository
+// being opened, <host>/<owner>/docker-sbx. Either way it is a clone like any
+// other, so every git source stays under the one base directory and there is
+// no second root to configure.
+const EnvsRepoVar = "CANGA_HOST_ENVS_REPO"
+
+const (
+	// defaultEnvsRepoName is the repository name EnvsRepoVar defaults to,
+	// under the opened repository's own owner.
+	defaultEnvsRepoName = "docker-sbx"
+
+	// envsSubdir is the directory, inside the environments' repository, that
+	// holds one <host>/<owner>/<repo> directory per environment.
+	envsSubdir = "envs"
+)
 
 var (
-	// ErrNoEnvsDir reports that EnvsDirVar is unset. It is a usage error: the
-	// command cannot work until the variable is set, and retrying changes
-	// nothing.
-	ErrNoEnvsDir = errors.New(EnvsDirVar + " is not set")
+	// ErrBadEnvsRepo reports an EnvsRepoVar that is not a relative path under
+	// the clone base. It is a usage error: the command cannot work until the
+	// variable is fixed, and retrying changes nothing.
+	ErrBadEnvsRepo = errors.New(EnvsRepoVar + " must be a path under the clone base")
 
 	// ErrNotCloned reports a repository with no clone at the deterministic
 	// path. It is refused rather than cloned on the spot, so opening a
@@ -71,7 +87,12 @@ func Resolve(url string) (Target, error) {
 		return Target{}, err
 	}
 
-	root, err := envsDir()
+	envsRepo, err := envsRepoPath(tail)
+	if err != nil {
+		return Target{}, err
+	}
+
+	base, err := repo.BaseDir()
 	if err != nil {
 		return Target{}, err
 	}
@@ -86,10 +107,12 @@ func Resolve(url string) (Target, error) {
 
 	// The tail keeps its case, as it does for the clone: the environments are
 	// laid out by the same readable <host>/<owner>/<repo> spelling. repo.Path
-	// has already refused "." and "..", which keeps this join inside root.
+	// and envsRepoPath have already refused "." and "..", which keeps this
+	// join inside base.
 	target := Target{
-		Name:    name,
-		EnvDir:  filepath.Join(root, filepath.FromSlash(tail)),
+		Name: name,
+		EnvDir: filepath.Join(base, filepath.FromSlash(envsRepo), envsSubdir,
+			filepath.FromSlash(tail)),
 		RepoDir: repoDir,
 	}
 
@@ -101,35 +124,59 @@ func Resolve(url string) (Target, error) {
 			ErrNotCloned, err)
 	}
 
-	// The hint lists the three ways this happens, most likely first: the
-	// environments' checkout predates the repository's environment (or its
-	// move to the derived path), the environment was never created, or the
-	// root points somewhere else.
+	// The hint lists the ways this happens, most likely first: the
+	// environments' repository is not cloned, its clone predates the
+	// repository's environment, the environment was never created, or the
+	// environments live in another repository.
 	if err := requireDir(target.EnvDir); err != nil {
-		return Target{}, fmt.Errorf("%w: %w (update the checkout that holds the "+
-			"environments, create the directory, or point %s at the root that holds "+
-			"the <host>/<owner>/<repo> directories)", ErrNoEnv, err, EnvsDirVar)
+		return Target{}, fmt.Errorf("%w: %w (clone the repository that holds the "+
+			"environments with `canga git clone <url>`, update it with `canga git "+
+			"sync`, create the directory, or set %s to that repository's path "+
+			"under the clone base, such as github.com/<owner>/%s)",
+			ErrNoEnv, err, EnvsRepoVar, defaultEnvsRepoName)
 	}
 
 	return target, nil
 }
 
-// envsDir resolves EnvsDirVar to an absolute path. Absolute because the panes
-// start there, and a terminal multiplexer resolves a relative directory against
-// its own idea of where it is, not canga's.
-func envsDir() (string, error) {
-	dir := os.Getenv(EnvsDirVar)
-	if dir == "" {
-		return "", fmt.Errorf("%w: point it at the directory holding the "+
-			"<host>/<owner>/<repo> environment directories", ErrNoEnvsDir)
+// envsRepoPath is the slash-separated path, under the clone base, of the
+// repository that holds the environments for the repository whose layout tail
+// is tail.
+//
+// A set EnvsRepoVar must be relative, and every segment must pass the same
+// rule a URL's segments do (repo.IsSafeSegment): an absolute path or a ".."
+// would take the environment pane outside the clone base, which is the one
+// place this command promises to stay in, and a URL pasted by mistake is
+// refused rather than turned into a directory name.
+//
+// The value is never repeated in the error: a URL pasted by mistake can carry
+// a credential.
+func envsRepoPath(tail string) (string, error) {
+	raw := os.Getenv(EnvsRepoVar)
+	if raw == "" {
+		// repo.Path yields "<host>/<group>.../<repo>"; the environments'
+		// repository sits beside the opened one, in the same (innermost)
+		// group.
+		return path.Join(path.Dir(tail), defaultEnvsRepoName), nil
 	}
 
-	absolute, err := filepath.Abs(dir)
-	if err != nil {
-		return "", fmt.Errorf("resolving %s %s: %w", EnvsDirVar, dir, err)
+	// Checked before the trailing slashes are trimmed, so "/" is refused as
+	// absolute instead of trimming to nothing and falling back to the default.
+	if filepath.IsAbs(raw) || strings.HasPrefix(raw, "/") {
+		return "", fmt.Errorf("%w: it is an absolute path; use a path such as "+
+			"github.com/<owner>/%s", ErrBadEnvsRepo, defaultEnvsRepoName)
 	}
 
-	return absolute, nil
+	value := strings.TrimRight(raw, "/")
+	for segment := range strings.SplitSeq(value, "/") {
+		if !repo.IsSafeSegment(segment) {
+			return "", fmt.Errorf("%w: use a path such as github.com/<owner>/%s, "+
+				"not a URL, with no empty, \".\" or \"..\" segment",
+				ErrBadEnvsRepo, defaultEnvsRepoName)
+		}
+	}
+
+	return value, nil
 }
 
 // errNotADirectory reports a path that exists but cannot hold a pane.

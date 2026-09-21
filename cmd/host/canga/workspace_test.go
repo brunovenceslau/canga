@@ -22,23 +22,29 @@ const workspaceCmd = "workspace"
 // workspaceURL is the repository the tests below open.
 const workspaceURL = "https://github.com/acme/widget"
 
-// workspaceLayout points the clone base and the envs root at directories of
-// the test's own, creates the directories named, and puts a `cmux` that prints
-// what the real one prints on success first on PATH.
+// workspaceLayout points the clone base at a directory of the test's own,
+// clears any environments repository the caller's shell set, creates the
+// clone and the default environment directory as asked, and puts a `cmux`
+// that prints what the real one prints on success first on PATH.
 func workspaceLayout(t *testing.T, clone, env bool) {
 	t.Helper()
 
-	base, envs, bin := t.TempDir(), t.TempDir(), t.TempDir()
+	base, bin := t.TempDir(), t.TempDir()
 	t.Setenv("CANGA_HOST_BASE_DIR", base)
-	t.Setenv(workspace.EnvsDirVar, envs)
+	t.Setenv(workspace.EnvsRepoVar, "")
 	t.Setenv("PATH", bin)
 
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "cmux"),
 		[]byte("#!/bin/sh\necho OK workspace:3\n"), 0o755))
 
-	for dir, want := range map[string]bool{base: clone, envs: env} {
+	dirs := map[string]bool{
+		filepath.Join(base, "github.com", "acme", "widget"): clone,
+		filepath.Join(base, "github.com", "acme", "docker-sbx", "envs",
+			"github.com", "acme", "widget"): env,
+	}
+	for dir, want := range dirs {
 		if want {
-			require.NoError(t, os.MkdirAll(filepath.Join(dir, "github.com", "acme", "widget"), 0o755))
+			require.NoError(t, os.MkdirAll(dir, 0o755))
 		}
 	}
 }
@@ -53,19 +59,20 @@ func TestWorkspaceCmd_Opens(t *testing.T) {
 	assert.Empty(t, stderr)
 }
 
-// An unset root and a bad URL are fixed by the caller before anything can
-// work; a missing directory is a state of the disk the user resolves.
+// A malformed environments repository and a bad URL are fixed by the caller
+// before anything can work; a missing directory is a state of the disk the
+// user resolves.
 func TestWorkspaceCmd_ExitCodes(t *testing.T) {
 	tests := []struct {
-		name        string
-		args        []string
-		clone, env  bool
-		unsetEnvDir bool
-		want        int
+		name       string
+		args       []string
+		clone, env bool
+		envsRepo   string
+		want       int
 	}{
 		{
-			name: "envs root unset", args: []string{workspaceURL}, clone: true, env: true,
-			unsetEnvDir: true, want: cli.ExitUsage,
+			name: "envs repo outside the base", args: []string{workspaceURL}, clone: true, env: true,
+			envsRepo: "../sandboxes", want: cli.ExitUsage,
 		},
 		{name: "bad url", args: []string{"not-a-url"}, clone: true, env: true, want: cli.ExitUsage},
 		{name: "no url", args: nil, want: cli.ExitUsage},
@@ -77,10 +84,7 @@ func TestWorkspaceCmd_ExitCodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			workspaceLayout(t, tt.clone, tt.env)
-
-			if tt.unsetEnvDir {
-				t.Setenv(workspace.EnvsDirVar, "")
-			}
+			t.Setenv(workspace.EnvsRepoVar, tt.envsRepo)
 
 			stdout, _, err := executeSplit(t, append([]string{workspaceCmd}, tt.args...)...)
 			require.Error(t, err)

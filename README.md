@@ -297,21 +297,63 @@ Opens a repository and its sandbox environment side by side, in one new
 [cmux](https://github.com/manaflow-ai/cmux) workspace:
 
 ```sh
-export CANGA_HOST_ENVS_DIR="$HOME/src/github.com/acme/sandboxes/envs"
 canga workspace https://github.com/acme/widget
 ```
 
 The workspace is named `acme/widget` and is focused when it opens. It has two
 panes:
 
-| Pane | Starts in |
-| --- | --- |
-| Left | `$CANGA_HOST_ENVS_DIR/github.com/acme/widget`, the environment |
-| Right, focused | `~/src/github.com/acme/widget`, the clone, where `canga git clone` puts it |
+| Pane | Starts in | Runs |
+| --- | --- | --- |
+| Left | `~/src/github.com/acme/docker-sbx/envs/github.com/acme/widget`, the environment | `sbx env run --clone`, the repository's sandbox |
+| Right, focused | `~/src/github.com/acme/widget`, the clone, where `canga git clone` puts it | nothing |
+
+cmux types `sbx env run --clone` into the left pane when its terminal starts,
+the way you would. When the sandbox exits, the pane keeps its shell in the
+environment directory, so you can start the sandbox again from there. If the
+left pane shows a prompt and no sandbox, cmux gave up waiting for the terminal
+(it waits a few seconds and drops the command without a message): type
+`sbx env run --clone` yourself.
 
 Use it when you keep each repository's sandbox environment outside the
 repository, so that an agent in the sandbox cannot edit the environment that
-runs it. Both paths come from the URL, so the command needs nothing else.
+runs it.
+
+### Where the environment is found
+
+The environments live in their own repository, cloned under the same base
+directory as every other clone, one directory per environment:
+
+```
+${CANGA_HOST_BASE_DIR:-$HOME/src}/<environments repository>/envs/<host>/<owner>/<repo>
+```
+
+| Variable | Default | What it sets |
+| --- | --- | --- |
+| `CANGA_HOST_ENVS_REPO` | `<host>/<owner>/docker-sbx`, the `docker-sbx` beside the opened repository | The environments repository, as its path under the base directory, such as `github.com/acme/sandboxes`. |
+
+With the default, `github.com/acme/widget` finds its environment in
+`github.com/acme/docker-sbx`, so nothing needs configuring. For a repository in
+a nested group, the default is the `docker-sbx` in the same innermost group:
+`gitlab.com/acme/platform/widget` looks in `gitlab.com/acme/platform/docker-sbx`,
+not in `gitlab.com/acme/docker-sbx`. Set
+`CANGA_HOST_ENVS_REPO` when the environments live elsewhere, for example to open
+a repository of another owner with your own environments:
+
+```sh
+export CANGA_HOST_ENVS_REPO=github.com/brunovenceslau/docker-sbx
+canga workspace https://github.com/acme/widget
+```
+
+The value is a path, not a URL, and must stay under the base directory. Each
+segment follows the rule a URL's segments do: letters, digits and `._~+-`, and
+never `.` or `..` alone. An absolute path is refused too. The error does not
+repeat the value, so a URL pasted by mistake does not print its credential.
+The `<host>/<owner>/<repo>` segments keep their case, as the clone's do.
+
+The environments repository is the one repository whose environment cannot live
+apart from it: opening `github.com/acme/docker-sbx` itself finds its
+environment inside its own clone.
 
 ### Requirements
 
@@ -319,12 +361,10 @@ runs it. Both paths come from the URL, so the command needs nothing else.
   --layout` call, checked against 0.64.23 and 0.64.25.
 - Run it from a terminal inside cmux. cmux's default socket mode accepts
   commands only from its own terminals, and its refusal is printed as it is.
-- `CANGA_HOST_ENVS_DIR` set to the directory that holds one
-  `<host>/<owner>/<repo>` directory per environment. It has no default,
-  because where the environments live is a personal choice. A relative value
-  is resolved against the current directory. The segments keep their case,
-  as the clone's do.
-- The clone and the environment directory already exist.
+- The clone, the environments repository's clone, and the environment
+  directory in it already exist. `canga git clone` makes both clones.
+- `sbx` on the `PATH` of the shells cmux opens. canga does not check for it:
+  if it is missing, the left pane shows that shell's `command not found`.
 
 ### What it refuses
 
@@ -332,10 +372,10 @@ Nothing is created or cloned. Each refusal happens before cmux is called:
 
 | Situation | Exit |
 | --- | --- |
-| `CANGA_HOST_ENVS_DIR` is unset | `2` |
+| `CANGA_HOST_ENVS_REPO` is absolute, a URL, or has an empty, `.`, `..` or otherwise invalid segment | `2` |
 | A URL no `<host>/<owner>/<repo>` can be derived from | `2` |
 | No clone at the derived path. The message suggests `canga git clone <url>` | `1` |
-| No environment directory at the derived path. The message names the path and the fixes: update the checkout that holds the environments, create the directory, or point `CANGA_HOST_ENVS_DIR` at the right root | `1` |
+| No environment directory at the derived path. The message names the path and the fixes: clone the environments repository with `canga git clone`, update it with `canga git sync`, create the directory, or set `CANGA_HOST_ENVS_REPO` | `1` |
 | `cmux` is not on your PATH | `1` |
 | cmux fails. Its own message is shown | `1` |
 
@@ -768,7 +808,7 @@ contents.
 | --- | --- |
 | `0` | success |
 | `1` | a runtime failure, a clone target that already holds something, an id with nothing behind it, or a workspace whose clone or environment directory is missing |
-| `2` | a bad invocation, a directory that is not a repository or has no usable `origin`, an upgrade with no release to work from, or `workspace` with `CANGA_HOST_ENVS_DIR` unset |
+| `2` | a bad invocation, a directory that is not a repository or has no usable `origin`, an upgrade with no release to work from, or `workspace` with a `CANGA_HOST_ENVS_REPO` outside the base directory |
 
 ## Development
 

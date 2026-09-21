@@ -15,6 +15,15 @@ import (
 // ErrCmuxMissing reports a cmux binary that is not on PATH.
 var ErrCmuxMissing = errors.New("cmux is not installed or not on PATH")
 
+// envRunCommand starts the repository's sandbox from the environment pane.
+//
+// cmux types a surface's command into that pane's shell, followed by a newline
+// (dequeueInitialTerminalInput and sendInputWhenReady in its
+// Sources/Workspace+CustomLayout.swift, 0.64.25), rather than running it as the
+// pane's process. So the pane outlives the sandbox: when sbx exits, the shell
+// is still there, in the environment directory, for the next run.
+const envRunCommand = "sbx env run --clone"
+
 // The layout document `cmux new-workspace --layout` takes, verified against
 // cmux 0.64.23 and 0.64.25 (CmuxLayoutNode and CmuxSurfaceDefinition in its
 // Sources/CmuxConfig.swift). A node is either a split or a pane, never both,
@@ -35,14 +44,18 @@ type (
 		Type string `json:"type"`
 		// An absolute cwd is used as is; cmux resolves a relative one against
 		// the workspace's --cwd.
-		Cwd   string `json:"cwd"`
-		Focus bool   `json:"focus,omitempty"`
+		Cwd string `json:"cwd"`
+		// Command is typed into the terminal once cmux has created it. cmux
+		// waits a few seconds for that (its debug log says 3s) and drops the
+		// command, silently in release builds, if the terminal is still missing.
+		Command string `json:"command,omitempty"`
+		Focus   bool   `json:"focus,omitempty"`
 	}
 )
 
 // OpenCmux opens t as a new, focused cmux workspace: the environment on the
-// left, the clone on the right, and the cursor in the clone, where the work
-// happens.
+// left, running its sandbox, the clone on the right, and the cursor in the
+// clone, where the work happens.
 //
 // cmux's own output is passed through: its stdout (the new workspace's ref) to
 // out and its diagnostics to errOut. That includes its refusal when canga runs
@@ -78,7 +91,9 @@ func cmuxArgs(t Target) ([]string, error) {
 	layout := layoutNode{
 		Direction: "horizontal",
 		Children: []layoutNode{
-			{Pane: &layoutPane{Surfaces: []layoutSurface{{Type: "terminal", Cwd: t.EnvDir}}}},
+			{Pane: &layoutPane{Surfaces: []layoutSurface{
+				{Type: "terminal", Cwd: t.EnvDir, Command: envRunCommand},
+			}}},
 			{Pane: &layoutPane{Surfaces: []layoutSurface{{Type: "terminal", Cwd: t.RepoDir, Focus: true}}}},
 		},
 	}
