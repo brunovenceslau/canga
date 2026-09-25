@@ -6,6 +6,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brunovenceslau/canga/internal/repo"
@@ -18,8 +19,8 @@ import (
 const widgetURL = "git@github.com:Acme/Widget.git"
 
 // widgetEnv is where widgetURL's environment lives by default: under envs/ in
-// the docker-sbx clone of the same owner.
-var widgetEnv = filepath.Join("github.com", "Acme", "docker-sbx", "envs", "github.com", "Acme", "Widget")
+// the docker-sbx clone of the same owner, its last segment suffixed "-env".
+var widgetEnv = filepath.Join("github.com", "Acme", "docker-sbx", "envs", "github.com", "Acme", "Widget-env")
 
 // layout points the clone base at a directory of the test's own, clears any
 // environments repository the caller's shell set, and returns the base. It
@@ -66,12 +67,47 @@ func TestResolve(t *testing.T) {
 func TestResolve_NestedGroup(t *testing.T) {
 	base := layout(t)
 	tail := filepath.Join("gitlab.com", "acme", "platform", "widget")
-	envDir := filepath.Join(base, "gitlab.com", "acme", "platform", "docker-sbx", "envs", tail)
+	envDir := filepath.Join(base, "gitlab.com", "acme", "platform", "docker-sbx", "envs",
+		"gitlab.com", "acme", "platform", "widget-env")
 	mkdirs(t, filepath.Join(base, tail), envDir)
 
 	got, err := Resolve("https://gitlab.com/acme/platform/widget.git")
 	require.NoError(t, err)
 	assert.Equal(t, "acme/platform/widget", got.Name)
+	assert.Equal(t, envDir, got.EnvDir)
+}
+
+// The environments repository is the one repository whose environment cannot
+// live apart from it: opening it finds an environment nested inside its own
+// clone, suffixed the same as any other repository's.
+//
+//nolint:paralleltest // t.Setenv forbids it
+func TestResolve_SelfHosted(t *testing.T) {
+	base := layout(t)
+	repoDir := filepath.Join(base, "github.com", "Acme", "docker-sbx")
+	envDir := filepath.Join(repoDir, "envs", "github.com", "Acme", "docker-sbx-env")
+	mkdirs(t, repoDir, envDir)
+
+	got, err := Resolve("git@github.com:Acme/docker-sbx.git")
+	require.NoError(t, err)
+	assert.Equal(t, Target{Name: "Acme/docker-sbx", EnvDir: envDir, RepoDir: repoDir}, got)
+	assert.True(t, strings.HasPrefix(got.EnvDir, got.RepoDir+string(filepath.Separator)),
+		"the environment directory must nest inside the repository's own clone")
+}
+
+// A repository already named with the suffix still gets one appended: the
+// derivation does not special-case a name that happens to end in "-env".
+//
+//nolint:paralleltest // t.Setenv forbids it
+func TestResolve_RepoAlreadySuffixed(t *testing.T) {
+	base := layout(t)
+	repoDir := filepath.Join(base, "github.com", "Acme", "foo-env")
+	envDir := filepath.Join(base, "github.com", "Acme", "docker-sbx", "envs",
+		"github.com", "Acme", "foo-env-env")
+	mkdirs(t, repoDir, envDir)
+
+	got, err := Resolve("git@github.com:Acme/foo-env.git")
+	require.NoError(t, err)
 	assert.Equal(t, envDir, got.EnvDir)
 }
 
@@ -92,7 +128,7 @@ func TestResolve_EnvsRepoOverride(t *testing.T) {
 			t.Setenv(EnvsRepoVar, tt.give)
 
 			envDir := filepath.Join(base, "github.com", "brunovenceslau", "sandboxes",
-				"envs", "github.com", "Acme", "Widget")
+				"envs", "github.com", "Acme", "Widget-env")
 			mkdirs(t, filepath.Join(base, "github.com", "Acme", "Widget"), envDir)
 
 			got, err := Resolve(widgetURL)

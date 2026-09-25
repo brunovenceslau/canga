@@ -40,7 +40,7 @@ func workspaceLayout(t *testing.T, clone, env bool) {
 	dirs := map[string]bool{
 		filepath.Join(base, "github.com", "acme", "widget"): clone,
 		filepath.Join(base, "github.com", "acme", "docker-sbx", "envs",
-			"github.com", "acme", "widget"): env,
+			"github.com", "acme", "widget-env"): env,
 	}
 	for dir, want := range dirs {
 		if want {

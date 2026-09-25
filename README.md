@@ -305,7 +305,7 @@ panes:
 
 | Pane | Starts in | Runs |
 | --- | --- | --- |
-| Left | `~/src/github.com/acme/docker-sbx/envs/github.com/acme/widget`, the environment | `sbx env run --clone`, the repository's sandbox |
+| Left | `~/src/github.com/acme/docker-sbx/envs/github.com/acme/widget-env`, the environment | `sbx env run --clone`, the repository's sandbox |
 | Right, focused | `~/src/github.com/acme/widget`, the clone, where `canga git clone` puts it | nothing |
 
 cmux types `sbx env run --clone` into the left pane when its terminal starts,
@@ -325,8 +325,21 @@ The environments live in their own repository, cloned under the same base
 directory as every other clone, one directory per environment:
 
 ```
-${CANGA_HOST_BASE_DIR:-$HOME/src}/<environments repository>/envs/<host>/<owner>/<repo>
+${CANGA_HOST_BASE_DIR:-$HOME/src}/<environments repository>/envs/<host>/<owner>/<repo>-env
 ```
+
+The trailing `-env` is there so the environment directory's basename never
+matches the clone's: without it, both directories end in the same `<repo>`,
+which is easy to mistake for one another in a listing, a pane or a shell
+prompt. The suffix follows [Docker Sandboxes' own documented environment file
+layout](https://docs.docker.com/ai/sandboxes/configuration/environment-files/),
+which names an environment directory for `web-app` as `web-app-env/`.
+
+The environment directory is not a git repository of its own: it has no
+`.git`, and sits inside the working tree of the repository that holds the
+environments. A `git` command run inside it acts on that enclosing repository,
+not on the repository being opened, and the `-env` suffix does not change
+that; it only keeps the two directories' names apart.
 
 | Variable | Default | What it sets |
 | --- | --- | --- |
@@ -354,6 +367,15 @@ The `<host>/<owner>/<repo>` segments keep their case, as the clone's do.
 The environments repository is the one repository whose environment cannot live
 apart from it: opening `github.com/acme/docker-sbx` itself finds its
 environment inside its own clone.
+
+**Migrating existing environment directories:** the `-env` suffix is a
+breaking change for a `docker-sbx` clone created before it. For each existing
+environment directory under `envs/<host>/<owner>/<repo>`, rename its leaf
+segment to add the suffix, then commit the rename:
+
+```sh
+git -C ~/src/github.com/acme/docker-sbx mv envs/github.com/acme/widget envs/github.com/acme/widget-env
+```
 
 ### Requirements
 
