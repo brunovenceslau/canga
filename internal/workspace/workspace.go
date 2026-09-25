@@ -8,8 +8,12 @@
 // edits is one an agent in that sandbox could rewrite. Both are clones under
 // the same base directory `canga git clone` uses, and both paths come from the
 // repository's URL: the repository's own clone, and the directory for its
-// <host>/<owner>/<repo> tail under the envs/ directory of the repository that
-// holds the environments. Opening the pair takes the URL and nothing else.
+// <host>/<owner>/<repo> tail, its last segment suffixed "-env", under the
+// envs/ directory of the repository that holds the environments. The suffix
+// keeps the two directories' basenames apart, so a listing, a pane title or a
+// shell prompt does not read the same for both. It matches Docker Sandboxes'
+// own documented layout for an environment directory. Opening the pair takes
+// the URL and nothing else.
 //
 // One repository cannot be kept apart this way: the one that holds the
 // environments. Its own environment lives inside its own clone.
@@ -44,6 +48,15 @@ const (
 	// envsSubdir is the directory, inside the environments' repository, that
 	// holds one <host>/<owner>/<repo> directory per environment.
 	envsSubdir = "envs"
+
+	// envDirSuffix is appended to the last segment of the environment
+	// directory, so its basename alone tells it apart from the clone's, which
+	// shares the same "<repo>" leaf: the two are otherwise easy for an
+	// operator to mistake for one another in a listing, a pane or a shell
+	// prompt. It follows Docker Sandboxes' own documented layout, where an
+	// environment for "web-app" lives in "web-app-env/"; see
+	// https://docs.docker.com/ai/sandboxes/configuration/environment-files/.
+	envDirSuffix = "-env"
 )
 
 var (
@@ -106,13 +119,13 @@ func Resolve(url string) (Target, error) {
 	_, name, _ := strings.Cut(tail, "/")
 
 	// The tail keeps its case, as it does for the clone: the environments are
-	// laid out by the same readable <host>/<owner>/<repo> spelling. repo.Path
-	// and envsRepoPath have already refused "." and "..", which keeps this
-	// join inside base.
+	// laid out by the same readable <host>/<owner>/<repo> spelling, only the
+	// last segment carries envDirSuffix. repo.Path and envsRepoPath have
+	// already refused "." and "..", which keeps this join inside base.
 	target := Target{
 		Name: name,
 		EnvDir: filepath.Join(base, filepath.FromSlash(envsRepo), envsSubdir,
-			filepath.FromSlash(tail)),
+			filepath.FromSlash(path.Dir(tail)), path.Base(tail)+envDirSuffix),
 		RepoDir: repoDir,
 	}
 
