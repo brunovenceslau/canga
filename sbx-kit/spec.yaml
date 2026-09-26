@@ -90,18 +90,18 @@ setup:
         # that release's checksums.txt, written together by
         # scripts/sbx-kit-pin.sh only. The sha256 is the gate: integrity of
         # the bytes the pin names, checked before anything is extracted.
-        CANGA_VERSION="0.10.1"
+        CANGA_VERSION="0.10.2"
 
         # Detect the arch instead of hardcoding it: the sandbox arch follows
         # the host. The sandbox build is published for linux only.
         case "$(uname -m)" in
           x86_64 | amd64)
             arch="amd64"
-            sha256="e96d4d9753c70d6cf99f4adada84a5d490dd53818630e8ae49c916e52ce930ec"
+            sha256="6b06a59c79b613546782c31c1b42cf117df214d130ec90e888344ad7733fccf7"
             ;;
           aarch64 | arm64)
             arch="arm64"
-            sha256="6e54bf2eb6518b32bd91a0260968da618db2c7647d823a91412c9d13538c97e4"
+            sha256="c7fcbbcdc24b4b72c1fbe770f45350cf99ac28d9f8e8897cb94628977d46976f"
             ;;
           *)
             echo "canga: unsupported architecture: $(uname -m)" >&2
