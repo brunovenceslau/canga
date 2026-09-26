@@ -305,15 +305,18 @@ panes:
 
 | Pane | Starts in | Runs |
 | --- | --- | --- |
-| Left | `~/src/github.com/acme/docker-sbx/envs/github.com/acme/widget-env`, the environment | `sbx env run --clone`, the repository's sandbox |
+| Left | `~/src/github.com/acme/docker-sbx/envs/github.com/acme/widget-env`, the environment | `sbx env run --clone --auto-approve`, the repository's sandbox |
 | Right, focused | `~/src/github.com/acme/widget`, the clone, where `canga git clone` puts it | nothing |
 
-cmux types `sbx env run --clone` into the left pane when its terminal starts,
-the way you would. When the sandbox exits, the pane keeps its shell in the
-environment directory, so you can start the sandbox again from there. If the
+cmux types `sbx env run --clone --auto-approve` into the left pane when its
+terminal starts, the way you would. `--auto-approve` applies the environment
+plan without the confirmation prompt, since the workspace opens focused on
+the right pane and a prompt left in the left one would go unnoticed. When
+the sandbox exits, the pane keeps its shell in the environment directory, so
+you can start the sandbox again from there. If the
 left pane shows a prompt and no sandbox, cmux gave up waiting for the terminal
 (it waits a few seconds and drops the command without a message): type
-`sbx env run --clone` yourself.
+`sbx env run --clone --auto-approve` yourself.
 
 Use it when you keep each repository's sandbox environment outside the
 repository, so that an agent in the sandbox cannot edit the environment that
