@@ -53,7 +53,7 @@ SANDBOX_PLATFORMS ?= linux/arm64 linux/amd64
 .NOTPARALLEL:
 
 .DEFAULT_GOAL := help
-.PHONY: help build cross install fmt fix pre-commit lint license-check test race vuln ci release release-preflight tools tool-lint tool-vuln tool-release clean
+.PHONY: help build cross install fmt fix pre-commit lint license-check test race vuln ci release release-preflight release-kit-bump tools tool-lint tool-vuln tool-release clean
 
 help:
 	@echo "Targets:"
@@ -69,7 +69,8 @@ help:
 	@echo "  make race     the multi-process store race gate, verbosely"
 	@echo "  make vuln     govulncheck ./..."
 	@echo "  make ci       lint + license-check + cross + test + vuln — must be green before a push"
-	@echo "  make release  build the release artifacts and attach them to the GitHub release"
+	@echo "  make release  build the release artifacts, attach them to the GitHub release, and commit the sbx kit bump on a branch"
+	@echo "  make release-kit-bump  commit the sbx kit pin for the tag at HEAD from dist/checksums.txt, on a branch"
 	@echo "  make tools    install the pinned dev tools into GOBIN"
 
 build:
@@ -191,8 +192,30 @@ release: release-preflight ci
 	echo "uploading to the $$tag release"; \
 	gh release upload "$$tag" dist/*.tar.gz dist/checksums.txt --clobber; \
 	echo "release: $$tag now carries $$(ls dist/*.tar.gz | wc -l | tr -d ' ') archives and checksums.txt"
+	@$(MAKE) --no-print-directory release-kit-bump
 
-# Everything that can refuse a release, and nothing that takes time.
+# Move the sbx kit's pin to the release just built, as a signed commit on a
+# branch of its own (chore/sbx-kit-<tag>), for a pull request.
+#
+# The hashes come from dist/checksums.txt, the one GoReleaser just wrote, and
+# must also match the archives next to it and the digests GitHub serves for
+# the release: a failed or repeated upload leaves those apart, and then it
+# refuses. It pushes nothing, because pushing is outward-facing; it prints the
+# two commands that do.
+#
+# It also refuses a dirty tree, a HEAD that does not carry exactly this one
+# tag, a checksums.txt missing either canga-sandbox_ linux line, and a kit
+# whose pin it cannot find exactly once. Run twice, it verifies the branch it
+# made and changes nothing. It runs on its own too, which is how a release
+# that stopped after uploading gets its bump. scripts/sbx-kit-pin.sh has the
+# checks, and README "Move the sbx kit's pin" the reasons.
+release-kit-bump:
+	@set -e; \
+	tag=$$(git describe --tags --exact-match); \
+	scripts/sbx-kit-pin.sh bump "$$tag" dist/checksums.txt
+
+# Everything that can refuse a release, before anything slow: each check is
+# a local git command or one git or GitHub query, never a build.
 #
 # Two of the checks are about the tag being the SAME tag everywhere. HEAD with
 # two tags on it has no single answer to "which release is this", and
@@ -209,6 +232,15 @@ release: release-preflight ci
 # `ci` running at all is not ceremony: a release is the one build nobody
 # re-checks afterwards, and while the Release workflow cannot run, this is the
 # only gate between a broken tree and a published binary.
+#
+# The last two checks are about the sbx kit. check-previous refuses until the
+# kit at HEAD pins the newest published release below this tag, which is to
+# say until the previous release's kit bump merged: the kit cannot name this
+# tag, whose archives do not exist yet. check-clobber refuses to rebuild a
+# tag whose archives a pushed or merged kit bump already pins, unless
+# SBX_KIT_ALLOW_CLOBBER names that exact tag: rebuilt archives get new hashes,
+# and every sandbox pinned to the old ones stops installing. A tag below the
+# newest published release is refused unless SBX_KIT_OLDER_LINE names it.
 release-preflight:
 	@command -v goreleaser >/dev/null 2>&1 || { \
 	  echo "goreleaser is not installed; run 'make tool-release'" >&2; exit 1; }
@@ -251,7 +283,9 @@ release-preflight:
 	  echo "    gh release create $$tag --generate-notes" >&2; \
 	  exit 1; \
 	fi; \
-	echo "release-preflight: $$tag is the only tag here, matches the remote, and has a release"
+	scripts/sbx-kit-pin.sh check-previous "$$tag"; \
+	scripts/sbx-kit-pin.sh check-clobber "$$tag"; \
+	echo "release-preflight: $$tag is the only tag here, matches the remote, has a release, the sbx kit pins the release before it, and no kit pins this one yet"
 
 # Dev tools are PINNED here and installed with `go install`, not carried as
 # go.mod `tool` directives: golangci-lint and goreleaser each drag a module graph

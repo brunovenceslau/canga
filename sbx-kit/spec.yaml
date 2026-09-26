@@ -10,10 +10,9 @@
 # The README's "Use the sbx kit" section has the whole procedure, including
 # the kit.allowedSources setting sbx needs before it loads a GitHub kit.
 #
-# The pin below names a release that already exists, so it always trails the
-# tag it sits under: a tag's own checksums.txt is published after the tag is
-# pushed. It moves in a commit of its own after each release (README,
-# "Releasing"), and that commit is the ref to pin.
+# The pin below names a release that already exists, and moves in a pull
+# request of its own after each release. The README's "Move the sbx kit's
+# pin" section says how, and why the hashes live in this file.
 schemaVersion: "2"
 kind: mixin
 name: canga
@@ -87,23 +86,22 @@ setup:
           fi
         done
 
-        # Pinned by version AND per-arch sha256, copied from the release's
-        # checksums.txt (canga v0.8.0, the canga-sandbox_* archives; verified
-        # 2026-09-18 against the downloaded bytes). A bump changes all three
-        # values together. The sha256 is the gate: integrity of the bytes the
-        # pin names, checked before anything is extracted.
-        CANGA_VERSION="0.8.0"
+        # Pinned by version AND per-arch sha256, the canga-sandbox_ lines of
+        # that release's checksums.txt, written together by
+        # scripts/sbx-kit-pin.sh only. The sha256 is the gate: integrity of
+        # the bytes the pin names, checked before anything is extracted.
+        CANGA_VERSION="0.10.1"
 
         # Detect the arch instead of hardcoding it: the sandbox arch follows
         # the host. The sandbox build is published for linux only.
         case "$(uname -m)" in
           x86_64 | amd64)
             arch="amd64"
-            sha256="532d5a2700b3c2568e105adf014a524b8dec7dfa77e83040fe6001f5aeada3cf"
+            sha256="e96d4d9753c70d6cf99f4adada84a5d490dd53818630e8ae49c916e52ce930ec"
             ;;
           aarch64 | arm64)
             arch="arm64"
-            sha256="1af8c7723b7ab5c9de3177c61660353592de85ca702d5ad759c240d75394a024"
+            sha256="6e54bf2eb6518b32bd91a0260968da618db2c7647d823a91412c9d13538c97e4"
             ;;
           *)
             echo "canga: unsupported architecture: $(uname -m)" >&2
