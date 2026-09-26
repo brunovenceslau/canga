@@ -26,6 +26,13 @@ import (
 // and a fake gh that serves the release list and the release digests from
 // files the case wrote.
 
+// The leading underscore marks a fixture constant shared across this
+// package's test files (install_test.go, sbxkit_test.go, and this one), as
+// opposed to a local variable, parameter or struct field of the same short
+// name: setAssets's own tag, version, amd64 and arm64 parameters, pinKit's
+// version, amd64 and arm64 parameters, and bumpWorld's amd64 and arm64
+// fields all reuse those exact words. The prefix lets a fixture and a
+// same-named local coexist without one shadowing the other.
 const (
 	_pinScript = "scripts/sbx-kit-pin.sh"
 
@@ -105,16 +112,45 @@ func fakeGhBin(t *testing.T) string {
 	return bin
 }
 
+// scrubbedEnv is a subprocess environment known to carry no GIT_* entry.
+// childEnv is its constructor by convention. A named slice type would not do
+// here: Go lets a plain []string, such as a raw os.Environ(), stand in for a
+// named slice type with no conversion at all, so runPin(t, dir, os.Environ(),
+// ...) would still compile and silently skip the scrub. Wrapping the slice
+// in a struct with an unexported field closes that for the realistic
+// mistake: env is only reachable from this package (not just this file),
+// and asEnv refuses the one value inside the package that would still slip
+// past it, the zero value.
+type scrubbedEnv struct {
+	env []string
+}
+
+// asEnv is env in the shape exec.Cmd.Env wants. It panics on the zero value:
+// exec.Cmd treats a nil Env as "inherit the parent's whole environment", the
+// opposite of what scrubbedEnv promises, so a scrubbedEnv{} built by hand
+// instead of through childEnv must never reach a Cmd this quietly.
+func (e scrubbedEnv) asEnv() []string {
+	if e.env == nil {
+		panic("scrubbedEnv zero value passed as an environment; build it with childEnv")
+	}
+
+	return e.env
+}
+
 // childEnv is environ without any GIT_* entry, then extra. A git hook
 // exports GIT_DIR (absolute, in a linked worktree), GIT_INDEX_FILE and more;
 // inherited, they would point every git a case runs, and the script's own,
-// at the real repository instead of the case's throwaway one.
-func childEnv(environ []string, extra ...string) []string {
-	env := slices.DeleteFunc(slices.Clone(environ), func(entry string) bool {
+// at the real repository instead of the case's throwaway one. The result is
+// never nil, even when environ and extra both are: append(env, extra...)
+// with env non-nil and extra empty returns env unchanged, and env starts
+// from the non-nil []string{}, not from slices.Clone(environ), which would
+// itself be nil when environ is.
+func childEnv(environ []string, extra ...string) scrubbedEnv {
+	env := slices.DeleteFunc(append([]string{}, environ...), func(entry string) bool {
 		return strings.HasPrefix(entry, "GIT_")
 	})
 
-	return append(env, extra...)
+	return scrubbedEnv{env: append(env, extra...)}
 }
 
 // pinWorld is one case's repository, origin, fake gh state and TMPDIR.
@@ -176,7 +212,11 @@ func newPinWorldFrom(t *testing.T, inherited []string, bin, kit string, signed b
 		key := filepath.Join(root, "key")
 		keygenArgs := []string{"-q", "-t", "ed25519", "-N", "", "-C", "test", "-f", key}
 		keygenCmd := exec.CommandContext(t.Context(), keygen, keygenArgs...)
-		keygenCmd.Env = w.childEnv()
+		// Scrubbed on principle, like every other subprocess here, though
+		// ssh-keygen itself never reads GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE,
+		// so the GIT_* env tests below cannot exercise a regression at this
+		// one call site.
+		keygenCmd.Env = w.childEnv().asEnv()
 		out, err := keygenCmd.CombinedOutput()
 		require.NoError(t, err, string(out))
 
@@ -195,7 +235,7 @@ func newPinWorldFrom(t *testing.T, inherited []string, bin, kit string, signed b
 
 	origin := filepath.Join(root, "origin.git")
 	initCmd := exec.CommandContext(t.Context(), "git", "init", "-q", "--bare", origin)
-	initCmd.Env = w.childEnv()
+	initCmd.Env = w.childEnv().asEnv()
 	out, err := initCmd.CombinedOutput()
 	require.NoError(t, err, string(out))
 	w.git(t, "remote", "add", "origin", origin)
@@ -213,7 +253,7 @@ func (w pinWorld) writeKit(t *testing.T, kit string) {
 }
 
 // childEnv is the whole environment of the case's subprocesses.
-func (w pinWorld) childEnv() []string {
+func (w pinWorld) childEnv() scrubbedEnv {
 	return childEnv(w.inherited, w.env...)
 }
 
@@ -222,7 +262,7 @@ func (w pinWorld) git(t *testing.T, args ...string) string {
 
 	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = w.repo
-	cmd.Env = w.childEnv()
+	cmd.Env = w.childEnv().asEnv()
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v: %s", args, out)
 
@@ -277,7 +317,7 @@ type pinRun struct {
 
 // runPin runs the pin script under sh, in dir, with env as its whole
 // environment.
-func runPin(t *testing.T, dir string, env []string, args ...string) pinRun {
+func runPin(t *testing.T, dir string, env scrubbedEnv, args ...string) pinRun {
 	t.Helper()
 
 	script, err := filepath.Abs(_pinScript)
@@ -288,7 +328,7 @@ func runPin(t *testing.T, dir string, env []string, args ...string) pinRun {
 
 	cmd := exec.CommandContext(ctx, "sh", append([]string{script}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = env
+	cmd.Env = env.asEnv()
 
 	var stdout, stderr bytes.Buffer
 
@@ -565,9 +605,15 @@ func TestSbxKitPin_CheckPrevious(t *testing.T) {
 		{name: "the tag's own release is already published", kit: _prevVersion, tags: []string{_nextTag, _prevTag, _tag}, tag: _nextTag, want: "pins " + _prevTag},
 		{name: "versions compare as numbers, not strings", kit: "0.10.0", tags: []string{_tag, _olderTag, "v0.8.9"}, tag: _prevTag, assetsTag: _olderTag, want: "pins v0.10.0"},
 		{name: "a non-release tag is ignored", kit: _prevVersion, tags: []string{_prevTag, "v1.0", "nightly", "v0.09.9", _tag}, tag: _nextTag, want: "pins " + _prevTag},
-		{name: "a release on an older line, allowed for it", kit: "0.9.0", tags: []string{_prevTag, _tag}, tag: _olderLineTag, assetsTag: _tag, olderLine: _olderLineTag, want: "WARNING: " + _olderLineTag + " is below"},
+		{
+			name: "a release on an older line, allowed for it", kit: "0.9.0", tags: []string{_prevTag, _tag}, tag: _olderLineTag, assetsTag: _tag, olderLine: _olderLineTag,
+			want: "WARNING: " + _olderLineTag + " is below",
+		},
 		{name: "a release on an older line, not allowed", kit: "0.9.0", tags: []string{_prevTag, _tag}, tag: _olderLineTag, assetsTag: _tag, exit: 1, want: "set SBX_KIT_OLDER_LINE=" + _olderLineTag},
-		{name: "a release on an older line, allowed for another tag", kit: "0.9.0", tags: []string{_prevTag, _tag}, tag: _olderLineTag, assetsTag: _tag, olderLine: "v0.9.2", exit: 1, want: "set SBX_KIT_OLDER_LINE=" + _olderLineTag},
+		{
+			name: "a release on an older line, allowed for another tag", kit: "0.9.0", tags: []string{_prevTag, _tag}, tag: _olderLineTag, assetsTag: _tag, olderLine: "v0.9.2", exit: 1,
+			want: "set SBX_KIT_OLDER_LINE=" + _olderLineTag,
+		},
 		{name: "the previous bump never merged", kit: "0.10.0", tags: []string{_prevTag, _olderTag}, tag: _nextTag, exit: 1, want: "chore/sbx-kit-" + _prevTag},
 		{name: "the kit already names this tag", kit: _nextVersion, tags: []string{_prevTag}, tag: _nextTag, exit: 1, want: "newest published\nrelease below v0.10.2 is v0.10.1"},
 		{name: "an older line pinning an unpublished release", kit: "0.9.5", tags: []string{_prevTag, _tag}, tag: "v0.9.6", olderLine: "v0.9.6", exit: 1, want: "not a published release"},
@@ -658,8 +704,14 @@ func TestSbxKitPin_CheckClobber(t *testing.T) {
 		{name: "main pins it, and the override is yes", mainKit: _nextVersion, allow: "yes", exit: 1, want: "SBX_KIT_ALLOW_CLOBBER=" + _nextTag},
 		{name: "main pins it, and the override names another tag", mainKit: _nextVersion, allow: _prevTag, exit: 1, want: "SBX_KIT_ALLOW_CLOBBER=" + _nextTag},
 		{name: "no release yet, in a repository gh can see", mainKit: _nextVersion, noAssets: true, want: "no release yet"},
-		{name: "no release, in a repository gh cannot see", mainKit: _nextVersion, noAssets: true, repoHidden: true, exit: 1, want: "gh cannot see brunovenceslau/canga; a 404 for " + _nextTag + " proves nothing"},
-		{name: "no release, in a repository gh sees under another name", mainKit: _nextVersion, noAssets: true, fullName: "brunovenceslau/canga-fork\n", exit: 1, want: "gh cannot see brunovenceslau/canga"},
+		{
+			name: "no release, in a repository gh cannot see", mainKit: _nextVersion, noAssets: true, repoHidden: true, exit: 1,
+			want: "gh does not see brunovenceslau/canga as itself; a 404 for " + _nextTag + " proves nothing (gh sees: nothing)",
+		},
+		{
+			name: "no release, in a repository gh sees under another name", mainKit: _nextVersion, noAssets: true, fullName: "brunovenceslau/canga-fork\n", exit: 1,
+			want: "gh does not see brunovenceslau/canga as itself; a 404 for " + _nextTag + " proves nothing (gh sees: brunovenceslau/canga-fork)",
+		},
 		{name: "the release cannot be read", mainKit: _prevVersion, serverError: true, exit: 1, want: "could not read the assets"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1004,6 +1056,59 @@ func TestSbxKitPin_Bump(t *testing.T) {
 	}
 }
 
+// gitEnvDecoy is a pinWorld created before its caller poisons any GIT_*
+// variable, plus the means to prove it was left untouched. Shared by
+// TestSbxKitPin_IgnoresInheritedGitEnv and TestSbxKitPin_IgnoresRealGitEnv,
+// which differ only in how they poison GIT_*.
+type gitEnvDecoy struct {
+	pinWorld
+
+	gitDir                              string
+	configBefore, logBefore, refsBefore string
+}
+
+// newGitEnvDecoy creates a pinWorld and snapshots it before anything poisons
+// GIT_*, and registers a t.Cleanup check, so a leaked git that corrupts it
+// fails the case even if it ends some other way first.
+func newGitEnvDecoy(t *testing.T, bin string) gitEnvDecoy {
+	t.Helper()
+
+	d := gitEnvDecoy{pinWorld: newPinWorld(t, bin, realKit(t, _prevVersion, _sumAMD64, _sumARM64), false)}
+	d.gitDir = filepath.Join(d.repo, ".git")
+	d.configBefore, d.logBefore, d.refsBefore = d.snapshot(t)
+
+	t.Cleanup(func() {
+		config, err := os.ReadFile(filepath.Join(d.gitDir, "config"))
+		if assert.NoError(t, err) {
+			assert.Equal(t, d.configBefore, string(config), "the decoy's config, at cleanup")
+		}
+	})
+
+	return d
+}
+
+// snapshot is the decoy's config, full history and every ref.
+func (d gitEnvDecoy) snapshot(t *testing.T) (string, string, string) {
+	t.Helper()
+
+	config, err := os.ReadFile(filepath.Join(d.gitDir, "config"))
+	require.NoError(t, err)
+
+	return string(config),
+		d.git(t, "log", "--all", "--format=%H %s"),
+		d.git(t, "for-each-ref", "--format=%(refname) %(objectname)")
+}
+
+// assertUntouched checks the decoy is byte-for-byte as newGitEnvDecoy left it.
+func (d gitEnvDecoy) assertUntouched(t *testing.T) {
+	t.Helper()
+
+	config, log, refs := d.snapshot(t)
+	assert.Equal(t, d.configBefore, config, "the decoy's config")
+	assert.Equal(t, d.logBefore, log, "the decoy's history")
+	assert.Equal(t, d.refsBefore, refs, "the decoy's refs")
+}
+
 // TestSbxKitPin_IgnoresInheritedGitEnv runs a bump that inherits the GIT_*
 // variables a git hook exports, aimed at a decoy repository, and checks the
 // decoy is left byte-for-byte as it was: every git the case and the script
@@ -1013,31 +1118,12 @@ func TestSbxKitPin_IgnoresInheritedGitEnv(t *testing.T) {
 	bin := fakeGhBin(t)
 	t.Parallel()
 
-	decoy := newPinWorld(t, bin, realKit(t, _prevVersion, _sumAMD64, _sumARM64), false)
-	decoyGit := filepath.Join(decoy.repo, ".git")
-	snapshot := func() (string, string, string) {
-		config, err := os.ReadFile(filepath.Join(decoyGit, "config"))
-		require.NoError(t, err)
-
-		return string(config),
-			decoy.git(t, "log", "--all", "--format=%H %s"),
-			decoy.git(t, "for-each-ref", "--format=%(refname) %(objectname)")
-	}
-	configBefore, logBefore, refsBefore := snapshot()
-
-	// Also once the case has ended, however it ended: a leaked git can fail
-	// the case's own setup before the checks below run.
-	t.Cleanup(func() {
-		config, err := os.ReadFile(filepath.Join(decoyGit, "config"))
-		if assert.NoError(t, err) {
-			assert.Equal(t, configBefore, string(config), "the decoy's config, at cleanup")
-		}
-	})
+	decoy := newGitEnvDecoy(t, bin)
 
 	inherited := append(os.Environ(),
-		"GIT_DIR="+decoyGit,
+		"GIT_DIR="+decoy.gitDir,
 		"GIT_WORK_TREE="+decoy.repo,
-		"GIT_INDEX_FILE="+filepath.Join(decoyGit, "index"),
+		"GIT_INDEX_FILE="+filepath.Join(decoy.gitDir, "index"),
 	)
 	w := newBumpWorldFrom(t, inherited, bin)
 
@@ -1045,8 +1131,40 @@ func TestSbxKitPin_IgnoresInheritedGitEnv(t *testing.T) {
 	require.Equal(t, 0, res.exit, res.stderr)
 	assert.NotEmpty(t, w.git(t, "branch", "--list", w.branch), "the bump lands in the case's own repository")
 
-	configAfter, logAfter, refsAfter := snapshot()
-	assert.Equal(t, configBefore, configAfter, "the decoy's config")
-	assert.Equal(t, logBefore, logAfter, "the decoy's history")
-	assert.Equal(t, refsBefore, refsAfter, "the decoy's refs")
+	decoy.assertUntouched(t)
+}
+
+// TestSbxKitPin_IgnoresRealGitEnv is TestSbxKitPin_IgnoresInheritedGitEnv's
+// serial twin. That test passes the hostile GIT_* variables through
+// newBumpWorldFrom's inherited argument, a plain local slice: it proves
+// childEnv scrubs whatever it is handed, but it cannot prove anything about a
+// pinWorld method that stopped calling childEnv and read the real process
+// environment directly (for example, w.git reverted to building its Cmd.Env
+// as append(os.Environ(), w.env...)), because in that case os.Environ() is
+// still clean. This case sets the variables on the real process environment
+// instead, so that regression leaks the decoy's GIT_DIR into every git call
+// pinWorld's own setup makes and corrupts the decoy, which assertUntouched
+// catches. Serial: it calls t.Setenv directly, which paralleltest excuses.
+// That, and not t.Parallel, is also what keeps the poisoned GIT_* vars from
+// a parallel sibling: go test runs every non-parallel top-level test to
+// completion before any parallel one resumes past its own t.Parallel call,
+// so this only needs to stay a plain, non-parallel top-level test - it does
+// not need to be declared last, and does not depend on file or declaration
+// order.
+func TestSbxKitPin_IgnoresRealGitEnv(t *testing.T) {
+	bin := fakeGhBin(t)
+
+	decoy := newGitEnvDecoy(t, bin)
+
+	t.Setenv("GIT_DIR", decoy.gitDir)
+	t.Setenv("GIT_WORK_TREE", decoy.repo)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(decoy.gitDir, "index"))
+
+	w := newBumpWorld(t, bin)
+
+	res := w.bump(t)
+	require.Equal(t, 0, res.exit, res.stderr)
+	assert.NotEmpty(t, w.git(t, "branch", "--list", w.branch), "the bump lands in the case's own repository")
+
+	decoy.assertUntouched(t)
 }
