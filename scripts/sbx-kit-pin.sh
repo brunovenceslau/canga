@@ -296,7 +296,7 @@ cmd_check_clobber() {
 			seen=$(gh api "repos/${repo}" --jq .full_name 2>"${scratch}/gh-repo.err") || seen=""
 			if [ "${seen}" != "${repo}" ]; then
 				cat "${scratch}/gh-repo.err" >&2
-				die "gh cannot see ${repo}; a 404 for $1 proves nothing"
+				die "gh does not see ${repo} as itself; a 404 for $1 proves nothing (gh sees: ${seen:-nothing})"
 			fi
 			echo "sbx-kit-pin: $1 has no release yet; nothing to clobber"
 			return 0

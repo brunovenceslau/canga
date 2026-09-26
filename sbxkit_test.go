@@ -180,7 +180,7 @@ func TestSbxKit_Shellcheck(t *testing.T) {
 
 	for _, path := range []string{embedded, _pinScript} {
 		cmd := exec.CommandContext(t.Context(), shellcheck, "--shell=sh", path)
-		cmd.Env = childEnv(os.Environ())
+		cmd.Env = childEnv(os.Environ()).asEnv()
 		out, err := cmd.CombinedOutput()
 		assert.NoError(t, err, "shellcheck %s:\n%s", path, out)
 	}

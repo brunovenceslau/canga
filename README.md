@@ -995,7 +995,7 @@ costs a second rather than a four-platform build:
 | The tag has no release on GitHub | create the release, step 3 above |
 | `sbx-kit/spec.yaml` at the tag does not pin the newest published release below it, or pins hashes GitHub does not serve for it | merge the previous release's `chore/sbx-kit-vX.Y.Z` pull request, then re-tag on top of it |
 | The tag already carries `canga-sandbox_` archives, and its kit bump is pushed or merged | cut a new patch release, or set `SBX_KIT_ALLOW_CLOBBER=<the tag>` |
-| `gh` answers 404 for the tag's release and cannot see `brunovenceslau/canga` itself, so the 404 proves nothing | authenticate `gh` with a token that can read the repository |
+| `gh` answers 404 for the tag's release and either cannot see `brunovenceslau/canga` at all or sees it under another name, so the 404 proves nothing (the refusal names what `gh` saw) | authenticate `gh` with a token that can read `brunovenceslau/canga`, or update the script's `repo=` if it was renamed or transferred |
 | The tag is below the newest published release (an older line) | release from the newest line, or set `SBX_KIT_OLDER_LINE=<the tag>` |
 | The working tree is dirty | commit or stash first. GoReleaser enforces this one |
 
