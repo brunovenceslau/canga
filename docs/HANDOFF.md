@@ -117,3 +117,38 @@ Static-tool question: a `rewrite` mode that runs the same published-digest
 check as `check-previous` would make this recovery mechanical instead of
 hand-verified. It touches the release-pin surface, so it waits for an
 operator decision and is not a pending item.
+
+## PR #33: v0.10.4, the first release on the recovered pin
+
+Adds what the PR #31 entry above left open, with measurements from
+2026-09-26.
+
+- v0.10.3 is burned, not only skipped. The operator deleted its asset-less
+  GitHub release; asked who did, the answer was (verbatim, pt-BR): "Fui
+  eu". The tag stays at `5358eb9`, and it must never move: the Go checksum
+  database already records the version (`sum.golang.org` lookup:
+  `github.com/brunovenceslau/canga v0.10.3
+  h1:jPrvhGQd6/Ek9tyKJ+JnNCffkSfG16u/QOSjDAInYds=`), and
+  `proxy.golang.org` resolves it to `Origin.Hash` `5358eb9`. A re-tag would
+  give one version two commits: `go install ...@v0.10.3` keeps serving
+  `5358eb9`, and `GOPROXY=direct` fails with a checksum mismatch, which on
+  this signing trust root reads as tampering.
+- v0.10.4 is the first annotated, SSH-signed tag since v0.4.0 (tag object
+  `91a0611`, on `20f5538`; `git tag -v` and GitHub's
+  `verification.verified` both pass). Measured on 2026-09-26 with
+  `git cat-file -t` over every tag: v0.2.0, v0.4.0 and v0.10.4 are
+  annotated and SSH-signed, and GitHub marks all three verified; v0.1.0,
+  v0.3.0 and v0.5.0 through v0.10.3 are lightweight, the kind GitHub's
+  "create release" makes, although README "Releasing" step 2 says
+  `git tag -a`. The operator chose the
+  annotated, signed form (verbatim, pt-BR: "Anotada e assinada") so the
+  tag a kit pin descends from carries its own verifiable signature, like
+  the commits do. The Release workflow and GoReleaser build it unchanged
+  (run 36232145634, all steps green).
+- v0.10.4 was built by the Release workflow, not by a local `make release`,
+  so no bump branch came with it; `release.yml` never writes one. Its bump
+  came from the README "Move the sbx kit's pin" lost-branch recipe
+  (`bump v0.10.4` from the tag, on the release's own `checksums.txt` and
+  archives), which works for any tag cut after `scripts/sbx-kit-pin.sh`
+  existed. Until the workflow path produces the bump itself, every release
+  it builds needs that recipe run by hand.
