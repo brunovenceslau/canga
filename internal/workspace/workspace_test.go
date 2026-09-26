@@ -22,6 +22,10 @@ const widgetURL = "git@github.com:Acme/Widget.git"
 // the docker-sbx clone of the same owner, its last segment suffixed "-env".
 var widgetEnv = filepath.Join("github.com", "Acme", "docker-sbx", "envs", "github.com", "Acme", "Widget-env")
 
+// widgetEnvsCeiling is widgetEnv's parent envs/ directory, the default
+// GIT_CEILING_DIRECTORIES entry for its environment pane.
+var widgetEnvsCeiling = filepath.Join("github.com", "Acme", "docker-sbx", "envs")
+
 // layout points the clone base at a directory of the test's own, clears any
 // environments repository the caller's shell set, and returns the base. It
 // calls t.Setenv, so its callers cannot be parallel.
@@ -56,7 +60,10 @@ func TestResolve(t *testing.T) {
 
 	got, err := Resolve(widgetURL)
 	require.NoError(t, err)
-	assert.Equal(t, Target{Name: "Acme/Widget", EnvDir: envDir, RepoDir: repoDir}, got)
+	assert.Equal(t, Target{
+		Name: "Acme/Widget", EnvDir: envDir,
+		EnvsCeilingDir: filepath.Join(base, widgetEnvsCeiling), RepoDir: repoDir,
+	}, got)
 }
 
 // A nested group keeps every group in the name: two repositories under
@@ -75,6 +82,7 @@ func TestResolve_NestedGroup(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "acme/platform/widget", got.Name)
 	assert.Equal(t, envDir, got.EnvDir)
+	assert.Equal(t, filepath.Join(base, "gitlab.com", "acme", "platform", "docker-sbx", "envs"), got.EnvsCeilingDir)
 }
 
 // The environments repository is the one repository whose environment cannot
@@ -90,7 +98,10 @@ func TestResolve_SelfHosted(t *testing.T) {
 
 	got, err := Resolve("git@github.com:Acme/docker-sbx.git")
 	require.NoError(t, err)
-	assert.Equal(t, Target{Name: "Acme/docker-sbx", EnvDir: envDir, RepoDir: repoDir}, got)
+	assert.Equal(t, Target{
+		Name: "Acme/docker-sbx", EnvDir: envDir,
+		EnvsCeilingDir: filepath.Join(repoDir, "envs"), RepoDir: repoDir,
+	}, got)
 	assert.True(t, strings.HasPrefix(got.EnvDir, got.RepoDir+string(filepath.Separator)),
 		"the environment directory must nest inside the repository's own clone")
 }
@@ -134,6 +145,8 @@ func TestResolve_EnvsRepoOverride(t *testing.T) {
 			got, err := Resolve(widgetURL)
 			require.NoError(t, err)
 			assert.Equal(t, envDir, got.EnvDir)
+			assert.Equal(t, filepath.Join(base, "github.com", "brunovenceslau", "sandboxes", "envs"),
+				got.EnvsCeilingDir)
 		})
 	}
 }

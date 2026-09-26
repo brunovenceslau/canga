@@ -9,11 +9,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"strings"
 )
 
 // ErrCmuxMissing reports a cmux binary that is not on PATH.
 var ErrCmuxMissing = errors.New("cmux is not installed or not on PATH")
+
+// gitCeilingVar is the variable git itself reads: a colon-separated list of
+// absolute directories it refuses to walk up past while looking for a
+// repository. See Target.EnvsCeilingDir for why the environment pane sets it.
+const gitCeilingVar = "GIT_CEILING_DIRECTORIES"
 
 // envRunCommand starts the repository's sandbox from the environment pane.
 //
@@ -49,7 +56,12 @@ type (
 		// waits a few seconds for that (its debug log says 3s) and drops the
 		// command, silently in release builds, if the terminal is still missing.
 		Command string `json:"command,omitempty"`
-		Focus   bool   `json:"focus,omitempty"`
+		// Env is set in the pty's environment before the shell starts, not
+		// typed like Command (CmuxSurfaceDefinition.env, Sources/CmuxConfig.swift;
+		// passed on as startupEnvironment, Sources/Workspace+CustomLayout.swift:177,239
+		// at v0.64.25). Only the environment pane's surface sets it.
+		Env   map[string]string `json:"env,omitempty"`
+		Focus bool              `json:"focus,omitempty"`
 	}
 )
 
@@ -61,7 +73,7 @@ type (
 // out and its diagnostics to errOut. That includes its refusal when canga runs
 // outside a cmux terminal, which cmux's default socket mode requires.
 func OpenCmux(ctx context.Context, t Target, out, errOut io.Writer) error {
-	args, err := cmuxArgs(t)
+	args, err := cmuxArgs(t, os.Getenv(gitCeilingVar))
 	if err != nil {
 		return err
 	}
@@ -87,12 +99,22 @@ func OpenCmux(ctx context.Context, t Target, out, errOut io.Writer) error {
 //
 // The workspace's own --cwd is the clone, so a pane split off later starts
 // there rather than in the home directory.
-func cmuxArgs(t Target) ([]string, error) {
+//
+// inheritedCeiling is whatever canga's own environment already carries in
+// gitCeilingVar, taken as a parameter (rather than read here from os.Environ)
+// so the merge logic stays reachable from a table-driven test without
+// t.Setenv.
+func cmuxArgs(t Target, inheritedCeiling string) ([]string, error) {
+	var envPaneEnv map[string]string
+	if t.EnvsCeilingDir != "" {
+		envPaneEnv = map[string]string{gitCeilingVar: gitCeilingEnv(t.EnvsCeilingDir, inheritedCeiling)}
+	}
+
 	layout := layoutNode{
 		Direction: "horizontal",
 		Children: []layoutNode{
 			{Pane: &layoutPane{Surfaces: []layoutSurface{
-				{Type: "terminal", Cwd: t.EnvDir, Command: envRunCommand},
+				{Type: "terminal", Cwd: t.EnvDir, Command: envRunCommand, Env: envPaneEnv},
 			}}},
 			{Pane: &layoutPane{Surfaces: []layoutSurface{{Type: "terminal", Cwd: t.RepoDir, Focus: true}}}},
 		},
@@ -112,4 +134,35 @@ func cmuxArgs(t Target) ([]string, error) {
 		"--focus", "true",
 		"--layout", string(encoded),
 	}, nil
+}
+
+// gitCeilingEnv is the value the environment pane's gitCeilingVar gets:
+// ceiling, put ahead of whatever canga's own process already inherited in
+// that variable, unless an entry before git's own empty-entry marker already
+// equals ceiling. Inherited's own entries, and the marker's position among
+// them, are never reordered or dropped; only ceiling is ever added, ahead of
+// everything else.
+//
+// The marker matters because git only resolves symlinks for the entries
+// before it: every entry after is compared to the current directory
+// literally instead, an opt-out git(1) documents for slow or unreliable
+// symlink resolution. So a ceiling that appears only after the marker was
+// never meant to be resolved the way ours is, and does not count as already
+// present; ceiling gets prepended anyway rather than relying on that entry.
+func gitCeilingEnv(ceiling, inherited string) string {
+	if inherited == "" {
+		return ceiling
+	}
+
+	for entry := range strings.SplitSeq(inherited, ":") {
+		if entry == "" {
+			break
+		}
+
+		if strings.TrimRight(entry, "/") == ceiling {
+			return inherited
+		}
+	}
+
+	return ceiling + ":" + inherited
 }
