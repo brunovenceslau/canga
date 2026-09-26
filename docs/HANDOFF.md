@@ -65,3 +65,55 @@ turn this into a detectable violation instead of a caught-by-luck one:
 - The builder snapshots the tree hash when it dispatches verifiers, and
   refuses to apply any verdict whose recorded baseline hash no longer
   matches the tree at apply time.
+
+## PR #31: the v0.10.2 pin, rebuilt after the fact
+
+The Release workflow for v0.10.3 refused in `sbx-kit-pin.sh check-previous`:
+the kit still pinned 0.10.1 while v0.10.2 was published. v0.10.2 was tagged
+(at `bf7507a`) before `scripts/sbx-kit-pin.sh` existed, so its release never
+produced a `chore/sbx-kit-v0.10.2` bump branch. The branch was not lost; it
+never existed. The README recovery recipe ("Move the sbx kit's pin") runs
+`bump` from the tag, and at that tag the script is absent, so the recipe
+cannot work for this release.
+
+What was done instead:
+
+- PR #31 ("chore(sbx-kit): pin canga v0.10.2") moves the pin in one commit
+  on top of `main` (`5358eb9`), not on top of the tag. Its branch therefore
+  is not "one verified commit on top of the tag", and a later
+  `bump v0.10.2` would refuse it. That is expected; nothing needs to run
+  `bump` for v0.10.2 again.
+- The hashes were checked against four sources, all equal: `sha256sum -c`
+  of the downloaded archives against the release's `checksums.txt`; the
+  sha256 digests GitHub serves for the assets; a fresh download hashed
+  independently by a ship gate; and, as the one anchor independent of the
+  release's own assets, GoReleaser's build-time artifact metadata in the
+  v0.10.2 Release run (Actions run 36217176585, at `bf7507a`). That log
+  shares the build's trust root and expires with the repository's log
+  retention, so the sums it carried are copied here:
+
+  ```
+  sha256:6b06a59c79b613546782c31c1b42cf117df214d130ec90e888344ad7733fccf7  canga-sandbox_0.10.2_linux_amd64.tar.gz
+  sha256:c7fcbbcdc24b4b72c1fbe770f45350cf99ac28d9f8e8897cb94628977d46976f  canga-sandbox_0.10.2_linux_arm64.tar.gz
+  ```
+
+- With that pin committed, `check-previous v0.10.3`,
+  `check-previous v0.10.4` and `check-clobber v0.10.3` all pass.
+- v0.10.3 is skipped: its tag stays at `5358eb9` (the Go module proxy may
+  already hold it), its GitHub release, which had no assets, was deleted on
+  2026-09-26 so `check-previous` does not ask for a pin of it, and the next
+  release is v0.10.4.
+  Operator agreement (2026-09-26): "vamos Pular para v0.10.4".
+
+### Rework debrief: a recovery path that assumed its own tooling
+
+The `check-previous` refusal and the README both describe the missing branch
+as lost and send the reader to rerun `bump` from the tag. That holds only
+for tags cut after the script existed. v0.10.2 was the last release before
+it, so the gap cannot recur for later tags, but the recovery path itself
+still relies on `rewrite`, which checks nothing against GitHub.
+
+Static-tool question: a `rewrite` mode that runs the same published-digest
+check as `check-previous` would make this recovery mechanical instead of
+hand-verified. It touches the release-pin surface, so it waits for an
+operator decision and is not a pending item.
