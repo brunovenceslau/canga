@@ -117,7 +117,7 @@ func TestOpenCmux_GitCeilingInherited(t *testing.T) {
 		left.Env, "OpenCmux must pass what it inherited on to cmuxArgs, not drop it")
 }
 
-//nolint:paralleltest // t.Setenv forbids it
+//nolint:paralleltest // fakeCmux calls t.Setenv, which forbids it and which paralleltest cannot see
 func TestOpenCmux_Failure(t *testing.T) {
 	fakeCmux(t, "echo 'socket refused' >&2\nexit 3")
 
