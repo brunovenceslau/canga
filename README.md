@@ -337,9 +337,12 @@ which names an environment directory for `web-app` as `web-app-env/`.
 
 The environment directory is not a git repository of its own: it has no
 `.git`, and sits inside the working tree of the repository that holds the
-environments. A `git` command run inside it acts on that enclosing repository,
-not on the repository being opened, and the `-env` suffix does not change
-that; it only keeps the two directories' names apart.
+environments. Left alone, a `git` command run inside it would walk up past it
+and act on that enclosing repository instead, and the `-env` suffix does not
+change that; it only keeps the two directories' names apart. The left pane
+guards against this; see [Keeping git out of the envs
+repository](#keeping-git-out-of-the-envs-repository) below for what it does
+and does not cover.
 
 | Variable | Default | What it sets |
 | --- | --- | --- |
@@ -376,6 +379,56 @@ segment to add the suffix, then commit the rename:
 ```sh
 git -C ~/src/github.com/acme/docker-sbx mv envs/github.com/acme/widget envs/github.com/acme/widget-env
 ```
+
+### Keeping git out of the envs repository
+
+`canga workspace` sets `GIT_CEILING_DIRECTORIES` in the left pane's own
+environment, ahead of anything typed into its shell, to the environments
+repository's `envs/` directory: the directory every environment sits under. A
+`git` command run from the environment pane then answers "not a git
+repository" instead of silently acting on the environments repository's clone.
+
+This guards against an accident, not against someone working around it: `git
+-C <environments clone>`, a `GIT_DIR` set explicitly, unsetting
+`GIT_CEILING_DIRECTORIES` for the command, or a shell rc that overwrites
+rather than composes with it (see below) all reach the environments
+repository just as before. It is a fence around the paths git wanders into by
+default, not an isolation boundary.
+
+That comes at a price: the pane itself cannot `git add`, `git commit` or
+otherwise work on the environment as a git repository any more. Do that from
+the environments repository's own clone, or from the pane with `git -C
+<environments clone>`.
+
+canga composes its entry with whatever `GIT_CEILING_DIRECTORIES` it inherited,
+rather than replacing it, so a value your shell already set is kept, not lost.
+Its own rc files still run after cmux sets the variable, though, so a
+dotfiles line that assigns `GIT_CEILING_DIRECTORIES` outright, instead of
+composing with it, drops canga's entry the moment the shell starts. Compose it
+there too, both to survive that and to protect a plain terminal that `cd`s
+into the environment directory without going through `canga workspace` at all,
+which gets no protection otherwise:
+
+```sh
+envs_ceiling="${CANGA_HOST_BASE_DIR:-$HOME/src}/github.com/acme/docker-sbx/envs"
+case ":${GIT_CEILING_DIRECTORIES:-}:" in
+  *":$envs_ceiling:"*) ;;
+  *) export GIT_CEILING_DIRECTORIES="$envs_ceiling${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}" ;;
+esac
+```
+
+Replace `github.com/acme/docker-sbx` with whatever `CANGA_HOST_ENVS_REPO` is
+set to, or, if it is unset, with `<host>/<owner>/docker-sbx` for the owner of
+the repository you open most, the same default `canga workspace` itself
+falls back to. The `case` guards against duplicating the entry: sourced twice,
+in the same shell or across bash and zsh's own rc files, it finds the entry
+already there and leaves `GIT_CEILING_DIRECTORIES` alone.
+
+`envs_ceiling` must resolve to an absolute path: git silently ignores a
+relative `GIT_CEILING_DIRECTORIES` entry. Set `CANGA_HOST_BASE_DIR` itself to
+an absolute path if you export it; canga's own `--layout` value never has this
+problem, since it always resolves the base directory to an absolute path
+first.
 
 ### Requirements
 

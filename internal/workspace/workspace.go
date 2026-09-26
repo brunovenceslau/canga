@@ -87,6 +87,14 @@ type Target struct {
 	// EnvDir holds the repository's sandbox environment.
 	EnvDir string
 
+	// EnvsCeilingDir is the envs/ directory of the environments' repository,
+	// the parent every EnvDir sits under. EnvDir is not a git repository of
+	// its own, so a git command run there would otherwise walk up past it
+	// into the envs repository's clone and silently act on that instead. Set
+	// as GIT_CEILING_DIRECTORIES on the environment pane, it makes git refuse
+	// there ("not a git repository") rather than reach the envs repo.
+	EnvsCeilingDir string
+
 	// RepoDir is the repository's clone.
 	RepoDir string
 }
@@ -118,15 +126,20 @@ func Resolve(url string) (Target, error) {
 	// repo.Path always yields "<host>/" plus at least two segments.
 	_, name, _ := strings.Cut(tail, "/")
 
+	// envsRoot is base's own path all the way down; it never needs a separate
+	// absolute-path check because base (repo.BaseDir) is already absolute,
+	// and envsRepoPath has already refused a "." or ".." segment.
+	envsRoot := filepath.Join(base, filepath.FromSlash(envsRepo), envsSubdir)
+
 	// The tail keeps its case, as it does for the clone: the environments are
 	// laid out by the same readable <host>/<owner>/<repo> spelling, only the
-	// last segment carries envDirSuffix. repo.Path and envsRepoPath have
-	// already refused "." and "..", which keeps this join inside base.
+	// last segment carries envDirSuffix.
 	target := Target{
 		Name: name,
-		EnvDir: filepath.Join(base, filepath.FromSlash(envsRepo), envsSubdir,
+		EnvDir: filepath.Join(envsRoot,
 			filepath.FromSlash(path.Dir(tail)), path.Base(tail)+envDirSuffix),
-		RepoDir: repoDir,
+		EnvsCeilingDir: envsRoot,
+		RepoDir:        repoDir,
 	}
 
 	// The hint does not repeat the URL: echoing it raw could print a
