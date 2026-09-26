@@ -58,8 +58,8 @@ type (
 		Command string `json:"command,omitempty"`
 		// Env is set in the pty's environment before the shell starts, not
 		// typed like Command (CmuxSurfaceDefinition.env, Sources/CmuxConfig.swift;
-		// passed on as startupEnvironment, Sources/Workspace+CustomLayout.swift:177,239).
-		// Only the environment pane's surface sets it.
+		// passed on as startupEnvironment, Sources/Workspace+CustomLayout.swift:177,239
+		// at v0.64.25). Only the environment pane's surface sets it.
 		Env   map[string]string `json:"env,omitempty"`
 		Focus bool              `json:"focus,omitempty"`
 	}

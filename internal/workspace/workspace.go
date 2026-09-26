@@ -133,7 +133,8 @@ func Resolve(url string) (Target, error) {
 
 	// The tail keeps its case, as it does for the clone: the environments are
 	// laid out by the same readable <host>/<owner>/<repo> spelling, only the
-	// last segment carries envDirSuffix.
+	// last segment carries envDirSuffix. repo.Path has already refused a "."
+	// or ".." segment in tail, which keeps this join inside envsRoot too.
 	target := Target{
 		Name: name,
 		EnvDir: filepath.Join(envsRoot,

@@ -72,7 +72,7 @@ func TestOpenCmux(t *testing.T) {
 			{Pane: &layoutPane{Surfaces: []layoutSurface{
 				{
 					Type: "terminal", Cwd: target.EnvDir, Command: "sbx env run --clone",
-					Env: map[string]string{"GIT_CEILING_DIRECTORIES": target.EnvsCeilingDir},
+					Env: map[string]string{gitCeilingVar: target.EnvsCeilingDir},
 				},
 			}}},
 			{Pane: &layoutPane{Surfaces: []layoutSurface{{Type: "terminal", Cwd: target.RepoDir, Focus: true}}}},
