@@ -71,7 +71,7 @@ func TestOpenCmux(t *testing.T) {
 		Children: []layoutNode{
 			{Pane: &layoutPane{Surfaces: []layoutSurface{
 				{
-					Type: "terminal", Cwd: target.EnvDir, Command: "sbx env run --clone",
+					Type: "terminal", Cwd: target.EnvDir, Command: "sbx env run --clone --auto-approve",
 					Env: map[string]string{gitCeilingVar: target.EnvsCeilingDir},
 				},
 			}}},
@@ -84,7 +84,7 @@ func TestOpenCmux(t *testing.T) {
 	for _, key := range []string{
 		`"direction":"horizontal"`, `"children":`, `"pane":`,
 		`"surfaces":`, `"type":"terminal"`, `"cwd":`, `"focus":true`,
-		`"command":"sbx env run --clone"`,
+		`"command":"sbx env run --clone --auto-approve"`,
 		`"env":`, `"GIT_CEILING_DIRECTORIES":"/envs"`,
 	} {
 		assert.Contains(t, args[8], key)

@@ -29,7 +29,13 @@ const gitCeilingVar = "GIT_CEILING_DIRECTORIES"
 // Sources/Workspace+CustomLayout.swift, 0.64.25), rather than running it as the
 // pane's process. So the pane outlives the sandbox: when sbx exits, the shell
 // is still there, in the environment directory, for the next run.
-const envRunCommand = "sbx env run --clone"
+//
+// --auto-approve is there because the workspace opens focused on the clone
+// pane, not this one: a confirmation prompt left in an unfocused pane would
+// sit unseen and the sandbox would never start. sbx env run --help (the
+// command is marked EXPERIMENTAL there) describes the flag as "-y,
+// --auto-approve   Apply the environment plan without asking".
+const envRunCommand = "sbx env run --clone --auto-approve"
 
 // The layout document `cmux new-workspace --layout` takes, verified against
 // cmux 0.64.23 and 0.64.25 (CmuxLayoutNode and CmuxSurfaceDefinition in its
