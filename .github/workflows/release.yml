@@ -29,6 +29,26 @@ jobs:
         with:
           go-version: stable
 
+      # The same refusal `make release-preflight` makes locally, before any
+      # platform is built: the sbx kit must pin the newest published release
+      # before this tag, which is to say the previous release's kit bump
+      # merged. This workflow does not write the next bump; after it runs,
+      # `make release-kit-bump` needs the dist/checksums.txt it built, so the
+      # local path in the README ("Releasing") is the one that does.
+      - name: Check the sbx kit pins the previous release
+        run: scripts/sbx-kit-pin.sh check-previous "${GITHUB_REF_NAME}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Also as in `make release-preflight`: refuse to rebuild a tag whose
+      # sandbox archives a pushed or merged kit bump already pins. It reads
+      # origin (the checkout's persisted credentials) and the release; a tag
+      # with no release yet, the normal case here, has nothing to clobber.
+      - name: Check no sbx kit pins this release's archives yet
+        run: scripts/sbx-kit-pin.sh check-clobber "${GITHUB_REF_NAME}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
