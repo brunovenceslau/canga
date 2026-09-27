@@ -65,7 +65,11 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# github-native asks GitHub to generate the release notes itself (the same
+# notes `gh release create --generate-notes` would write), which is why the
+# manual "create the release by hand" step existed in the first place. `sort`
+# and `filters` only apply to GoReleaser's own changelog rendering, so they
+# have no effect once GitHub is the one generating it, and are dropped here
+# rather than left as dead configuration.
 changelog:
-  sort: asc
-  filters:
-    exclude: ["^docs", "^test", "^ci", "^chore", "^style"]
+  use: github-native

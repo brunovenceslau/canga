@@ -34,8 +34,9 @@
 # or at origin's main), never the working tree, so a local edit, an
 # assume-unchanged or a skip-worktree flag cannot change their answer.
 #
-# POSIX sh and POSIX awk only: it runs on the macs `make release` runs on, whose
-# awk has no {n} interval expressions, so hex is checked by grep -E.
+# POSIX sh and POSIX awk only: it runs on the macs `make release-kit-bump` and
+# `make release-preflight` run on, whose awk has no {n} interval expressions,
+# so hex is checked by grep -E.
 
 set -eu
 
@@ -363,10 +364,11 @@ cmd_bump() {
 	committed_spec HEAD "${scratch}/head.yaml"
 	render "${version}" "${sums}" "${scratch}/head.yaml" "${scratch}/spec.yaml"
 
-	# checksums.txt is only a claim. The pin must name the bytes this build
-	# produced (the archives next to it) AND the bytes GitHub serves (the
-	# release's digests): a failed upload, or a rebuild after one, leaves
-	# those two apart, and neither may reach a signed pin.
+	# checksums.txt is only a claim. The pin must name the bytes the archives
+	# next to it actually contain (whether built locally or, as
+	# `make release-kit-bump` does, downloaded from the release) AND the
+	# bytes GitHub serves (the release's digests): a failed or repeated
+	# upload leaves those two apart, and neither may reach a signed pin.
 	amd64=$(sandbox_sum "${sums}" "${version}" amd64)
 	arm64=$(sandbox_sum "${sums}" "${version}" arm64)
 	for arch in amd64 arm64; do
@@ -410,8 +412,9 @@ cmd_bump() {
 		return 0
 	fi
 
-	# A worktree of its own, so the checkout `make release` ran in (the tag,
-	# often detached) is left exactly as it was.
+	# A worktree of its own, so the checkout this ran from (a detached
+	# checkout of the tag, when it is `make release-kit-bump`'s own temporary
+	# worktree) is left exactly as it was.
 	git worktree add -q -b "${branch}" "${scratch}/wt" HEAD
 	# -S: the kit is a trust root pinned by commit, and this repository's
 	# commits are signed; an unsigned bump fails here instead of at review.

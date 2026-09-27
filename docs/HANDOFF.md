@@ -152,3 +152,145 @@ Adds what the PR #31 entry above left open, with measurements from
   archives), which works for any tag cut after `scripts/sbx-kit-pin.sh`
   existed. Until the workflow path produces the bump itself, every release
   it builds needs that recipe run by hand.
+
+## Release path: the workflow is the one official path
+
+Operator decision (2026-09-26), answering "which release path is official"
+(verbatim, pt-BR): "Workflow oficial (Recomendado)". Meaning: a signed
+annotated tag, pushed, is the whole release action; `.github/workflows/release.yml`
+builds every platform with GoReleaser and publishes the release itself
+(`release --clean`, `changelog.use: github-native` for GitHub's own
+generated notes). `make release` (the local build-and-upload target) is
+removed, not merely deprecated: nothing local builds or uploads a release
+artifact any more.
+
+What this made unnecessary, and why:
+
+- The local build path existed only because the workflow, at the time
+  README "Releasing" was written, "currently cannot start a job on the
+  account" (that README line was stale by this point: Release runs
+  36217176585 (v0.10.2) and 36232145634 (v0.10.4) had already succeeded and
+  published their releases, per the PR #33 entry above). With the workflow
+  confirmed working and now the operator's explicit choice, the local path
+  became a second, divergent definition of how a release gets built, worth
+  removing rather than maintaining alongside the real one.
+- `make release`'s manual "create the release on GitHub by hand" step
+  existed only to get GitHub's generated notes, since GoReleaser's own
+  changelog needed `filters`/`sort` tuning to read as well. `changelog.use:
+  github-native` gets the same generated notes from GoReleaser itself, once
+  it is the one doing the publishing, which is what let the manual step go.
+- What survives: `make release-preflight` (the two sbx-kit checks,
+  `check-previous` and `check-clobber`, now run on the tag before it is
+  pushed rather than before a local build) and a new `make release-kit-bump
+  TAG=vX.Y.Z`, which downloads the published release's `checksums.txt` and
+  `canga-sandbox_` archives and runs `scripts/sbx-kit-pin.sh bump` from a
+  temporary detached worktree at the tag - the same operation the README
+  "Move the sbx kit's pin" lost-branch recipe used to spell out by hand for
+  v0.10.4's bump; that recipe now collapses into re-running the target.
+  `tool-release` (the local GoReleaser install) and its `GORELEASER_VERSION`
+  pin are removed with it: nothing local invokes GoReleaser to build with
+  any more.
+- Verified against the real v0.10.4 release (2026-09-26): `make
+  release-kit-bump TAG=v0.10.4` downloaded that release's `checksums.txt`
+  and archives, checked them against each other and against GitHub's served
+  digests, and committed a signed `chore/sbx-kit-v0.10.4` branch matching
+  byte-for-byte the `sbx-kit/spec.yaml` already merged in PR #33 - then the
+  branch was deleted locally, since main already pins v0.10.4 and nothing
+  was meant to land from this check.
+
+### Addendum: ship-gate round-2 fixes on this same change (2026-09-27)
+
+- **Shell injection via `$(TAG)` (ship gate round 1, code-reviewer Critical /
+  security-auditor Medium).** The first cut of `release-kit-bump` spliced
+  make's own `$(TAG)` into the recipe text, which make expands to raw,
+  unquoted text before the shell ever parses it - a value like
+  `v1'; rm -rf /; echo '` closes the quote it lands in and runs as shell
+  regardless of how the surrounding text looks quoted. Fixed by reading TAG
+  only as the shell's own `$$TAG` (an ordinary parameter expansion, never
+  make-substituted text) plus a strict `vX.Y.Z` guard as the recipe's first
+  line, before `gh`, `git` or `mktemp` run at all. Static-tool question: does
+  a tool close this class? Two do, at different points in the pipeline -
+  `makefile_release_kit_bump_test.go`'s `TestReleaseKitBump_TagGuard` is a
+  regression test pinning the exact payloads that used to work (quote
+  breakout, backtick, `$(...)`, and, after the round-2 pass below, an
+  embedded newline), so a future edit that reintroduces `$(TAG)` in recipe
+  text fails CI immediately; no linter in this repo's `.golangci.yml` flags
+  `$(VAR)` of a user-supplied make variable inside a recipe body specifically
+  (that is a Makefile-syntax question, outside a Go linter's reach, and
+  `shellcheck`, which does understand shell injection, is never handed the
+  recipe as make expands it) - closing that class generically would need a
+  bespoke Makefile linter, which is not worth building for one target; the
+  regression test is the right-sized static gate here.
+- **Round-2 finding (security-auditor Low): the TAG guard was
+  line-oriented.** `printf '%s\n' "$TAG" | grep -Eq '^v...$'` reports success
+  as soon as ANY line of a multi-line value matches, not every line, so
+  `TAG=$'v0.10.4\n--upload-pack=touch X'` used to pass the guard on its
+  first line alone. `git fetch`'s own ref-name validation happened to refuse
+  that value today ("invalid refspec"), so the gap failed closed in
+  practice, but the Makefile comment overclaimed that TAG could never reach
+  a command as anything but a value. Fixed two ways: the guard now also
+  checks `wc -l` on the unterminated value is exactly 0, rejecting any
+  embedded newline outright before the line content is even considered; and
+  the fetch itself now names an explicit refspec after `--`
+  (`git fetch -q origin -- "refs/tags/$tag:refs/tags/$tag"`), so nothing
+  `$tag` could hold is ever read as a fetch option, belt-and-suspenders
+  alongside the stricter guard. `TestReleaseKitBump_TagGuard` gained an
+  embedded-newline case in both the argv (`TAG=` on the command line) and
+  plain-environment-variable forms.
+- **README check-table overclaim.** The "Releasing" check table implied
+  `release-kit-bump` reruns every `release-preflight` check; it does not -
+  `release-preflight` and the workflow are what run `check-previous` and
+  `check-clobber` before a push, and `release-kit-bump` runs its own,
+  different set (tag-guard, GitHub cross-check, script-presence). Fixed by
+  annotating each table row with which target(s) actually make that check.
+- **Script run from the tag's own worktree, and the GitHub tag
+  cross-check.** `release-kit-bump` stands up a temporary detached worktree
+  at the tag's own verified commit and runs that worktree's copy of
+  `scripts/sbx-kit-pin.sh`, never the invoking checkout's, so a tag's own
+  reviewed script judges its own release; and before trusting any of it, the
+  tag as fetched into the checkout is cross-checked against the commit
+  GitHub's API resolves the tag to, refusing on any disagreement between
+  `origin` and the canonical repository.
+- **Round-2 finding (security-auditor Info): the worktree re-resolved the
+  tag by name.** `git worktree add --detach "$wt" "$tag"` looked the tag up
+  by name again, after the cross-check above had already verified which
+  commit it names - a needless second resolution of something already
+  proven. Fixed to pass the verified commit sha (`$here`) instead, so the
+  worktree can only ever be the commit just checked, never a fresh lookup.
+- **Round-2 finding (security-auditor Info): an old tag's own script can't
+  gain later hardening.** By design (the round-1 script-integrity fix
+  above), `release-kit-bump` always runs the tag's OWN copy of
+  `scripts/sbx-kit-pin.sh`. That is correct for judging the tag's own
+  release, but it also means a check added to the script after a tag was
+  cut never applies when that tag is re-bumped later - only a new release
+  ships with the newer script. Documented with a one-line comment in the
+  Makefile rather than changed: retroactive enforcement would mean running a
+  DIFFERENT script than the one that reviewed the tag, which is the exact
+  failure mode round 1 closed.
+- **Round-2 finding (code-reviewer Optional): `brunovenceslau/canga`
+  hardcoded four times in the recipe.** Replaced with one make variable,
+  `override REPO_SLUG := brunovenceslau/canga`. The `override` directive is
+  load-bearing, not decoration: it is what keeps this from becoming a second
+  instance of the `$(TAG)` injection class - `override` refuses even
+  `make release-kit-bump REPO_SLUG=x`, so `$(REPO_SLUG)` in recipe text
+  stays exactly as safe as writing the literal, because its value can never
+  come from a caller. A plain (non-`override`) variable would have
+  reintroduced a user-overridable `$(VAR)` into recipe text, which is
+  exactly what TAG's own fix moved away from.
+- **Two residuals deferred, not fixed here:**
+  1. `check_published` (in `scripts/sbx-kit-pin.sh`) verifies a release
+     asset's digest matches the pinned sha256, but does not require the
+     asset's uploader be `github-actions[bot]` - so a release re-published
+     or edited by a human with write access would still pass. Deferred to
+     the next PR, which reworks the pin script's verification end to end,
+     per the operator's own sequencing (2026-09-27, verbatim pt-BR):
+     "Sincronize canga com seu origin/main e resolva as pendencias uma a
+     uma" (sync canga with its origin/main and resolve the pending items
+     one at a time).
+  2. GNU Make's own argv sharp edge: a `TAG=$(shell ...)` value given on
+     make's command line is expanded by make at parse time, unconditionally,
+     regardless of which target runs - this is pre-existing GNU Make
+     behavior, not something a recipe can fix from inside itself, and it
+     only matters if something builds a `TAG=` argument from untrusted
+     input before invoking `make`. Nothing in this repository does that
+     today.
