@@ -232,9 +232,11 @@ What this made unnecessary, and why:
   checks `wc -l` on the unterminated value is exactly 0, rejecting any
   embedded newline outright before the line content is even considered; and
   the fetch itself now names an explicit refspec after `--`
-  (`git fetch -q origin -- "refs/tags/$tag:refs/tags/$tag"`), so nothing
-  `$tag` could hold is ever read as a fetch option, belt-and-suspenders
-  alongside the stricter guard. `TestReleaseKitBump_TagGuard` gained an
+  (`git fetch -q origin -- "refs/tags/$tag:refs/tags/$tag"`), as defense in
+  depth rather than an independent fix: by the time the fetch runs, the
+  guard above has already refused anything `$tag` could hold that would
+  read as a fetch option, so the `--` closes the same gap a second way, not
+  a different one. `TestReleaseKitBump_TagGuard` gained an
   embedded-newline case in both the argv (`TAG=` on the command line) and
   plain-environment-variable forms.
 - **README check-table overclaim.** The "Releasing" check table implied
@@ -271,12 +273,17 @@ What this made unnecessary, and why:
   hardcoded four times in the recipe.** Replaced with one make variable,
   `override REPO_SLUG := brunovenceslau/canga`. The `override` directive is
   load-bearing, not decoration: it is what keeps this from becoming a second
-  instance of the `$(TAG)` injection class - `override` refuses even
-  `make release-kit-bump REPO_SLUG=x`, so `$(REPO_SLUG)` in recipe text
-  stays exactly as safe as writing the literal, because its value can never
-  come from a caller. A plain (non-`override`) variable would have
-  reintroduced a user-overridable `$(VAR)` into recipe text, which is
-  exactly what TAG's own fix moved away from.
+  instance of the `$(TAG)` injection class - `override` refuses an ordinary
+  `make release-kit-bump REPO_SLUG=x` argument, so `$(REPO_SLUG)` in recipe
+  text stays as safe as writing the literal against that path. It is not a
+  defense against a caller who invokes make with a different makefile
+  (`-f other.mk`) or an `--eval` that redefines the variable outright - but
+  a caller who can do either of those already has arbitrary shell
+  execution, which `override` was never trying to stop; it only closes the
+  ordinary, unprivileged `REPO_SLUG=x` path. A plain (non-`override`)
+  variable would have reintroduced a user-overridable `$(VAR)` into recipe
+  text on that same ordinary path, which is exactly what TAG's own fix moved
+  away from.
 - **Two residuals deferred, not fixed here:**
   1. `check_published` (in `scripts/sbx-kit-pin.sh`) verifies a release
      asset's digest matches the pinned sha256, but does not require the
@@ -286,7 +293,8 @@ What this made unnecessary, and why:
      per the operator's own sequencing (2026-09-27, verbatim pt-BR):
      "Sincronize canga com seu origin/main e resolva as pendencias uma a
      uma" (sync canga with its origin/main and resolve the pending items
-     one at a time).
+     one at a time). Resolved in "sbx-kit-pin: rewrite verifies, and
+     canga-sandbox_ assets must carry this repo's Actions identity" below.
   2. GNU Make's own argv sharp edge: a `TAG=$(shell ...)` value given on
      make's command line is expanded by make at parse time, unconditionally,
      regardless of which target runs - this is pre-existing GNU Make
@@ -294,3 +302,239 @@ What this made unnecessary, and why:
      only matters if something builds a `TAG=` argument from untrusted
      input before invoking `make`. Nothing in this repository does that
      today.
+
+## sbx-kit-pin: rewrite verifies, and canga-sandbox_ assets must carry this repo's Actions identity (PR #35)
+
+Resolves residual 1 from the PR #34 entry above, plus two operator decisions
+on the same surface, the five round-3 ship-gate leftovers from that PR, and
+this PR's own round-1 ship-gate fixes (below).
+
+### Operator decisions
+
+- (2026-09-26, deciding between a verified and an unverified `rewrite`,
+  verbatim pt-BR): "rewrite sempre verifica (Recomendado)". `rewrite` now
+  always checks the sums it is given against release `vX.Y.Z`'s published
+  digests before writing the kit, the same `check_published` check
+  `check-previous` and `bump` already ran - with no flag to skip it. It was
+  the manual recovery path used, unverified, for the v0.10.2 pin (see the
+  PR #31 entry above); it is not any more.
+- (2026-09-27, sequencing this work right after PR #34, verbatim pt-BR): "Na
+  P2, ja a seguir (Recomendado)". `check_published` now also requires each
+  `canga-sandbox_` asset's uploader to be `github-actions[bot]`
+  (`.assets[].uploader.login` from `gh api .../releases/tags/<tag>`). What
+  that identity actually proves is narrower than this decision first read:
+  see "Round-1 ship-gate fix: the uploader identity claim" below for the
+  corrected wording, added the same day the round-1 ship gate caught the
+  overclaim.
+
+### Uploader measurement (2026-09-27)
+
+Every `canga-sandbox_*` asset of every published (non-draft,
+non-prerelease) release, `gh api repos/brunovenceslau/canga/releases
+--paginate`:
+
+| Release | canga-sandbox_ assets | Uploader |
+| --- | --- | --- |
+| v0.10.4 | amd64, arm64 | `github-actions[bot]` |
+| v0.10.2 | amd64, arm64 | `github-actions[bot]` |
+| v0.10.1 | amd64, arm64 | `github-actions[bot]` |
+| v0.10.0 | amd64, arm64 | `github-actions[bot]` |
+| v0.9.0 | amd64, arm64 | `github-actions[bot]` |
+| v0.8.0 | amd64, arm64 | `github-actions[bot]` |
+| v0.7.0 | amd64, arm64 | `github-actions[bot]` |
+| v0.6.0 | amd64, arm64 | `github-actions[bot]` |
+| v0.5.0 | amd64, arm64 | `github-actions[bot]` |
+| v0.4.0 through v0.1.0 | none | n/a (predate the sandbox archive) |
+
+v0.10.3 carries no assets (its release was deleted; see the PR #33 entry
+above), so it never reaches this check. Every release the pin script can
+still be asked to check against - including the one currently pinned on
+main, v0.10.4 (PR #33), and every release reachable through
+`SBX_KIT_OLDER_LINE` or an older-line `check-previous` (v0.5.0 through
+v0.10.1) - was uploaded by `github-actions[bot]`. No published release with
+`canga-sandbox_` assets was human-uploaded, so this change refuses nothing
+that passes today; the "older line uploaded by a human" case the task asked
+to decide on has no real instance to decide against. The decision, for when
+one does appear: refuse it, with no bypass flag, the same as any other
+`check_published` refusal - a hand-uploaded archive on an older line is
+exactly what this check exists to catch, and adding an override would
+reopen the gap the uploader check closes. This is a decision worth
+revisiting only if a legitimate need for a human-uploaded archive surfaces;
+none has.
+
+### Round-1 ship-gate fix: the uploader identity claim (2026-09-27)
+
+**Finding (security-auditor Medium).** `uploader.login == github-actions[bot]`
+proves "a GITHUB_TOKEN of some workflow run in brunovenceslau/canga", not
+"the Release workflow specifically": any workflow in this repository
+granted `contents: write` could run `gh release upload --clobber` itself
+and produce that exact same identity, since every workflow's default
+`GITHUB_TOKEN` uploads under the one shared `github-actions[bot]` login.
+The sha256 checks are unaffected by this - a re-upload still has to match
+the pinned digest, or `check_published` refuses it on that alone - but the
+uploader check's OWN claim was too strong.
+
+Operator decision (2026-09-27, verbatim pt-BR): "Reescrever agora + fechar
+na P3 (Recomendado)" (reword now, close the actual gap in P3). Fixed here:
+every comment, error message, README paragraph and this file's own wording
+that said or implied "only the Release workflow may publish" now says what
+the check actually establishes - a workflow run in this repository, not
+release.yml specifically (see `check_published`'s own comment in
+`scripts/sbx-kit-pin.sh` for the full explanation, and README "Move the sbx
+kit's pin").
+
+**Pending item 3 (deferred to P3, per the operator decision above):** bind
+`canga-sandbox_` assets to `release.yml` specifically, with build
+provenance attestation - `check_published` additionally running
+`gh attestation verify --signer-workflow
+brunovenceslau/canga/.github/workflows/release.yml` against each asset. The
+Release workflow does not currently generate an attestation
+(`actions/attest-build-provenance` or GoReleaser's own signing step is not
+wired in yet), so this is real, not-yet-started work, not a one-line
+follow-up.
+
+### Round-1 ship-gate fixes: the rest (2026-09-27)
+
+Operator decision (2026-09-27, verbatim pt-BR): "Corrigir todos agora
+(Recomendado)" (fix all of them now), covering every finding below except
+the uploader-identity gap itself (pending item 3 above).
+
+- **[sec Low] TOCTOU / double parse.** `rewrite` and `bump` verified one
+  parse of `checksums.txt` via `sandbox_sum`, then `render` re-parsed the
+  same file a second time to get the same two sums. Fixed: `render`'s
+  signature changed from `render <version> <checksums> <in> <out>` to
+  `render <version> <amd64 sum> <arm64 sum> <in> <out>` - both callers parse
+  once and pass the verified strings through, closing both the TOCTOU
+  window (the file could change between the two reads) and the duplicate
+  `sandbox_sum` call the round-1 code-reviewer pass flagged as the same
+  issue from the readability side.
+- **[sec Low] gh host not pinned.** A stray `GH_HOST` in the calling
+  environment would have redirected every `gh` call at another host,
+  silently. Fixed: `scripts/sbx-kit-pin.sh` now `export`s `GH_HOST=github.com`
+  near the top, unconditionally, and the `release-kit-bump` Makefile recipe
+  does the same before its first `gh` call. Every existing test's fake `gh`
+  now refuses to run at all unless `GH_HOST=github.com` reaches it, so this
+  is regression-tested by the whole existing suite, not only a dedicated
+  case.
+- **[sec Low] EXIT-only trap.** A bare `trap ... EXIT` does not fire on
+  INT/TERM/HUP in every `/bin/sh` (dash included), so Ctrl-C or a TERM from
+  a job scheduler could leave a `spec.yaml.XXXXXX` temp file or a scratch
+  directory behind. Fixed with `trap_cleanup_file`/`trap_cleanup_dir`
+  helpers in the script (each installs the same cleanup on EXIT, HUP, INT
+  and TERM, exiting 128+signum after cleanup rather than re-raising) and
+  the equivalent three extra `trap` lines in the Makefile recipe.
+- **[sec Info] Asset-name parsing.** `check_published` trusted GitHub to
+  never serve an asset name containing whitespace; it now also requires the
+  whole `release_jq` line to split into exactly three awk fields
+  (`NF == 3`) before treating it as a match, so a name that somehow
+  contained an embedded space can never be misread as if its trailing words
+  were the digest and uploader fields.
+- **[sec Info] No draft/prerelease check.** `rewrite` and `bump` take a
+  version/tag directly from the caller and never checked whether that
+  specific release was a draft or a prerelease (`check-previous` was
+  already indirectly safe: `published_tags` excludes both). Fixed in
+  `release_assets`: the same `gh api` call already made for the asset
+  digests now also carries `.draft`/`.prerelease` (a `_meta <draft>
+  <prerelease>` line ahead of the asset lines, from `release_jq`), so the
+  refusal costs no second network round trip.
+- **[code-reviewer Optional] assets_jq's "never" overclaim.** jq's `//`
+  operator substitutes only for `null` or `false`, never for `""` - so
+  `.digest // "-"` alone would still print an empty field the day GitHub
+  (or a fixture) returned `""` instead of `null`. Fixed by mapping both
+  `null` and `""` to `"-"` in jq itself (an `orDash` helper shared by
+  `assets_jq` and the new `release_jq`), so the comment's claim is now
+  actually true instead of true-for-null-only.
+- **[code-reviewer Optional] No test through real jq.** Every existing test
+  fed the fake `gh` canned text directly, never exercising the actual
+  `assets_jq`/`release_jq` strings through a real jq interpreter - a syntax
+  error in either would only have surfaced against the real GitHub API.
+  Added `TestSbxKitPin_ReleaseJQ`, which extracts both `--jq` strings
+  straight out of `scripts/sbx-kit-pin.sh` (so it cannot silently drift from
+  what the script actually runs) and pipes a realistic release document -
+  null digest, null uploader, an empty-string digest, an empty-string
+  uploader, an unrelated extra asset - through the real `jq` binary. `jq`
+  was not yet an explicit CI dependency; `.github/workflows/test.yml` now
+  installs it explicitly rather than relying on the runner image carrying
+  it.
+- **[code-reviewer Nit] Makefile comment/code order mismatch.** The
+  invariants list above `release-kit-bump` described the cross-check
+  against GitHub as the LAST thing that happens, when it actually runs
+  before the worktree is created. Reordered to match the recipe's actual
+  execution order.
+- **[code-reviewer Nit] Ambiguous "serves no digest".** The same message
+  fired both for "this asset is not in the release at all" and "the asset
+  is there, but GitHub reports no digest for it". Split into two: "carries
+  no `<asset>` at all" and "reports no digest for `<asset>`" - and a third
+  case, "lists N assets named `<asset>`", for a release that names the same
+  asset more than once (see the duplicate-asset test-engineer finding
+  below).
+- **[test-engineer] New cases**, all in `sbxkitpin_test.go`: a duplicate
+  asset name (refused as ambiguous, rather than silently taking whichever
+  line an unordered match happens to pick first); a combined failure (wrong
+  digest AND wrong uploader together) asserting the digest error wins,
+  deterministically, because it is checked first; an asset name with an
+  embedded space (refused as "carries no ... at all", never misread); a
+  draft and a prerelease release (each refused by `release_assets`); and a
+  checksums.txt built for one version fed to `bump` under a different
+  version's tag (refused by `sandbox_sum`'s own filename-equality check,
+  the same "cross-version confusion" property `rewrite`'s "another
+  version's lines" case already covered, now covered on the `bump` path
+  too).
+
+### PR #34 round-3 leftovers, addressed here
+
+1. The `override REPO_SLUG` entry above ("its value can never come from a
+   caller") is reworded: `override` refuses an ordinary
+   `make release-kit-bump REPO_SLUG=x` argument, not a caller invoking make
+   with a different makefile (`-f other.mk`) or an `--eval` that redefines
+   the variable outright - such a caller already has arbitrary shell
+   execution, which `override` was never a defense against.
+2. The same entry's credit to the fetch's explicit refspec after `--` is
+   reworded to say what it actually is: defense in depth, redundant with
+   the anchored `^v...$` guard that already runs first, not an independent
+   fix.
+3. `release-kit-bump`'s TAG guard now also refuses a value longer than 64
+   characters, before `gh`, `git` or `mktemp` run. `TestReleaseKitBump_TagGuard`
+   gained a case for it.
+4. `gh release download ... -R $(REPO_SLUG) ...` is now `-R "$(REPO_SLUG)"`,
+   the one unquoted use of a make variable left in the recipe.
+5. The Makefile comment above `release-kit-bump` (about 59 lines) is
+   trimmed to the invariants a maintainer changing that recipe needs to
+   keep, pointing to README "Move the sbx kit's pin" and this file for the
+   fuller history.
+
+### Left open
+
+- **Pending item 3** (P3, per the operator decision quoted above): bind
+  `canga-sandbox_` assets to `release.yml` specifically via build provenance
+  attestation. Not started; the Release workflow does not yet produce an
+  attestation for `check_published` to verify.
+- HANDOFF residual 2 from the PR #34 entry (GNU Make's own `TAG=$(shell
+  ...)` argv-expansion sharp edge) is unrelated to this PR's scope and
+  remains open, unchanged.
+- `rewrite`'s new verification step means it now needs `gh` and network
+  access to run at all; it previously worked fully offline against a local
+  checksums.txt. This is the intended trade (a manual recovery path that
+  trusts nothing beats one that works offline by trusting a claim), not a
+  regression flagged for further discussion.
+- The INT/TERM trap fix is demonstrated end to end by
+  `TestSbxKitPin_CheckPrevious_SignalCleanup`: a real `check-previous`,
+  genuinely blocked on a stubbed slow `gh release list`, killed with SIGINT
+  or SIGTERM once its scratch directory already exists on disk. Reverted in
+  a scratch copy (not this worktree), the same test fails exactly as the
+  finding predicted: the process dies with Go's `ExitCode() == -1` (killed
+  by the signal's own default disposition, proving the bare `trap ... EXIT`
+  never ran) and the scratch directory survives. With the fix, the process
+  exits 130 (SIGINT) or 143 (SIGTERM) and the directory is gone - dash
+  defers the signal until the blocking `gh` call returns (observed: a fixed
+  ~5s delay matching `FAKE_GH_SLEEP`, not an immediate interrupt), so the
+  demonstration is real but not instantaneous.
+  `trap_cleanup_dir` (used by `check-previous`, `check-clobber` and `bump`)
+  is exactly what this test exercises; `trap_cleanup_file` (`rewrite`'s own
+  temp file) is the identically-shaped sibling function, not literally the
+  same code path, and was not independently exercised by a real-signal
+  test: `rewrite`'s vulnerable window (between `mktemp` and `mv`) is a few
+  milliseconds of local `awk`, too narrow to hit deterministically without
+  adding a test-only delay hook to production code, which was deliberately
+  not added. Not a gap in the fix itself, a gap in how far a real-signal
+  test can reach without instrumenting the script.

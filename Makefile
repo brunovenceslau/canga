@@ -204,74 +204,64 @@ release-preflight:
 	scripts/sbx-kit-pin.sh check-clobber "$$tag"; \
 	echo "release-preflight: $$tag is the only tag here, the sbx kit pins the release before it, and no kit pins this one yet"
 
-# Fixed, not user-overridable: `override` refuses even a caller's own
-# `make release-kit-bump REPO_SLUG=x`, so $(REPO_SLUG) below is exactly as
-# safe as writing the literal at each call site - it can never carry
-# attacker-chosen text the way TAG can. That is also why this is the only
-# make variable spliced into this recipe: a value that legitimately VARIES
-# per invocation (TAG) is read from the shell's $$TAG instead, never from
-# make's own $(TAG); see the guard below for why that split matters.
+# override REPO_SLUG: `make release-kit-bump REPO_SLUG=x` cannot change it,
+# so $(REPO_SLUG) in the recipe stays as safe as the literal. This is the
+# only make variable spliced into the recipe text; TAG differs because it
+# legitimately varies per call, and is read from the shell's $$TAG instead
+# (see the guard below). `override` only refuses an ordinary
+# `REPO_SLUG=x` argument - a caller with `-f other.mk` or `--eval` could
+# still redefine it, but a caller who can hand make its own makefile or
+# --eval already has arbitrary shell execution, which this is not a defense
+# against.
 override REPO_SLUG := brunovenceslau/canga
 
-# Move the sbx kit's pin to a release the Release workflow already published,
-# as a signed commit on a branch of its own (chore/sbx-kit-<tag>), for a pull
-# request. README "Move the sbx kit's pin" has the reasons; scripts/sbx-kit-pin.sh
-# `bump` does the actual checks and the commit - this target's job is only to
-# get it a clean HEAD to run from.
+# Moves the sbx kit's pin to a release the Release workflow already
+# published, as a signed commit on chore/sbx-kit-<tag>, via
+# scripts/sbx-kit-pin.sh bump run from a temporary detached worktree at the
+# tag. README "Move the sbx kit's pin" has the recipe and the reasons;
+# docs/HANDOFF.md ("PR #34") has the security history behind each invariant
+# below (the TAG injection this target used to carry, the fetch refspec, the
+# worktree, and REPO_SLUG).
 #
-# TAG is user input, referenced only as the shell variable "$$TAG", never as
-# make's own $(TAG): make splices $(TAG) into the recipe as raw, unquoted
-# text before the shell parses anything, so a value like
-# `v1'; rm -rf /; echo '` runs as shell no matter how it looks quoted. $$TAG
-# is an ordinary shell expansion instead, so the shell only ever sees data.
-# The guard below requires a SINGLE line matching ^vX.Y.Z$: a line-oriented
-# `grep -Eq` alone would accept a value whose first line looks right and
-# whose second line does not, since grep succeeds as soon as ANY line
-# matches - `wc -l` on the unterminated value catches that by requiring zero
-# embedded newlines. `make TARGET TAG=v1.2.3` and `TAG=v1.2.3 make TARGET`
-# both land in the recipe's $$TAG the same way, so the guard covers both
-# without an `export TAG` directive, and runs before anything else (gh, git,
-# mktemp - all of it).
+# Invariants a maintainer changing this recipe must keep, in the order this
+# recipe actually runs them:
+# - The guard below refuses anything but a single line, at most 64
+#   characters, matching ^vX.Y.Z$, before gh, git or mktemp run: a
+#   line-oriented `grep -Eq` alone accepts a multi-line value whose first
+#   line matches, and an unbounded value fails closed in git rather than in
+#   this guard.
+#   TAG is read only as the shell's $$TAG here and below, never make's
+#   $(TAG): make splices $(TAG) into the recipe as raw, unquoted text before
+#   the shell parses it.
+# - GH_HOST is pinned to github.com before the first gh call, so a stray
+#   GH_HOST in the caller's environment cannot redirect gh at another host.
+# - The tag as fetched into this checkout is cross-checked against the
+#   commit GitHub's API resolves it to, before any of it is trusted; the
+#   fetch itself names an explicit refspec after `--` as defense in depth,
+#   redundant with the guard above once it has run (nothing $$tag could
+#   hold is then a fetch option in the first place).
+# - Only once that cross-check passes: the temporary worktree is checked out
+#   at the tag's own VERIFIED COMMIT sha ($$here), never the tag name, so it
+#   cannot silently re-resolve to a different commit than the one just
+#   checked.
+# - This target then runs the TAG'S OWN copy of scripts/sbx-kit-pin.sh, from
+#   inside that worktree, not the invoking checkout's: a tag cut before the
+#   script existed is refused rather than silently run with a newer copy,
+#   and a tag whose own copy predates later hardening does not gain it when
+#   re-bumped today.
 #
-# `bump` needs a HEAD carrying exactly the tag being bumped, which the
-# operator's own checkout rarely is (tagging happens on main; the release is
-# built later, by CI). This target gets there itself: a temporary DETACHED
-# worktree checked out at the tag's own VERIFIED COMMIT - never `git
-# checkout` (leaves the invoking checkout untouched), and never the tag NAME
-# (so it cannot silently re-resolve to a different commit than the one just
-# cross-checked below). That worktree sits beside the one `bump` itself
-# makes internally to hold the commit. It also runs scripts/sbx-kit-pin.sh
-# FROM that worktree, not the invoking checkout's copy: the tag's own,
-# reviewed script judges the tag's own release. A tag cut before the script
-# existed has none to run, and is refused rather than silently falling back
-# to a newer copy - which also means a tag whose OWN script copy predates
-# some later hardening never gains it, even when re-bumped today; only a
-# new release ships with the newer script.
-#
-# Checksums and archives come from the tag's GitHub release, not a local
-# `dist/`: nothing builds them locally any more, and the Release workflow's
-# artifacts are the only ones a sandbox ever installs. Both downloads share
-# one scratch directory because `bump` checks the archives against
-# checksums.txt and against GitHub's served digests, expecting them side by
-# side.
-#
-# Before any of that is trusted, the tag as fetched into this checkout - by
-# an explicit refspec after `--`, so nothing $$tag could hold is ever read
-# as a fetch option - is compared against the commit GitHub itself resolves
-# it to (dereferencing an annotated tag object through /git/tags/<sha>,
-# since /git/ref/tags/<tag> names the tag object, not its commit). A
-# mismatch means this checkout's `origin` and the canonical repository
-# disagree about what the tag is - exactly the situation the pin must never
-# be built from.
+# See docs/HANDOFF.md ("PR #34") for the security history behind each of
+# these, and README "Move the sbx kit's pin" for the recipe in plain prose.
 release-kit-bump:
 	@tag=$${TAG:-}; \
 	lines=$$(printf '%s' "$$tag" | wc -l); \
-	if [ "$$lines" -ne 0 ] || ! printf '%s' "$$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+	if [ "$$lines" -ne 0 ] || [ "$${#tag}" -gt 64 ] || ! printf '%s' "$$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$'; then \
 	  echo "usage: make release-kit-bump TAG=vX.Y.Z (got TAG='$$tag')" >&2; exit 1; \
 	fi
 	@command -v gh >/dev/null 2>&1 || { \
 	  echo "gh is not installed; it is what downloads the release's assets" >&2; exit 1; }
 	@set -e; \
+	export GH_HOST=github.com; \
 	tag="$$TAG"; \
 	assets=$$(mktemp -d); \
 	wtparent=$$(mktemp -d); \
@@ -281,6 +271,9 @@ release-kit-bump:
 	  rm -rf "$$assets" "$$wtparent"; \
 	}; \
 	trap cleanup EXIT; \
+	trap 'cleanup; exit 129' HUP; \
+	trap 'cleanup; exit 130' INT; \
+	trap 'cleanup; exit 143' TERM; \
 	echo "fetching tag $$tag"; \
 	git fetch -q origin -- "refs/tags/$$tag:refs/tags/$$tag"; \
 	here=$$(git rev-parse "refs/tags/$$tag^{commit}"); \
@@ -298,7 +291,7 @@ release-kit-bump:
 	  exit 1; \
 	fi; \
 	echo "downloading $$tag's checksums.txt and canga-sandbox_ archives"; \
-	gh release download "$$tag" -R $(REPO_SLUG) -D "$$assets" \
+	gh release download "$$tag" -R "$(REPO_SLUG)" -D "$$assets" \
 	  -p checksums.txt -p 'canga-sandbox_*'; \
 	git worktree add -q --detach "$$wt" "$$here"; \
 	if [ ! -x "$$wt/scripts/sbx-kit-pin.sh" ]; then \

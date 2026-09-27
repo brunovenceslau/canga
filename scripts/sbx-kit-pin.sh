@@ -9,7 +9,12 @@
 # Usage, from the repository root:
 #   sbx-kit-pin.sh version                    print the kit's CANGA_VERSION
 #   sbx-kit-pin.sh rewrite X.Y.Z <checksums>  rewrite the pin in the working
-#                                             tree (no checks against GitHub)
+#                                             tree, refusing unless the sums
+#                                             match release vX.Y.Z's published
+#                                             digests, uploaded by a workflow
+#                                             run in this repository (see
+#                                             check_published below for what
+#                                             that does and does not prove)
 #   sbx-kit-pin.sh check-previous <tag>       refuse unless HEAD's kit pins
 #                                             the newest published release
 #                                             below <tag>, by its published
@@ -27,8 +32,29 @@
 # follows the newest line and never moves backwards, so such a release is a
 # decision, not a default.
 #
-# gh is always pointed at brunovenceslau/canga (see repo= below), the
-# repository the kit downloads from, never at the checkout's remotes.
+# gh is always pointed at brunovenceslau/canga on github.com (see repo=
+# below and GH_HOST=github.com below that), the repository the kit downloads
+# from, never at the checkout's remotes or a stray GH_HOST in the caller's
+# environment.
+#
+# check_published (used by rewrite, check-previous and bump) also requires
+# each canga-sandbox_ asset's uploader to be github-actions[bot]: GitHub
+# reports every default-GITHUB_TOKEN upload under that one identity, so this
+# proves the asset was uploaded by SOME workflow run in this repository (the
+# repos/${repo}/... path scopes which repository), not specifically by the
+# Release workflow - a different workflow in this repository granted
+# `contents: write` could produce the same identity. What this closes: a
+# NEW asset upload under a person's own token (`gh release upload
+# --clobber`) is refused, digest match or not, because that upload's
+# uploader is no longer github-actions[bot]. What it does not close: a
+# metadata-only edit - the release's title or notes, or an asset's label
+# or name - that never re-uploads the asset leaves its uploader field
+# untouched and is not caught here. A rename still cannot swap archives:
+# it only moves bytes already uploaded, and the digest check refuses
+# them under the wrong name. Binding assets to release.yml specifically
+# (build provenance attestation) is docs/HANDOFF.md's pending item 3.
+# check_published also refuses a draft or a prerelease outright, and refuses
+# an asset name it cannot match exactly (see its own comment for both).
 #
 # check-previous, check-clobber and bump read the kit as committed (at HEAD,
 # or at origin's main), never the working tree, so a local edit, an
@@ -40,6 +66,13 @@
 
 set -eu
 
+# Pinned so a stray GH_HOST in the calling environment cannot silently
+# redirect gh at an enterprise host: every gh call in this script is about
+# brunovenceslau/canga on github.com, never wherever GH_HOST happened to
+# point before this line ran.
+GH_HOST=github.com
+export GH_HOST
+
 spec="sbx-kit/spec.yaml"
 # The same repository the kit's install step downloads from.
 repo="brunovenceslau/canga"
@@ -47,6 +80,41 @@ repo="brunovenceslau/canga"
 die() {
 	echo "sbx-kit-pin: $*" >&2
 	exit 1
+}
+
+# trap_cleanup_file/trap_cleanup_dir <path> remove <path> (a file, or a
+# directory tree) on a normal exit AND on INT, TERM and HUP too: a bare
+# `trap ... EXIT` does not fire for those signals in every /bin/sh (dash
+# included), so a killed run (Ctrl-C, or a TERM from a job scheduler) can
+# leave a scratch directory or a temp file behind. exit 128+signum is the
+# portable way to report a signal death from a shell without re-raising it.
+#
+# ${target} is assigned before any trap is set, and every trap below is
+# single-quoted with ${target} left unexpanded inside it (the pattern a
+# shell linter's SC2064 check asks for): the variable is captured once,
+# into a name these functions own, and expands only when the trap actually
+# fires, not when trap_cleanup_file/trap_cleanup_dir themselves run.
+trap_cleanup_file() {
+	target="$1"
+	trap 'rm -f "${target}"' EXIT
+	trap 'rm -f "${target}"; exit 129' HUP
+	trap 'rm -f "${target}"; exit 130' INT
+	trap 'rm -f "${target}"; exit 143' TERM
+}
+
+trap_cleanup_dir() {
+	target="$1"
+	trap 'rm -rf "${target}"' EXIT
+	trap 'rm -rf "${target}"; exit 129' HUP
+	trap 'rm -rf "${target}"; exit 130' INT
+	trap 'rm -rf "${target}"; exit 143' TERM
+}
+
+# trap_clear cancels every trap trap_cleanup_file/trap_cleanup_dir
+# installed, once the thing it guarded has been moved or committed into
+# place and no longer needs removing on the way out.
+trap_clear() {
+	trap - EXIT HUP INT TERM
 }
 
 # is_version X.Y.Z: a release version as the kit and the archive names spell
@@ -116,16 +184,24 @@ sandbox_sum() {
 	printf '%s\n' "${sums}"
 }
 
-# render <version> <checksums> <in> <out> writes <in> with its pin replaced
-# into <out>, and refuses unless <in> has exactly one CANGA_VERSION line and
-# one sha256 line under each arch's `arch="..."` line. Every other byte is
-# copied.
+# render <version> <amd64 sum> <arm64 sum> <in> <out> writes <in> with its
+# pin replaced into <out>, and refuses unless <in> has exactly one
+# CANGA_VERSION line and one sha256 line under each arch's `arch="..."`
+# line. Every other byte is copied.
+#
+# The sums are taken as already-parsed strings, never a checksums.txt path:
+# every caller has already run sandbox_sum itself (to check_published
+# against, or to check against a downloaded archive) before render ever
+# runs, and a second sandbox_sum call here - re-reading the same file - would
+# be both a needless re-parse and a TOCTOU window (the file could change
+# between the two reads on a filesystem an attacker can write to). One
+# parse, passed through, is both cheaper and the only version that means
+# what check_published (or bump's archive check) already verified is
+# exactly what gets written.
 render() {
-	amd64=$(sandbox_sum "$2" "$1" amd64)
-	arm64=$(sandbox_sum "$2" "$1" arm64)
-	spec_version "$3" >/dev/null
+	spec_version "$4" >/dev/null
 
-	if ! awk -v ver="$1" -v amd64="${amd64}" -v arm64="${arm64}" '
+	if ! awk -v ver="$1" -v amd64="$2" -v arm64="$3" '
 		/^[[:space:]]*CANGA_VERSION="[^"]*"$/ {
 			nver++
 			sub(/"[^"]*"/, "\"" ver "\"")
@@ -150,7 +226,7 @@ render() {
 		}
 		{ print }
 		END { exit !(nver == 1 && namd64 == 1 && narm64 == 1 && stray == 0) }
-	' "$3" >"$4"; then
+	' "$4" >"$5"; then
 		die "${spec}: want one CANGA_VERSION line and one sha256=\"...\" line after each of arch=\"amd64\" and arch=\"arm64\"; refusing to rewrite it"
 	fi
 }
@@ -178,9 +254,40 @@ pick() {
 	'
 }
 
-# The --jq that turns a release document into "<name> <digest>" lines.
+# orDash(x) is jq syntax, defined once and reused by both --jq expressions
+# below: jq's own "// default" operator substitutes only for null or false,
+# NEVER for an empty string, so ".digest // \"-\"" alone would still read
+# back as an empty field the day a value is "" instead of null. Folding ""
+# into the same "-" here is what makes "never as an empty field" (see
+# assets_jq's own comment) actually true, not just true for null.
 # shellcheck disable=SC2016 # jq syntax, not a shell expansion
-assets_jq='.assets[] | "\(.name) \(.digest // "")"'
+or_dash_def='def orDash(x): if (x == null or x == "") then "-" else x end;'
+
+# asset_line_def is the "<name> <digest> <uploader>" jq snippet shared by
+# assets_jq and release_jq below: defined once so the two --jq expressions
+# cannot drift apart the way two hand-copied inline snippets could. A
+# missing or empty digest or uploader prints as "-", never as an empty
+# field (orDash above), so a field that is absent can never collapse into
+# its neighbour under awk's default whitespace splitting (two real fields
+# either side of one truly-empty one would otherwise read back as one
+# field short).
+# shellcheck disable=SC2016 # jq syntax, not a shell expansion
+asset_line_def='def assetLine: "\(.name) \(orDash(.digest)) \(orDash(.uploader.login))";'
+
+# The --jq that turns a release document into asset_line_def's lines, used
+# by check-clobber alone (existence only: nothing check-clobber reads here
+# is trusted or pinned, so it has no need for release_jq's _meta line
+# below).
+# shellcheck disable=SC2016 # jq syntax, not a shell expansion
+assets_jq="${or_dash_def} ${asset_line_def} .assets[] | assetLine"
+
+# release_jq is release_assets's own --jq: the same asset lines as
+# assets_jq, preceded by one "_meta <draft> <prerelease>" line - both
+# booleans straight from the release document, from the SAME gh api call
+# release_assets makes, so check_published's draft/prerelease refusal (see
+# release_assets below) costs no second round trip to GitHub.
+# shellcheck disable=SC2016 # jq syntax, not a shell expansion
+release_jq="${or_dash_def} ${asset_line_def} \"_meta \\(.draft) \\(.prerelease)\", (.assets[] | assetLine)"
 
 # older_line <tag> <newer> refuses a release below the newest one unless
 # SBX_KIT_OLDER_LINE names exactly this tag, and warns when it does.
@@ -191,27 +298,90 @@ older_line() {
 	echo "sbx-kit-pin: WARNING: $1 is below the newest published release $2, and SBX_KIT_OLDER_LINE=$1: the kit keeps following the newest line" >&2
 }
 
-# release_assets <tag> prints "<name> <digest>" for every asset of <tag>'s
-# release, the digest being GitHub's own "sha256:<hex>" of the bytes it
-# serves. gh api, not gh release view: gh 2.46's view prints empty digests.
+# release_assets <tag> prints "<name> <digest> <uploader>" for every asset
+# of <tag>'s release, after refusing a draft or a prerelease outright: the
+# digest is GitHub's own "sha256:<hex>" of the bytes it serves, and the
+# uploader is who published the asset (its login, or "[bot]"-suffixed for
+# an app such as the Release workflow, which is not the only workflow that
+# can produce that suffix - see check_published's own comment). gh api, not
+# gh release view: gh 2.46's view prints empty digests.
 release_assets() {
 	command -v gh >/dev/null 2>&1 || die "gh is not installed; it is how the published digests are read"
-	gh api "repos/${repo}/releases/tags/$1" --jq "${assets_jq}" ||
+	doc=$(gh api "repos/${repo}/releases/tags/$1" --jq "${release_jq}") ||
 		die "could not read the assets of release $1 with gh"
+	meta=$(printf '%s\n' "${doc}" | awk 'NF == 3 && $1 == "_meta" { print; exit }')
+	[ -n "${meta}" ] || die "release $1: gh answered without the expected _meta line; refusing to trust its assets"
+	[ "$(printf '%s\n' "${meta}" | awk '{ print $2 }')" != "true" ] ||
+		die "release $1 is a draft; refusing to trust an asset from a release that is not published"
+	[ "$(printf '%s\n' "${meta}" | awk '{ print $3 }')" != "true" ] ||
+		die "release $1 is a prerelease; refusing to trust an asset from a release GitHub has not fully published"
+	printf '%s\n' "${doc}" | awk 'NF == 3 && $1 != "_meta"'
 }
 
 # check_published <tag> <version> <amd64 sum> <arm64 sum> refuses unless the
-# release's canga-sandbox_ assets are served with exactly those sha256. A
-# missing digest is a refusal, not a pass.
+# release's canga-sandbox_ assets are served with exactly those sha256, each
+# uploaded under the github-actions[bot] identity.
+#
+# What that identity proves, and what it does not: GitHub reports every
+# asset uploaded with a workflow's default GITHUB_TOKEN under that one
+# login, and the gh api call above is scoped to THIS repository
+# (repos/${repo}/...), so a match here proves the asset was uploaded by
+# SOME workflow run in brunovenceslau/canga - not specifically by the
+# Release workflow (release.yml). A different workflow in this repository,
+# granted `contents: write`, could run `gh release upload --clobber` itself
+# and produce the same identity; this check does not distinguish that case
+# from the Release workflow's own upload. What it does close: a NEW asset
+# upload with a PERSON's own token (an interactive `gh release upload
+# --clobber` run by hand) is refused, digest match or not, because that
+# upload's uploader is no longer github-actions[bot]. What it does not
+# close: a metadata-only edit - the release's title or notes, or an
+# asset's label or name - that never re-uploads the asset leaves its
+# uploader field untouched and passes here unnoticed. A rename still
+# cannot swap archives: it only moves bytes already uploaded, and the
+# digest check, which runs first, refuses them under the wrong name.
+# Binding assets to release.yml specifically needs build provenance
+# attestation (`gh attestation verify --signer-workflow
+# <repo>/.github/workflows/release.yml`); that is docs/HANDOFF.md's pending
+# item 3, not implemented here.
+#
+# Each refusal below is its own message, not folded into one: an asset
+# missing from the release entirely, one the release lists more than once
+# (ambiguous - refused rather than silently picking the first), one with no
+# digest, one whose digest does not match, one with no uploader, and one
+# whose uploader is not github-actions[bot] are six different problems, and
+# conflating any two of them into the same wording would make the refusal
+# harder to act on. The digest check runs before the uploader check, so a
+# release wrong in both ways is refused for its digest.
 check_published() {
 	assets=$(release_assets "$1")
 	for arch in amd64 arm64; do
 		if [ "${arch}" = amd64 ]; then want=$3; else want=$4; fi
+		# canga-sandbox_<version>_linux_<arch>.tar.gz. The NF == 3 guard
+		# here is belt-and-suspenders: release_assets already dropped every
+		# malformed line (most notably an asset name that itself contains
+		# whitespace) before returning ${assets}, so this awk call never
+		# actually sees an NF != 3 line today. It is kept anyway so that a
+		# future caller of this loop over a differently-sourced ${assets}
+		# fails the same safe way - matched only on an exact "<name>
+		# <digest> <uploader>" line, never mis-split into digest/uploader
+		# fields borrowed from inside the name - rather than silently
+		# trusting release_assets to keep filtering forever.
 		asset="canga-sandbox_$2_linux_${arch}.tar.gz"
-		got=$(printf '%s\n' "${assets}" | awk -v a="${asset}" '$1 == a { print $2 }')
-		[ -n "${got}" ] || die "release $1 serves no digest for ${asset}; refusing to trust a sha256 GitHub does not confirm"
+		matches=$(printf '%s\n' "${assets}" | awk -v a="${asset}" 'NF == 3 && $1 == a')
+		count=$(printf '%s' "${matches}" | grep -c . || true)
+		case "${count}" in
+		0) die "release $1 carries no ${asset} at all; refusing to trust an asset that is not in the release" ;;
+		1) : ;;
+		*) die "release $1 lists ${count} assets named ${asset}; refusing to trust an ambiguous release" ;;
+		esac
+		got=$(printf '%s\n' "${matches}" | awk '{ print $2 }')
+		uploader=$(printf '%s\n' "${matches}" | awk '{ print $3 }')
+		[ "${got}" != "-" ] || die "release $1 reports no digest for ${asset}; refusing to trust a sha256 GitHub does not confirm"
 		[ "${got}" = "sha256:${want}" ] || die "release $1 serves ${asset} as ${got}, not sha256:${want}; the bytes on GitHub are not the ones pinned"
-		echo "sbx-kit-pin: release $1 serves ${asset} as sha256:${want}"
+		[ "${uploader}" != "-" ] || die "release $1 reports no uploader for ${asset}; refusing to trust an asset GitHub does not attribute to a workflow run in this repository"
+		[ "${uploader}" = "github-actions[bot]" ] ||
+			die "release $1's ${asset} was uploaded by ${uploader}, not github-actions[bot]; only a workflow's own GITHUB_TOKEN in this repository may publish this pin's archives"
+		echo "sbx-kit-pin: release $1 serves ${asset} as sha256:${want}, uploaded under the github-actions[bot] identity"
 	done
 }
 
@@ -227,14 +397,30 @@ cmd_rewrite() {
 	[ -f "$2" ] || die "$2: not found"
 	[ -f "${spec}" ] || die "${spec}: not found"
 
+	# Always verified, with no bypass: rewrite is the manual recovery path
+	# (used, by hand, for the v0.10.2 pin), and a manual path that trusts an
+	# unverified checksums.txt is exactly the gap bump closes for the normal
+	# path. check_published is the same check check-previous and bump run,
+	# against the release the version names, so a claimed sum that GitHub
+	# does not confirm - or an asset GitHub does not attribute to
+	# github-actions[bot] - never reaches the kit.
+	#
+	# $2 (the checksums.txt path) is parsed exactly once, right here:
+	# amd64/arm64 are passed into render below as plain strings, not
+	# re-derived from $2 a second time. See render's own comment for why a
+	# second parse of the same file is a TOCTOU window, not extra safety.
+	amd64=$(sandbox_sum "$2" "$1" amd64)
+	arm64=$(sandbox_sum "$2" "$1" arm64)
+	check_published "v$1" "$1" "${amd64}" "${arm64}"
+
 	tmp=$(mktemp "${spec}.XXXXXX")
-	trap 'rm -f "${tmp}"' EXIT
-	render "$1" "$2" "${spec}" "${tmp}"
+	trap_cleanup_file "${tmp}"
+	render "$1" "${amd64}" "${arm64}" "${spec}" "${tmp}"
 	# mktemp creates 0600; keep the kit's own mode.
 	chmod 0644 "${tmp}"
 	mv "${tmp}" "${spec}"
-	trap - EXIT
-	echo "sbx-kit-pin: ${spec} now pins ${1}"
+	trap_clear
+	echo "sbx-kit-pin: ${spec} now pins ${1}, verified against release v$1's published digests"
 }
 
 cmd_check_previous() {
@@ -242,7 +428,7 @@ cmd_check_previous() {
 	tag_version "$1" >/dev/null
 
 	scratch=$(mktemp -d)
-	trap 'rm -rf "${scratch}"' EXIT
+	trap_cleanup_dir "${scratch}"
 	committed_spec HEAD "${scratch}/spec.yaml"
 	kit=$(spec_version "${scratch}/spec.yaml")
 
@@ -285,7 +471,7 @@ cmd_check_clobber() {
 	command -v gh >/dev/null 2>&1 || die "gh is not installed; it is how the published digests are read"
 
 	scratch=$(mktemp -d)
-	trap 'rm -rf "${scratch}"' EXIT
+	trap_cleanup_dir "${scratch}"
 	# A release that does not exist yet has nothing to clobber: the Release
 	# workflow runs this before GoReleaser creates it. Any other gh failure
 	# is a refusal.
@@ -360,17 +546,23 @@ cmd_bump() {
 	# Every refusal about the checksums, the archives or the kit lands before
 	# git is written to.
 	scratch=$(mktemp -d)
-	trap 'rm -rf "${scratch}"' EXIT
+	trap_cleanup_dir "${scratch}"
 	committed_spec HEAD "${scratch}/head.yaml"
-	render "${version}" "${sums}" "${scratch}/head.yaml" "${scratch}/spec.yaml"
+
+	# ${sums} is parsed exactly once, right here: amd64/arm64 are plain
+	# strings from this point on, reused below for the archive check, for
+	# check_published, and passed into render rather than making render
+	# re-derive them from ${sums} a second time (a needless re-parse, and a
+	# TOCTOU window on a file bump does not own - see render's comment).
+	amd64=$(sandbox_sum "${sums}" "${version}" amd64)
+	arm64=$(sandbox_sum "${sums}" "${version}" arm64)
+	render "${version}" "${amd64}" "${arm64}" "${scratch}/head.yaml" "${scratch}/spec.yaml"
 
 	# checksums.txt is only a claim. The pin must name the bytes the archives
 	# next to it actually contain (whether built locally or, as
 	# `make release-kit-bump` does, downloaded from the release) AND the
 	# bytes GitHub serves (the release's digests): a failed or repeated
 	# upload leaves those two apart, and neither may reach a signed pin.
-	amd64=$(sandbox_sum "${sums}" "${version}" amd64)
-	arm64=$(sandbox_sum "${sums}" "${version}" arm64)
 	for arch in amd64 arm64; do
 		if [ "${arch}" = amd64 ]; then want=${amd64}; else want=${arm64}; fi
 		archive="${dist}/canga-sandbox_${version}_linux_${arch}.tar.gz"

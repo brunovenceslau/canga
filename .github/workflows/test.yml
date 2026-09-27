@@ -30,8 +30,18 @@ jobs:
       # Without zsh, TestCompletionScript skips its `zsh -n` parse of the
       # generated completion script and still reports a pass. Installing it
       # keeps the gate real rather than letting a missing shell look green.
-      - name: Install zsh
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+      #
+      # TestSbxKitPin_ReleaseJQ pipes scripts/sbx-kit-pin.sh's own --jq
+      # strings through a real jq binary, so a syntax or semantic error in
+      # either never reaches the real GitHub API undetected. Runner images
+      # already carry a jq, but installed here explicitly so the gate does
+      # not depend on that runner-image detail: an explicit install
+      # guarantees jq is present regardless of what the image ships. Unlike
+      # shellcheck below, this does not pin jq's version - a version bump
+      # to the jq apt package can still change the verdict without this
+      # workflow file changing.
+      - name: Install zsh and jq
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh jq
 
       # TestSbxKit_Shellcheck lints the sbx kit's install script and
       # scripts/sbx-kit-pin.sh, and fails under CI without shellcheck. Pinned
