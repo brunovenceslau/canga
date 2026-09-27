@@ -897,7 +897,8 @@ make tools   # install the pinned golangci-lint and govulncheck
 make fix     # apply every automatic fix: go fix, the formatters, --fix linters
 make ci      # lint + test + govulncheck — must be green before a push
 make race    # the multi-process store race gate, verbosely
-make release # attach the release artifacts to an existing GitHub release
+make release-preflight             # checks to run on a signed tag before pushing it
+make release-kit-bump TAG=vX.Y.Z   # pin the sbx kit to a release the workflow published
 ```
 
 Every gate is a `make` target, and CI invokes the target rather than restating
@@ -909,49 +910,62 @@ over a virtiofs mount rather than assumed to hold there.
 
 ### Releasing
 
-You create the release on GitHub. `make release` builds the artifacts and
-attaches them to it, and never edits the release or its notes. The split exists
-to keep GitHub's generated notes, which is the reason to create the release
-there in the first place.
+`.github/workflows/release.yml` is the one official release path: a signed
+`v*` tag, pushed, is the whole trigger. It builds every platform with
+GoReleaser and publishes the release itself, notes and all - nothing local
+builds or uploads a release artifact any more. The one thing left for a
+human to do afterwards is move the sbx kit's pin, which needs the finished
+release's `checksums.txt` and cannot happen before it exists.
 
-Two things have to be installed. `gh` you already have, since it is how canga
-is installed. GoReleaser is pinned in the `Makefile` and installed once:
-
-```sh
-GOBIN="$HOME/.local/bin" make tool-release
-```
-
-`go install` writes to `$(go env GOPATH)/bin` by default, which is on neither
-mac's PATH. `GOBIN` puts the binary in a directory that is.
-
-`make release` also commits the sbx kit bump signed (`git commit -S`), so git
-must be set up to sign commits, as it already is for any commit to this
-repository.
+Signing is the only local setup: `make release-kit-bump` commits that pin
+signed (`git commit -S`), so git must already be set up to sign commits, as
+it is for any commit to this repository.
 
 To publish a version:
 
 1. Check that the previous release's kit bump has merged: `main`'s
-   `sbx-kit/spec.yaml` must pin the newest published release. Step 4 refuses
-   otherwise; see [Move the sbx kit's pin](#move-the-sbx-kits-pin).
+   `sbx-kit/spec.yaml` must pin the newest published release. Step 2's
+   `make release-preflight` refuses otherwise; see
+   [Move the sbx kit's pin](#move-the-sbx-kits-pin).
 
-2. Tag the commit and push the tag.
+2. Tag the commit, signed, and run the preflight before pushing it.
 
    ```sh
-   git tag -a v0.2.0 -m v0.2.0
+   git tag -s v0.2.0 -m v0.2.0
+   make release-preflight
    git push origin v0.2.0
    ```
 
-3. Create the release on GitHub from that tag, and let it generate the notes.
+   `release-preflight` repeats, locally, the two checks the workflow makes
+   for itself once the tag lands (`check-previous`, `check-clobber`), so a
+   release that would fail in CI fails here first, before it costs a run.
 
-4. Build the artifacts, attach them, and prepare the kit bump.
+3. Watch the Release run the pushed tag triggers.
 
    ```sh
-   make release
+   gh run watch --repo brunovenceslau/canga
    ```
 
-5. Push the kit bump branch that step 4 committed, and open its pull request.
-   `make release` prints both commands; they are left to you because they
-   publish:
+   GoReleaser's `release --clean` both builds and publishes: it creates the
+   GitHub release itself, with GitHub's own generated notes
+   (`changelog.use: github-native` in `.goreleaser.yml`), and attaches four
+   `canga-host_` archives (darwin and linux, amd64 and arm64), two
+   `canga-sandbox_` archives (linux), and `checksums.txt`.
+
+4. Once the run is green, make the kit bump.
+
+   ```sh
+   make release-kit-bump TAG=v0.2.0
+   ```
+
+   This downloads `v0.2.0`'s `checksums.txt` and both `canga-sandbox_`
+   archives from the release, checks them against each other and against the
+   digests GitHub serves, and commits the pin, signed, on branch
+   `chore/sbx-kit-v0.2.0` - from a temporary detached worktree at the tag, so
+   the checkout you ran this from is left exactly as it was.
+
+5. Push that branch and open its pull request. `release-kit-bump` prints
+   both commands; they are left to you because they publish:
 
    ```sh
    git push -u origin chore/sbx-kit-v0.2.0
@@ -961,72 +975,42 @@ To publish a version:
 6. Review and merge that pull request. Its merge commit is the ref an
    environment pins ([Use the sbx kit](#use-the-sbx-kit)).
 
-Step 4 reports what landed: four `canga-host_` archives (darwin and linux,
-amd64 and arm64) and two `canga-sandbox_` archives (linux), then the kit bump:
+Run step 4 again, before its branch is pushed or merged, and it changes
+nothing: it verifies the existing branch pins the same hashes and stops.
+Rebuilding the archives themselves means re-running the workflow against the
+same tag, and `SBX_KIT_ALLOW_CLOBBER` (a local override for `check-clobber`,
+not something the workflow reads) exists for the case where breaking every
+sandbox pinned to the old archives is genuinely the point; see the table
+below, and cut a new patch release instead when it is not.
 
-```
-release: v0.2.0 now carries 6 archives and checksums.txt
-sbx-kit-pin: committed the v0.2.0 kit pin on branch chore/sbx-kit-v0.2.0 (<commit>)
-```
-
-Run it again, before its kit bump is pushed, and it replaces those assets
-instead of failing. Rebuilt archives get new sha256 values, though, so a
-local bump branch from the first run no longer matches: the kit bump step
-refuses, and you delete that branch and run `make release-kit-bump`.
-
-Once the bump branch is pushed or merged, do not rebuild the tag: every
-sandbox pinned to the kit that names its archives would stop installing.
-Cut a new patch release instead. `make release-preflight` refuses the
-rebuild. `SBX_KIT_ALLOW_CLOBBER=vX.Y.Z make release` overrides it for the
-case where breaking those pins is the point; the value must be the tag being
-rebuilt, so an override left in a shell never applies to another release.
-
-Every condition below is checked before anything is compiled, so a mistake
-costs a second rather than a four-platform build:
+Every condition below is checked before anything slow, so a mistake costs a
+second rather than a wasted Release run or a broken sandbox pin:
 
 | It stops when | Do this |
 | --- | --- |
-| GoReleaser is not installed | `make tool-release` |
-| `gh` is not installed | install `gh` |
-| HEAD carries no tag | tag the commit you are releasing |
-| HEAD carries more than one tag | delete the tag you are not releasing |
-| The tag is not on the remote | `git push origin <tag>` |
-| The tag names a different commit on the remote | force-push the tag, or build from the commit the release already names |
-| The tag has no release on GitHub | create the release, step 3 above |
-| `sbx-kit/spec.yaml` at the tag does not pin the newest published release below it, or pins hashes GitHub does not serve for it | merge the previous release's `chore/sbx-kit-vX.Y.Z` pull request, then re-tag on top of it |
-| The tag already carries `canga-sandbox_` archives, and its kit bump is pushed or merged | cut a new patch release, or set `SBX_KIT_ALLOW_CLOBBER=<the tag>` |
-| `gh` answers 404 for the tag's release and either cannot see `brunovenceslau/canga` at all or sees it under another name, so the 404 proves nothing (the refusal names what `gh` saw) | authenticate `gh` with a token that can read `brunovenceslau/canga`, or update the script's `repo=` if it was renamed or transferred |
-| The tag is below the newest published release (an older line) | release from the newest line, or set `SBX_KIT_OLDER_LINE=<the tag>` |
-| The working tree is dirty | commit or stash first. GoReleaser enforces this one |
+| HEAD carries no tag (`release-preflight`) | tag the commit you are releasing |
+| HEAD carries more than one tag (`release-preflight`) | delete the tag you are not releasing |
+| `sbx-kit/spec.yaml` at the tag does not pin the newest published release below it, or pins hashes GitHub does not serve for it (`check-previous`, run by `release-preflight` and the workflow) | merge the previous release's `chore/sbx-kit-vX.Y.Z` pull request, then re-tag on top of it |
+| The tag already carries `canga-sandbox_` archives, and its kit bump is pushed or merged (`check-clobber`, run by `release-preflight` and the workflow) | cut a new patch release, or set `SBX_KIT_ALLOW_CLOBBER=<the tag>` |
+| `gh` answers 404 for the tag's release and either cannot see `brunovenceslau/canga` at all or sees it under another name, so the 404 proves nothing (the refusal names what `gh` saw; `check-clobber`, run by `release-preflight` and the workflow) | authenticate `gh` with a token that can read `brunovenceslau/canga`, or update the script's `repo=` if it was renamed or transferred |
+| The tag is below the newest published release (an older line; `release-preflight`, the workflow, and `release-kit-bump` each make this check, independently) | release from the newest line, or set `SBX_KIT_OLDER_LINE=<the tag>` |
+| `gh` is not installed (`release-kit-bump`) | install `gh`, which is also how canga itself is installed |
+| `release-kit-bump` was run without `TAG=`, or `TAG` is not exactly `vX.Y.Z` | pass it: `make release-kit-bump TAG=vX.Y.Z` |
+| The tag as fetched into this checkout resolves to a different commit than GitHub resolves it to (`release-kit-bump`) | something is wrong with `origin` or with GitHub's own view of the tag; do not proceed until they agree |
+| The tag predates `scripts/sbx-kit-pin.sh` (`release-kit-bump`) | nothing to do: the kit has already moved past any release this old |
 
-The three tag checks exist because the tag is resolved twice: `make release`
-reads it to pick the release to upload to, and GoReleaser reads it again to name
-the archives and stamp `main.version`. Two tags on one commit let those answers
-differ, which attaches archives named after one tag to the release of the other.
-A tag moved locally after being pushed attaches artifacts to a release that
-names a different commit.
+The tag-count check exists because a second tag on the same commit has no
+single answer to "which release is this": `release-preflight` cannot tell
+which one you mean, even though the workflow only ever sees whichever ref
+its own push triggered it from.
 
-`make ci` then runs before the build. A release is the one build nobody
-re-checks afterwards, and while the Release workflow cannot start a job, `make
-ci` is the only gate between a broken tree and a published binary.
-
-This procedure assumes `.github/workflows/release.yml` is not running. That
-workflow triggers on a pushed `v*` tag and creates the release itself, so step 2
-would produce the release before step 3 gets to, with workflow notes rather than
-the ones you meant, and `make release` would then replace its artifacts with
-locally built ones. GitHub Actions currently cannot start a job on the account,
-which is why the two paths do not collide today. Whether to keep both, or retire
-the workflow now that the local path exists, is still open. The workflow runs
-the same kit check as `make release-preflight`, so it fails on a `v*` tag
-that is not `vX.Y.Z`, such as `v1.0.0-rc.1`: release only `vX.Y.Z` tags.
-
-`make release` calls GoReleaser rather than packaging with `tar` and `shasum`,
+The workflow calls GoReleaser rather than packaging with `tar` and `shasum`,
 so `.goreleaser.yml` stays the single definition of the artifact format. The
 reason is `canga upgrade`: each build finds its asset by its own prefix
 (`canga-host_` or `canga-sandbox_`) and the `_<os>_<arch>.tar.gz` suffix, and
-reads `checksums.txt` by exact filename. A second packaging implementation that
-drifted from the first would break upgrading, for whoever
-ran it next, rather than releasing, for whoever changed it.
+reads `checksums.txt` by exact filename. A second packaging implementation
+that drifted from the first would break upgrading, for whoever ran it next,
+rather than releasing, for whoever changed it.
 
 #### Move the sbx kit's pin
 
@@ -1038,31 +1022,39 @@ sandbox installs. A `checksums.txt` fetched from the same release as the
 tarball proves nothing against whoever can replace that release's assets,
 since they can replace both.
 
-The hashes exist only once a release is built, so the pin cannot move in the
-release commit. `make release` moves it right after the upload, with
-`scripts/sbx-kit-pin.sh bump`:
+The hashes exist only once a release is published, so the pin cannot move in
+the release commit. `make release-kit-bump TAG=vX.Y.Z` moves it afterwards,
+with `scripts/sbx-kit-pin.sh bump`:
 
-- It refuses a dirty tree, and a `HEAD` that does not carry exactly the tag
-  being released.
-- It reads `dist/checksums.txt`, the file GoReleaser just built, never a
-  download, and refuses unless it finds exactly one `canga-sandbox_` line
-  for each arch.
+- Before anything else, it compares the tag as fetched into your checkout
+  against the commit GitHub itself resolves it to, and refuses on any
+  disagreement: your `origin` and the canonical repository must name the
+  same commit before either is trusted.
+- It downloads `checksums.txt` and both `canga-sandbox_` archives from the
+  tag's GitHub release into a scratch directory, and stands up a temporary
+  detached worktree at the tag - so `bump`'s own requirements (a clean tree,
+  a `HEAD` that carries exactly that one tag) are met without touching the
+  checkout you ran the command from. `bump` itself then runs from that
+  worktree's own copy of `scripts/sbx-kit-pin.sh`, not the one in your
+  checkout: the tag's own, reviewed script judges the tag's own release. A
+  tag cut before the script existed is refused, not silently run with a
+  newer copy.
+- It reads that downloaded `checksums.txt`, never a local build, and refuses
+  unless it finds exactly one `canga-sandbox_` line for each arch.
 - It checks those sums twice more, and refuses on any difference: against
-  the archives in `dist/`, and against the `sha256:` digest GitHub serves
-  for each asset of the release (`gh api .../releases/tags/<tag>`; a
-  missing digest is a refusal too). A failed or repeated upload leaves the
-  build and the release apart, and neither side may reach a signed pin.
+  the archives downloaded alongside it, and against the `sha256:` digest
+  GitHub serves for each asset of the release (`gh api
+  .../releases/tags/<tag>`; a missing digest is a refusal too). Bytes that
+  disagree between the download and what GitHub itself now serves are never
+  trusted into a signed pin.
 - It rewrites `CANGA_VERSION` and both `sha256` values in the kit as
-  committed at `HEAD`, and commits that, signed, on branch
-  `chore/sbx-kit-vX.Y.Z`, through a temporary worktree, so the checkout you
-  released from is left as it was.
+  committed at the tag, and commits that, signed, on branch
+  `chore/sbx-kit-vX.Y.Z`, through a second, nested temporary worktree of its
+  own.
 - Run again, it changes nothing when that branch is one verified commit on
   top of the tag, touching only the kit, with the same hashes. Any other
   branch of that name is a refusal.
 - It pushes nothing. It prints the push and the `gh pr create` command.
-
-`make release-kit-bump` runs that step alone, for the tag at `HEAD`, when a
-release stopped after its upload.
 
 Nothing merges the bump for you. So `make release-preflight` refuses the next
 release until `sbx-kit/spec.yaml` at the tag pins the newest published
@@ -1073,29 +1065,18 @@ hand, and the kit stayed on v0.8.0 through v0.9.0, v0.10.0 and v0.10.1.
 
 The kit follows the newest release line and never moves backwards. A
 release below the newest published one (a fix on an older line) is refused
-unless `SBX_KIT_OLDER_LINE` names its tag, such as
-`SBX_KIT_OLDER_LINE=v0.9.1 make release`. With it set, the preflight only asks
-that the kit at the tag pins some published release below it, and the bump
-step prints a warning and commits no branch.
+unless `SBX_KIT_OLDER_LINE` names its tag, such as `SBX_KIT_OLDER_LINE=v0.9.1`
+for both `make release-preflight` and `make release-kit-bump TAG=v0.9.1`.
+With it set, the preflight only asks that the kit at the tag pins some
+published release below it, and the bump step prints a warning and commits
+no branch.
 
-If the bump branch is lost before it merged, commit it again from the tag,
-from the release's own files. Here the sums come from the release rather
-than from your build, so compare them by eye with the ones the original
-`make release` printed (`release vX.Y.Z serves ... as sha256:...`) before
-opening the pull request:
-
-```sh
-git switch --detach vX.Y.Z
-dir=$(mktemp -d)
-gh release download vX.Y.Z -p checksums.txt -p 'canga-sandbox_*' -D "$dir"
-(cd "$dir" && grep canga-sandbox_ checksums.txt | sha256sum -c -)
-gh api repos/brunovenceslau/canga/releases/tags/vX.Y.Z \
-  --jq '.assets[] | select(.name | startswith("canga-sandbox_")) | "\(.digest)  \(.name)"'
-scripts/sbx-kit-pin.sh bump vX.Y.Z "$dir/checksums.txt"
-```
-
-`bump` repeats both checks, the archives against `checksums.txt` and
-against GitHub's digests, and refuses on a mismatch.
+If the bump branch is lost before it merges, run `make release-kit-bump
+TAG=vX.Y.Z` again. There is nothing to reconstruct by hand: the target
+always downloads the tag's `checksums.txt` and archives fresh from the
+release and re-derives the pin from them, so a lost branch and a first run
+go through the exact same path and commit the exact same pin (a new commit,
+re-signed, but pinning the identical version and hashes).
 
 ### Commit hook
 

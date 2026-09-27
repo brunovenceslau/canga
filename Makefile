@@ -44,16 +44,14 @@ PLATFORMS ?= darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
 SANDBOX_PLATFORMS ?= linux/arm64 linux/amd64
 
 # Prerequisite order is load-bearing in this file, and `make -j` does not keep
-# it: GNU make only promises left-to-right processing in serial mode. `release`
-# lists release-preflight before ci so that a refusal costs a second instead of
-# four cross-compiles, and under -j make would start both together and let ci
-# run to completion after preflight had already failed. `test` and `race` also
-# both run `go test -race` over the same packages, which is no faster in
-# parallel. Scoping this to one target needs make 4.4; macOS ships 3.81.
+# it: GNU make only promises left-to-right processing in serial mode. `test`
+# and `race` both run `go test -race` over the same packages, which is no
+# faster in parallel. Scoping this to one target needs make 4.4; macOS ships
+# 3.81.
 .NOTPARALLEL:
 
 .DEFAULT_GOAL := help
-.PHONY: help build cross install fmt fix pre-commit lint license-check test race vuln ci release release-preflight release-kit-bump tools tool-lint tool-vuln tool-release clean
+.PHONY: help build cross install fmt fix pre-commit lint license-check test race vuln ci release-preflight release-kit-bump tools tool-lint tool-vuln clean
 
 help:
 	@echo "Targets:"
@@ -69,8 +67,8 @@ help:
 	@echo "  make race     the multi-process store race gate, verbosely"
 	@echo "  make vuln     govulncheck ./..."
 	@echo "  make ci       lint + license-check + cross + test + vuln — must be green before a push"
-	@echo "  make release  build the release artifacts, attach them to the GitHub release, and commit the sbx kit bump on a branch"
-	@echo "  make release-kit-bump  commit the sbx kit pin for the tag at HEAD from dist/checksums.txt, on a branch"
+	@echo "  make release-preflight  the checks to run on the signed tag at HEAD before pushing it"
+	@echo "  make release-kit-bump TAG=vX.Y.Z  commit the sbx kit pin for a published release, on a branch"
 	@echo "  make tools    install the pinned dev tools into GOBIN"
 
 build:
@@ -167,138 +165,161 @@ vuln:
 
 ci: lint license-check cross test vuln
 
-# Build the release artifacts and attach them to a release that ALREADY EXISTS.
+# Everything that can refuse a release, checked on the signed tag at HEAD
+# BEFORE it is pushed: each check is a local git command or one GitHub query,
+# never a build, so a refusal costs a second instead of a wasted Release run.
 #
-# The division of labour is deliberate. The release itself is created by hand on
-# GitHub, because its auto-generated notes are the reason to do it there, and
-# this target never touches them. GoReleaser builds and archives, so the artifact
-# format keeps ONE definition — .goreleaser.yml — instead of growing a second one
-# here that would drift from it; --skip=publish is what keeps GoReleaser away
-# from the release itself, and gh uploads what it produced.
+# HEAD carrying more than one tag has no single answer to "which release is
+# this": GITHUB_REF_NAME on push names whichever ref triggered the workflow,
+# so a second tag on the same commit is not a risk the workflow itself
+# catches. Both checks below are the ones the Release workflow repeats for
+# itself once the tag is pushed (.github/workflows/release.yml), so a release
+# that would fail in CI is caught here first, before it costs a run.
 #
-# --clobber so that a second run replaces the assets instead of refusing. A
-# release built twice from one tag is a normal thing to want; a half-uploaded
-# one that cannot be repaired is not.
-# set -e is not decoration. The whole recipe is ONE logical line, so it runs in
-# ONE shell and make judges it by the LAST command's status — an echo. Without
-# it, goreleaser could die after three of four platforms, `gh ... --clobber`
-# would attach that partial set, and the target would report success and exit 0.
-# Measured, not reasoned about: a recipe of `false; echo done` exits 0.
-release: release-preflight ci
-	@set -e; \
-	tag=$$(git describe --tags --exact-match); \
-	echo "building $$tag"; \
-	goreleaser release --clean --skip=publish; \
-	echo "uploading to the $$tag release"; \
-	gh release upload "$$tag" dist/*.tar.gz dist/checksums.txt --clobber; \
-	echo "release: $$tag now carries $$(ls dist/*.tar.gz | wc -l | tr -d ' ') archives and checksums.txt"
-	@$(MAKE) --no-print-directory release-kit-bump
-
-# Move the sbx kit's pin to the release just built, as a signed commit on a
-# branch of its own (chore/sbx-kit-<tag>), for a pull request.
-#
-# The hashes come from dist/checksums.txt, the one GoReleaser just wrote, and
-# must also match the archives next to it and the digests GitHub serves for
-# the release: a failed or repeated upload leaves those apart, and then it
-# refuses. It pushes nothing, because pushing is outward-facing; it prints the
-# two commands that do.
-#
-# It also refuses a dirty tree, a HEAD that does not carry exactly this one
-# tag, a checksums.txt missing either canga-sandbox_ linux line, and a kit
-# whose pin it cannot find exactly once. Run twice, it verifies the branch it
-# made and changes nothing. It runs on its own too, which is how a release
-# that stopped after uploading gets its bump. scripts/sbx-kit-pin.sh has the
-# checks, and README "Move the sbx kit's pin" the reasons.
-release-kit-bump:
-	@set -e; \
-	tag=$$(git describe --tags --exact-match); \
-	scripts/sbx-kit-pin.sh bump "$$tag" dist/checksums.txt
-
-# Everything that can refuse a release, before anything slow: each check is
-# a local git command or one git or GitHub query, never a build.
-#
-# Two of the checks are about the tag being the SAME tag everywhere. HEAD with
-# two tags on it has no single answer to "which release is this", and
-# `git describe` answers anyway, silently, while GoReleaser resolves the tag
-# independently — so the archives can end up named after one tag and attached to
-# the release of the other. And a tag that was moved locally after being pushed
-# would attach artifacts to a release pointing at another commit.
-#
-# It is a SEPARATE target, and first in release's prerequisite list, so every
-# refusal lands in a second. Folded into the recipe these checks would run after
-# `ci`, which cross-compiles four platforms, and a release that does not exist
-# yet would be reported a minute late every time.
-#
-# `ci` running at all is not ceremony: a release is the one build nobody
-# re-checks afterwards, and while the Release workflow cannot run, this is the
-# only gate between a broken tree and a published binary.
-#
-# The last two checks are about the sbx kit. check-previous refuses until the
-# kit at HEAD pins the newest published release below this tag, which is to
-# say until the previous release's kit bump merged: the kit cannot name this
-# tag, whose archives do not exist yet. check-clobber refuses to rebuild a
-# tag whose archives a pushed or merged kit bump already pins, unless
-# SBX_KIT_ALLOW_CLOBBER names that exact tag: rebuilt archives get new hashes,
-# and every sandbox pinned to the old ones stops installing. A tag below the
-# newest published release is refused unless SBX_KIT_OLDER_LINE names it.
+# check-previous refuses until the kit at HEAD pins the newest published
+# release below this tag, which is to say until the previous release's kit
+# bump merged: the kit cannot name this tag, whose archives do not exist yet.
+# check-clobber refuses to rebuild a tag whose archives a pushed or merged kit
+# bump already pins, unless SBX_KIT_ALLOW_CLOBBER names that exact tag:
+# rebuilt archives get new hashes, and every sandbox pinned to the old ones
+# stops installing. A tag below the newest published release is refused
+# unless SBX_KIT_OLDER_LINE names it. scripts/sbx-kit-pin.sh has the checks,
+# and README "Move the sbx kit's pin" the reasons.
 release-preflight:
-	@command -v goreleaser >/dev/null 2>&1 || { \
-	  echo "goreleaser is not installed; run 'make tool-release'" >&2; exit 1; }
-	@command -v gh >/dev/null 2>&1 || { \
-	  echo "gh is not installed; it is what uploads the artifacts" >&2; exit 1; }
 	@set -e; \
 	tags=$$(git tag --points-at HEAD); \
 	count=$$(printf '%s' "$$tags" | grep -c . || true); \
 	if [ "$$count" -eq 0 ]; then \
-	  echo "HEAD carries no tag: a release is built from the tag it is named after" >&2; \
+	  echo "HEAD carries no tag: create the signed tag first (README \"Releasing\")" >&2; \
 	  exit 1; \
 	fi; \
 	if [ "$$count" -gt 1 ]; then \
 	  echo "HEAD carries $$count tags, so which release this is has no answer:" >&2; \
 	  printf '    %s\n' $$tags >&2; \
-	  echo "git describe would pick one silently and GoReleaser might pick the other," >&2; \
-	  echo "which attaches archives named after one tag to the release of the other." >&2; \
+	  echo "delete the tag you are not releasing before pushing." >&2; \
 	  exit 1; \
 	fi; \
 	tag=$$(printf '%s' "$$tags"); \
-	here=$$(git rev-parse "$$tag^{commit}"); \
-	there=$$(git ls-remote origin "refs/tags/$$tag^{}" | cut -f1); \
-	if [ -z "$$there" ]; then \
-	  there=$$(git ls-remote origin "refs/tags/$$tag" | cut -f1); \
-	fi; \
-	if [ -z "$$there" ]; then \
-	  echo "$$tag is not on the remote yet; push it before building from it:" >&2; \
-	  echo "    git push origin $$tag" >&2; \
-	  exit 1; \
-	fi; \
-	if [ "$$here" != "$$there" ]; then \
-	  echo "$$tag here is $$here, but on the remote it is $$there." >&2; \
-	  echo "Artifacts built from this tree would be attached to a release naming" >&2; \
-	  echo "another commit, and stamped with a commit that release does not contain." >&2; \
-	  exit 1; \
-	fi; \
-	if ! gh release view "$$tag" >/dev/null 2>&1; then \
-	  echo "no GitHub release for $$tag yet. Create it first, which is where the" >&2; \
-	  echo "generated notes come from, then run make release again:" >&2; \
-	  echo "    gh release create $$tag --generate-notes" >&2; \
-	  exit 1; \
-	fi; \
 	scripts/sbx-kit-pin.sh check-previous "$$tag"; \
 	scripts/sbx-kit-pin.sh check-clobber "$$tag"; \
-	echo "release-preflight: $$tag is the only tag here, matches the remote, has a release, the sbx kit pins the release before it, and no kit pins this one yet"
+	echo "release-preflight: $$tag is the only tag here, the sbx kit pins the release before it, and no kit pins this one yet"
+
+# Fixed, not user-overridable: `override` refuses even a caller's own
+# `make release-kit-bump REPO_SLUG=x`, so $(REPO_SLUG) below is exactly as
+# safe as writing the literal at each call site - it can never carry
+# attacker-chosen text the way TAG can. That is also why this is the only
+# make variable spliced into this recipe: a value that legitimately VARIES
+# per invocation (TAG) is read from the shell's $$TAG instead, never from
+# make's own $(TAG); see the guard below for why that split matters.
+override REPO_SLUG := brunovenceslau/canga
+
+# Move the sbx kit's pin to a release the Release workflow already published,
+# as a signed commit on a branch of its own (chore/sbx-kit-<tag>), for a pull
+# request. README "Move the sbx kit's pin" has the reasons; scripts/sbx-kit-pin.sh
+# `bump` does the actual checks and the commit - this target's job is only to
+# get it a clean HEAD to run from.
+#
+# TAG is user input, referenced only as the shell variable "$$TAG", never as
+# make's own $(TAG): make splices $(TAG) into the recipe as raw, unquoted
+# text before the shell parses anything, so a value like
+# `v1'; rm -rf /; echo '` runs as shell no matter how it looks quoted. $$TAG
+# is an ordinary shell expansion instead, so the shell only ever sees data.
+# The guard below requires a SINGLE line matching ^vX.Y.Z$: a line-oriented
+# `grep -Eq` alone would accept a value whose first line looks right and
+# whose second line does not, since grep succeeds as soon as ANY line
+# matches - `wc -l` on the unterminated value catches that by requiring zero
+# embedded newlines. `make TARGET TAG=v1.2.3` and `TAG=v1.2.3 make TARGET`
+# both land in the recipe's $$TAG the same way, so the guard covers both
+# without an `export TAG` directive, and runs before anything else (gh, git,
+# mktemp - all of it).
+#
+# `bump` needs a HEAD carrying exactly the tag being bumped, which the
+# operator's own checkout rarely is (tagging happens on main; the release is
+# built later, by CI). This target gets there itself: a temporary DETACHED
+# worktree checked out at the tag's own VERIFIED COMMIT - never `git
+# checkout` (leaves the invoking checkout untouched), and never the tag NAME
+# (so it cannot silently re-resolve to a different commit than the one just
+# cross-checked below). That worktree sits beside the one `bump` itself
+# makes internally to hold the commit. It also runs scripts/sbx-kit-pin.sh
+# FROM that worktree, not the invoking checkout's copy: the tag's own,
+# reviewed script judges the tag's own release. A tag cut before the script
+# existed has none to run, and is refused rather than silently falling back
+# to a newer copy - which also means a tag whose OWN script copy predates
+# some later hardening never gains it, even when re-bumped today; only a
+# new release ships with the newer script.
+#
+# Checksums and archives come from the tag's GitHub release, not a local
+# `dist/`: nothing builds them locally any more, and the Release workflow's
+# artifacts are the only ones a sandbox ever installs. Both downloads share
+# one scratch directory because `bump` checks the archives against
+# checksums.txt and against GitHub's served digests, expecting them side by
+# side.
+#
+# Before any of that is trusted, the tag as fetched into this checkout - by
+# an explicit refspec after `--`, so nothing $$tag could hold is ever read
+# as a fetch option - is compared against the commit GitHub itself resolves
+# it to (dereferencing an annotated tag object through /git/tags/<sha>,
+# since /git/ref/tags/<tag> names the tag object, not its commit). A
+# mismatch means this checkout's `origin` and the canonical repository
+# disagree about what the tag is - exactly the situation the pin must never
+# be built from.
+release-kit-bump:
+	@tag=$${TAG:-}; \
+	lines=$$(printf '%s' "$$tag" | wc -l); \
+	if [ "$$lines" -ne 0 ] || ! printf '%s' "$$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+	  echo "usage: make release-kit-bump TAG=vX.Y.Z (got TAG='$$tag')" >&2; exit 1; \
+	fi
+	@command -v gh >/dev/null 2>&1 || { \
+	  echo "gh is not installed; it is what downloads the release's assets" >&2; exit 1; }
+	@set -e; \
+	tag="$$TAG"; \
+	assets=$$(mktemp -d); \
+	wtparent=$$(mktemp -d); \
+	wt="$$wtparent/tag"; \
+	cleanup() { \
+	  git worktree remove --force "$$wt" >/dev/null 2>&1 || true; \
+	  rm -rf "$$assets" "$$wtparent"; \
+	}; \
+	trap cleanup EXIT; \
+	echo "fetching tag $$tag"; \
+	git fetch -q origin -- "refs/tags/$$tag:refs/tags/$$tag"; \
+	here=$$(git rev-parse "refs/tags/$$tag^{commit}"); \
+	obj=$$(gh api "repos/$(REPO_SLUG)/git/ref/tags/$$tag" --jq '"\(.object.type) \(.object.sha)"'); \
+	obj_type=$${obj%% *}; \
+	obj_sha=$${obj#* }; \
+	if [ "$$obj_type" = tag ]; then \
+	  there=$$(gh api "repos/$(REPO_SLUG)/git/tags/$$obj_sha" --jq '.object.sha'); \
+	else \
+	  there="$$obj_sha"; \
+	fi; \
+	if [ "$$here" != "$$there" ]; then \
+	  echo "$$tag is $$here in this checkout, but GitHub resolves it to $$there." >&2; \
+	  echo "origin and $(REPO_SLUG) disagree about what this tag is; refusing." >&2; \
+	  exit 1; \
+	fi; \
+	echo "downloading $$tag's checksums.txt and canga-sandbox_ archives"; \
+	gh release download "$$tag" -R $(REPO_SLUG) -D "$$assets" \
+	  -p checksums.txt -p 'canga-sandbox_*'; \
+	git worktree add -q --detach "$$wt" "$$here"; \
+	if [ ! -x "$$wt/scripts/sbx-kit-pin.sh" ]; then \
+	  echo "$$tag predates scripts/sbx-kit-pin.sh (or it is not executable there);" >&2; \
+	  echo "this target cannot bump a release from before the script existed." >&2; \
+	  exit 1; \
+	fi; \
+	( cd "$$wt" && ./scripts/sbx-kit-pin.sh bump "$$tag" "$$assets/checksums.txt" )
 
 # Dev tools are PINNED here and installed with `go install`, not carried as
-# go.mod `tool` directives: golangci-lint and goreleaser each drag a module graph
-# far larger than this module's own into go.sum, which every `go mod download` in
-# every CI job would then pay for. This file is the single version of truth, and
+# go.mod `tool` directives: golangci-lint drags a module graph far larger than
+# this module's own into go.sum, which every `go mod download` in every CI job
+# would then pay for. This file is the single version of truth, and
 # `make tool-*` is what CI runs, so CI and a laptop lint with the same binary.
+#
+# GoReleaser itself is not installed here: nothing builds a release locally
+# any more (the Release workflow does, pinning its own GoReleaser version via
+# goreleaser-action), and release-kit-bump only downloads that workflow's
+# artifacts, never builds them.
 GOLANGCI_VERSION    ?= v2.13.2
 GOVULNCHECK_VERSION ?= v1.8.0
-# Pinned to the same major the Release workflow asks for ("~> v2"), so an artifact
-# built here and one built by the workflow come from the same generation of the
-# tool. Deliberately NOT part of `tools`: CI never needs it, and `go install`ing
-# it costs minutes.
-GORELEASER_VERSION  ?= v2.12.7
 
 tools: tool-lint tool-vuln
 
@@ -307,9 +328,6 @@ tool-lint:
 
 tool-vuln:
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
-
-tool-release:
-	go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 
 clean:
 	rm -rf bin dist coverage.out coverage.html
