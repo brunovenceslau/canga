@@ -12,9 +12,10 @@
 #                                             tree, refusing unless the sums
 #                                             match release vX.Y.Z's published
 #                                             digests, uploaded by a workflow
-#                                             run in this repository (see
-#                                             check_published below for what
-#                                             that does and does not prove)
+#                                             run in this repository, and,
+#                                             from v0.10.5 on, attested by
+#                                             release.yml (see check_published
+#                                             below for what each proves)
 #   sbx-kit-pin.sh check-previous <tag>       refuse unless HEAD's kit pins
 #                                             the newest published release
 #                                             below <tag>, by its published
@@ -26,6 +27,16 @@
 #                                             overrides, for that tag only)
 #   sbx-kit-pin.sh bump <tag> <checksums>     commit the pin for <tag>, signed,
 #                                             on branch chore/sbx-kit-<tag>
+#   sbx-kit-pin.sh check-attestation <tag> <file>...
+#                                             refuse unless each local file
+#                                             has a build provenance
+#                                             attestation from release.yml
+#                                             as run for <tag> (the Release
+#                                             workflow's own pre-publish check)
+#   sbx-kit-pin.sh check-immutable            refuse unless the repository
+#                                             has immutable releases on
+#                                             (needs a token with admin
+#                                             access; release-preflight)
 #
 # A <tag> below the newest published release (a release on an older line) is
 # refused by check-previous and bump unless SBX_KIT_OLDER_LINE=<tag>: the kit
@@ -42,19 +53,16 @@
 # reports every default-GITHUB_TOKEN upload under that one identity, so this
 # proves the asset was uploaded by SOME workflow run in this repository (the
 # repos/${repo}/... path scopes which repository), not specifically by the
-# Release workflow - a different workflow in this repository granted
-# `contents: write` could produce the same identity. What this closes: a
-# NEW asset upload under a person's own token (`gh release upload
-# --clobber`) is refused, digest match or not, because that upload's
-# uploader is no longer github-actions[bot]. What it does not close: a
-# metadata-only edit - the release's title or notes, or an asset's label
-# or name - that never re-uploads the asset leaves its uploader field
-# untouched and is not caught here. A rename still cannot swap archives:
-# it only moves bytes already uploaded, and the digest check refuses
-# them under the wrong name. Binding assets to release.yml specifically
-# (build provenance attestation) is docs/HANDOFF.md's pending item 3.
-# check_published also refuses a draft or a prerelease outright, and refuses
-# an asset name it cannot match exactly (see its own comment for both).
+# Release workflow. From v0.10.5 on (attested_from below) it also requires
+# a build provenance attestation for each archive, signed for release.yml
+# as run for that release's own tag, which binds the bytes to release.yml
+# at whatever commit the tag named when the release was built - not to
+# reviewed content, and not to whatever commit the tag names now, since the
+# match is by tag name alone. The v* tag ruleset is what keeps a tag from
+# moving to another commit after the fact (see attestation_verify's own
+# comment for exactly what that does and does not prove). check_published
+# also refuses a draft or a prerelease outright, and refuses an asset name
+# it cannot match exactly (see its own comment for all of it).
 #
 # check-previous, check-clobber and bump read the kit as committed (at HEAD,
 # or at origin's main), never the working tree, so a local edit, an
@@ -76,6 +84,26 @@ export GH_HOST
 spec="sbx-kit/spec.yaml"
 # The same repository the kit's install step downloads from.
 repo="brunovenceslau/canga"
+
+# The first release the Release workflow attests (README "Releasing"): a
+# release at or above it must carry a build provenance attestation for each
+# canga-sandbox_ archive, and one below it predates the attestation step and
+# is checked by digest and uploader alone. A fixed constant, with no flag or
+# variable to move it: lowering it would make an older, unattested release
+# fail, and raising it would let an attested one skip the check, so it
+# changes only by a reviewed pull request.
+attested_from="0.10.5"
+
+# The workflow whose attestation counts, as a path in ${repo}.
+release_workflow=".github/workflows/release.yml"
+
+# The oldest gh whose `gh attestation verify` this script relies on: 2.67.0
+# fixed a false exit 0 when no attestation of the requested predicate type
+# existed, 2.68.0 added --source-ref (--cert-identity is older), and 2.93.0
+# stopped sending the GitHub token to TUF repository mirrors
+# (GHSA-8xvp-7hj6-mcj9). Checked only when an attestation is verified, so an
+# older gh still checks the releases below ${attested_from}.
+gh_attest_floor="2.93.0"
 
 die() {
 	echo "sbx-kit-pin: $*" >&2
@@ -124,6 +152,33 @@ is_version() {
 	'' | *[!0-9.]*) return 1 ;;
 	esac
 	printf '%s\n' "$1" | grep -Eqx '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+}
+
+# version_at_least A B succeeds when version A is at or above version B,
+# both X.Y.Z. Compared as numbers, component by component, never as text:
+# 0.10.10 is above 0.10.5, and 1.0.0 is above 0.99.99.
+#
+# Fails closed: awk prints its verdict, and anything but "ge" or "lt" (awk
+# missing, crashing, or printing nothing) is a refusal, never read as
+# "below". An exit status alone could not tell "lt" from a crash, and "lt"
+# is what skips the attestation check.
+version_at_least() {
+	verdict=$(awk -v a="$1" -v b="$2" 'BEGIN {
+		split(a, x, ".")
+		split(b, y, ".")
+		r = "ge"
+		for (i = 1; i <= 3; i++)
+			if (x[i] + 0 != y[i] + 0) {
+				r = (x[i] + 0 > y[i] + 0) ? "ge" : "lt"
+				break
+			}
+		print r
+	}') || verdict=""
+	case "${verdict}" in
+	ge) return 0 ;;
+	lt) return 1 ;;
+	esac
+	die "could not compare versions $1 and $2 (awk answered '${verdict}'); refusing rather than guessing"
 }
 
 # tag_version vX.Y.Z prints X.Y.Z, and refuses anything else.
@@ -318,9 +373,13 @@ release_assets() {
 	printf '%s\n' "${doc}" | awk 'NF == 3 && $1 != "_meta"'
 }
 
-# check_published <tag> <version> <amd64 sum> <arm64 sum> refuses unless the
-# release's canga-sandbox_ assets are served with exactly those sha256, each
-# uploaded under the github-actions[bot] identity.
+# check_published <tag> <version> <amd64 sum> <arm64 sum> <scratch dir>
+# refuses unless the release's canga-sandbox_ assets are served with exactly
+# those sha256, each uploaded under the github-actions[bot] identity, and,
+# for a version at or above ${attested_from}, each carrying a build
+# provenance attestation from release.yml as run for <tag> (see
+# check_attested below). <scratch dir> is the caller's own trap-cleaned
+# directory, which check_attested downloads the archives into.
 #
 # What that identity proves, and what it does not: GitHub reports every
 # asset uploaded with a workflow's default GITHUB_TOKEN under that one
@@ -339,10 +398,10 @@ release_assets() {
 # uploader field untouched and passes here unnoticed. A rename still
 # cannot swap archives: it only moves bytes already uploaded, and the
 # digest check, which runs first, refuses them under the wrong name.
-# Binding assets to release.yml specifically needs build provenance
-# attestation (`gh attestation verify --signer-workflow
-# <repo>/.github/workflows/release.yml`); that is docs/HANDOFF.md's pending
-# item 3, not implemented here.
+# Binding assets to release.yml specifically is the attestation step's job,
+# which closes the "some other workflow" gap for every release at or above
+# ${attested_from}; the releases below it were published before the Release
+# workflow attested anything, and keep only the checks above.
 #
 # Each refusal below is its own message, not folded into one: an asset
 # missing from the release entirely, one the release lists more than once
@@ -383,6 +442,93 @@ check_published() {
 			die "release $1's ${asset} was uploaded by ${uploader}, not github-actions[bot]; only a workflow's own GITHUB_TOKEN in this repository may publish this pin's archives"
 		echo "sbx-kit-pin: release $1 serves ${asset} as sha256:${want}, uploaded under the github-actions[bot] identity"
 	done
+
+	if version_at_least "$2" "${attested_from}"; then
+		check_attested "$1" "$2" "$3" "$4" "$5"
+	else
+		echo "sbx-kit-pin: release $1 is below v${attested_from}, the first attested release: checked by digest and uploader only"
+	fi
+}
+
+# gh_can_attest refuses unless gh is at least ${gh_attest_floor}, read from
+# the first line of `gh --version` ("gh version X.Y.Z (date)").
+gh_can_attest() {
+	have=$(gh --version 2>/dev/null | awk 'NR == 1 && $1 == "gh" && $2 == "version" { print $3 }') || have=""
+	is_version "${have}" ||
+		die "could not read gh's version from 'gh --version' (got '${have}'); verifying a build provenance attestation needs gh ${gh_attest_floor} or newer"
+	version_at_least "${have}" "${gh_attest_floor}" ||
+		die "gh ${have} is older than ${gh_attest_floor}, the oldest gh this script trusts to verify a build provenance attestation; upgrade gh"
+}
+
+# attestation_verify <tag> <file> <label> <out file> refuses unless <file>
+# verifies with `gh attestation verify` against a build provenance
+# attestation, naming it <label> in its messages and keeping gh's output in
+# <out file> (shown only on a refusal):
+#
+# --repo           attested in ${repo}, by its own workflow's OIDC token;
+# --cert-identity  signed by exactly ${release_workflow} as run for
+#                  refs/tags/<tag>: the signing certificate's workflow
+#                  identity must equal this URL, byte for byte. Not
+#                  --signer-workflow, which gh turns into a regular
+#                  expression anchored only at the start, so a value is a
+#                  prefix match: a workflow file or ref that merely starts
+#                  with the expected one would pass;
+# --source-ref     built from refs/tags/<tag>, the release's own tag, not a
+#                  branch or another tag's run (the identity above names
+#                  the workflow's ref, which is the triggering ref for a
+#                  tag push; this pins the source ref independently);
+# --deny-self-hosted-runners
+#                  built on a GitHub-hosted runner, as release.yml runs.
+#
+# What this proves, and what it does not: the signing certificate names
+# ${release_workflow} AT WHATEVER COMMIT THE TAG NAMED WHEN THE RELEASE WAS
+# BUILT, not reviewed or merged content, and the match is by tag NAME
+# alone - not by whichever commit the tag names now. Whoever can push a v*
+# tag can tag a commit that carries a modified ${release_workflow}, and
+# that run's attestation verifies the same way - this check cannot tell
+# the two apart. The v* tag ruleset (docs/HANDOFF.md, "Left open") is what
+# keeps a tag from being moved to another commit after the fact, and so
+# restricts who can push a v* tag at all; this function only checks which
+# workflow file, at which commit, produced the bytes.
+attestation_verify() {
+	if ! gh attestation verify "$2" \
+		--repo "${repo}" \
+		--cert-identity "https://github.com/${repo}/${release_workflow}@refs/tags/$1" \
+		--source-ref "refs/tags/$1" \
+		--deny-self-hosted-runners >"$4" 2>&1; then
+		cat "$4" >&2
+		die "$3 has no build provenance attestation that verifies as built by ${repo}'s ${release_workflow} for refs/tags/$1 on a GitHub-hosted runner (gh attestation verify, above); refusing to trust it"
+	fi
+	echo "sbx-kit-pin: $3 carries a build provenance attestation from ${release_workflow} at refs/tags/$1"
+}
+
+# check_attested <tag> <version> <amd64 sum> <arm64 sum> <scratch dir>
+# downloads both canga-sandbox_ archives of <tag>'s release, refuses unless
+# each is exactly the pinned bytes, then refuses unless each passes
+# attestation_verify.
+#
+# The attestation is bound to the artifact's sha256, which is why gh needs
+# the bytes and not only the digest GitHub reports: the download is checked
+# against the pin first, so the bytes verified are the bytes pinned, never
+# whatever the release happens to serve.
+check_attested() {
+	gh_can_attest
+	dl="$5/attested"
+	mkdir "${dl}" || die "could not create ${dl} to download release $1's archives into"
+	amd64_asset="canga-sandbox_$2_linux_amd64.tar.gz"
+	arm64_asset="canga-sandbox_$2_linux_arm64.tar.gz"
+	gh release download "$1" -R "${repo}" -D "${dl}" -p "${amd64_asset}" -p "${arm64_asset}" ||
+		die "could not download release $1's canga-sandbox_ archives to verify their build provenance attestation"
+	for arch in amd64 arm64; do
+		if [ "${arch}" = amd64 ]; then want=$3; else want=$4; fi
+		asset="canga-sandbox_$2_linux_${arch}.tar.gz"
+		file="${dl}/${asset}"
+		[ -f "${file}" ] || die "release $1: the download carries no ${asset}"
+		got=$(sha256_of "${file}")
+		[ "${got}" = "${want}" ] ||
+			die "release $1's ${asset}, as downloaded, is sha256:${got}, not the pinned sha256:${want}; refusing to verify bytes that are not the ones pinned"
+		attestation_verify "$1" "${file}" "release $1's ${asset}" "$5/attest.out"
+	done
 }
 
 cmd_version() {
@@ -411,7 +557,14 @@ cmd_rewrite() {
 	# second parse of the same file is a TOCTOU window, not extra safety.
 	amd64=$(sandbox_sum "$2" "$1" amd64)
 	arm64=$(sandbox_sum "$2" "$1" arm64)
-	check_published "v$1" "$1" "${amd64}" "${arm64}"
+	# check_published downloads into a scratch directory for an attested
+	# release; it is gone before the kit's temp file exists, so each has
+	# exactly one trap guarding it at a time.
+	scratch=$(mktemp -d)
+	trap_cleanup_dir "${scratch}"
+	check_published "v$1" "$1" "${amd64}" "${arm64}" "${scratch}"
+	rm -rf "${scratch}"
+	trap_clear
 
 	tmp=$(mktemp "${spec}.XXXXXX")
 	trap_cleanup_file "${tmp}"
@@ -461,7 +614,7 @@ EOF
 
 	pinned_amd64=$(spec_sum "${scratch}/spec.yaml" amd64)
 	pinned_arm64=$(spec_sum "${scratch}/spec.yaml" arm64)
-	check_published "${prev}" "${prev#v}" "${pinned_amd64}" "${pinned_arm64}"
+	check_published "${prev}" "${prev#v}" "${pinned_amd64}" "${pinned_arm64}" "${scratch}"
 	echo "sbx-kit-pin: ${spec} pins ${prev}, the newest published release below $1 on its line"
 }
 
@@ -473,8 +626,15 @@ cmd_check_clobber() {
 	scratch=$(mktemp -d)
 	trap_cleanup_dir "${scratch}"
 	# A release that does not exist yet has nothing to clobber: the Release
-	# workflow runs this before GoReleaser creates it. Any other gh failure
-	# is a refusal.
+	# workflow runs this before GoReleaser creates it. A draft left by a
+	# failed run answers 404 here too (GitHub does not serve a draft by its
+	# tag), and rightly so: check_published refuses a draft, so no kit can
+	# pin one. Any other gh failure is a refusal.
+	#
+	# With immutable releases on (README "Releasing"), GitHub itself refuses
+	# to replace a published release's assets, SBX_KIT_ALLOW_CLOBBER
+	# included; this check still refuses first, with the reason and the
+	# way out (a new patch release) spelled out.
 	if ! assets=$(gh api "repos/${repo}/releases/tags/$1" --jq "${assets_jq}" 2>"${scratch}/gh.err"); then
 		if grep -q 'HTTP 404' "${scratch}/gh.err"; then
 			# GitHub also answers 404 when the token cannot see the repository
@@ -571,7 +731,7 @@ cmd_bump() {
 		[ "${got}" = "${want}" ] || die "${archive} is sha256:${got}, but ${sums} says ${want}"
 		echo "sbx-kit-pin: ${archive} is sha256:${want}"
 	done
-	check_published "$1" "${version}" "${amd64}" "${arm64}"
+	check_published "$1" "${version}" "${amd64}" "${arm64}" "${scratch}"
 
 	# Two steps: nested in the pick, a failing published_tags would be
 	# masked from set -e and read as "no newer release".
@@ -632,6 +792,43 @@ cmd_bump() {
 	next_steps "${branch}"
 }
 
+# cmd_check_attestation <tag> <file>... is attestation_verify over local
+# files: the Release workflow runs it on dist/ while the release is still a
+# draft, so it checks exactly what the kit pin checks later check, with the
+# same flags and the same gh floor, from one definition.
+cmd_check_attestation() {
+	[ $# -ge 2 ] || die "usage: check-attestation <tag> <file>..."
+	tag_version "$1" >/dev/null
+	tag=$1
+	shift
+	command -v gh >/dev/null 2>&1 || die "gh is not installed; it is how attestations are verified"
+	gh_can_attest
+	scratch=$(mktemp -d)
+	trap_cleanup_dir "${scratch}"
+	for f in "$@"; do
+		[ -f "${f}" ] || die "${f}: not found"
+		attestation_verify "${tag}" "${f}" "${f}" "${scratch}/attest.out"
+	done
+}
+
+# cmd_check_immutable refuses unless GitHub reports immutable releases on
+# for ${repo}. GitHub answers GET repos/<repo>/immutable-releases only to a
+# token with admin access to the repository (anyone else gets a 404), which
+# a workflow's GITHUB_TOKEN never has, so this runs from
+# `make release-preflight`, on the operator's own token, not in the Release
+# workflow. Measured 2026-09-27: an admin token reads
+# {"enabled":false,"enforced_by_owner":false} here, and a non-admin token
+# gets 404 for another repository's same endpoint.
+cmd_check_immutable() {
+	[ $# = 0 ] || die "usage: check-immutable"
+	command -v gh >/dev/null 2>&1 || die "gh is not installed; it is how the repository's settings are read"
+	enabled=$(gh api "repos/${repo}/immutable-releases" --jq .enabled) ||
+		die "could not read whether ${repo} has immutable releases on; GitHub answers that only to a token with admin access to the repository"
+	[ "${enabled}" = true ] ||
+		die "${repo} does not have immutable releases on (GitHub says enabled=${enabled:-nothing}); turn them on before releasing (README \"Immutable releases\")"
+	echo "sbx-kit-pin: ${repo} has immutable releases on"
+}
+
 next_steps() {
 	cat <<EOF
 
@@ -643,7 +840,7 @@ release's 'make release-preflight' stops refusing.
 EOF
 }
 
-[ $# -ge 1 ] || die "usage: sbx-kit-pin.sh version|rewrite|check-previous|check-clobber|bump ..."
+[ $# -ge 1 ] || die "usage: sbx-kit-pin.sh version|rewrite|check-previous|check-clobber|bump|check-attestation|check-immutable ..."
 sub=$1
 shift
 case "${sub}" in
@@ -652,5 +849,7 @@ rewrite) cmd_rewrite "$@" ;;
 check-previous) cmd_check_previous "$@" ;;
 check-clobber) cmd_check_clobber "$@" ;;
 bump) cmd_bump "$@" ;;
+check-attestation) cmd_check_attestation "$@" ;;
+check-immutable) cmd_check_immutable "$@" ;;
 *) die "unknown command: ${sub}" ;;
 esac

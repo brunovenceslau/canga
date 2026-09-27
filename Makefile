@@ -185,6 +185,11 @@ ci: lint license-check cross test vuln
 # stops installing. A tag below the newest published release is refused
 # unless SBX_KIT_OLDER_LINE names it. scripts/sbx-kit-pin.sh has the checks,
 # and README "Move the sbx kit's pin" the reasons.
+#
+# check-immutable, first, refuses unless the repository has immutable
+# releases on (README "Immutable releases"). It is the one check here the
+# workflow cannot repeat: GitHub answers it only to a token with admin
+# access, which your gh has and a workflow's GITHUB_TOKEN never does.
 release-preflight:
 	@set -e; \
 	tags=$$(git tag --points-at HEAD); \
@@ -200,9 +205,10 @@ release-preflight:
 	  exit 1; \
 	fi; \
 	tag=$$(printf '%s' "$$tags"); \
+	scripts/sbx-kit-pin.sh check-immutable; \
 	scripts/sbx-kit-pin.sh check-previous "$$tag"; \
 	scripts/sbx-kit-pin.sh check-clobber "$$tag"; \
-	echo "release-preflight: $$tag is the only tag here, the sbx kit pins the release before it, and no kit pins this one yet"
+	echo "release-preflight: $$tag is the only tag here, releases are immutable, the sbx kit pins the release before it, and no kit pins this one yet"
 
 # override REPO_SLUG: `make release-kit-bump REPO_SLUG=x` cannot change it,
 # so $(REPO_SLUG) in the recipe stays as safe as the literal. This is the
