@@ -843,7 +843,8 @@ included by default.
 - **Tag ruleset for `v*` (decided, applied post-merge).** Today anyone with
   push access can create, move or delete a `v*` tag, and a tag push is what
   starts a release - and, per round-2 ship-gate finding R2-L1
-  (security-auditor Low, "Release provenance" section above), what a build
+  (security-auditor Low, under "Ship-gate round 2 fixes (2026-09-27)" below,
+  in this same section), what a build
   provenance attestation cannot restrict on its own: it binds bytes to
   `release.yml` at whatever commit the tag named when the release was
   built, not to reviewed content, and the check matches that binding by
@@ -1003,13 +1004,53 @@ same decision.
   own opening summary line) - to say the binding is to whatever commit the
   tag named when the release was built, and that the `v*` tag ruleset is
   what keeps a tag from moving and so keeps that binding meaningful.
-- [pending] Pinning `--source-digest` to the resolved commit sha: deferred
-  hardening, narrowed once the `v*` tag ruleset is enforced (a tag that
-  cannot move makes the tag-name match above equivalent to a commit match).
-  Not implemented in this PR.
-- [pending] `timeout-minutes` on the Release job: pre-existing gap, not
-  introduced by this PR; the job runs under GitHub's default 6-hour
-  ceiling with no explicit shorter one. Not implemented in this PR.
+- [declined, operator-agreed] Pinning `--source-digest` to the resolved
+  commit sha: not deferred hardening, declined outright. The check
+  matches by tag NAME (`--cert-identity ...release.yml@refs/tags/<tag>`,
+  `--source-ref refs/tags/<tag>`; `scripts/sbx-kit-pin.sh`'s
+  `attestation_verify`, ~lines 469-497) - a commit-pinned
+  `--source-digest` would only add protection if the tag could name a
+  different commit than the one the release was built from.
+  Attestation is required only from v0.10.5 on (`attested_from`).
+  Immutable releases were enabled 2026-09-27, before v0.10.5 (see "Left
+  open" above), and `gh api repos/brunovenceslau/canga/immutable-releases`
+  reads `{"enabled":true,...}`. What is measured, not assumed, for a given
+  release: v0.10.5's own release reads `immutable: true` via
+  `gh api repos/brunovenceslau/canga/releases/tags/v0.10.5` (measured
+  2026-09-27), and the workflow's own post-publish re-GET loop
+  ("Publish the release") goes red, for any future release, if GitHub
+  does not settle it to `immutable == true` within the retry budget - so
+  a release whose run finished green is one the workflow observed as
+  immutable at that moment; a red run can still leave a published,
+  mutable release (see README "Releasing"'s refusal table).
+  `check_published` itself does not re-check `.immutable` at pin time,
+  which is exactly why the reopen condition below matters. Per GitHub's
+  immutable-releases documentation
+  (<https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases>,
+  read 2026-09-27): for an immutable release, git tags "cannot be moved"
+  and "cannot be deleted while the release exists"; after the release is
+  deleted, the tag name "cannot" be reused. A deleted release also makes
+  `check_published` refuse: `release_assets` reads the tag's release with
+  `gh api repos/${repo}/releases/tags/$1`, which 404s once the release is
+  gone, and that failure dies with "could not read the assets of release
+  $1 with gh" - there is no release left to check. Before a release
+  exists at all, the "release tags" ruleset (id 24082205, `refs/tags/v*`,
+  creation/update/deletion, active; "Left open" above) restricts tag
+  create, move and delete to the admin role. Honest residual: GitHub's
+  documentation does not say whether any actor can bypass the
+  immutable-release tag lock. If some actor can, the admin is the
+  plausible one, since the admin already holds the ruleset's bypass and
+  already controls the trust root (can merge a PR changing the script,
+  `attested_from`, or `release.yml`) regardless. `--source-digest` would
+  not remove admin power, so it adds nothing against the one actor left
+  with any plausible route. Reopen condition: if immutable releases are
+  disabled, or the ruleset is removed, this reopens. Operator agreement
+  (2026-09-27, verbatim pt-BR): "Também vamos argumentar A onde ele foi
+  salvo pra que não seja mais pendencia."
+- [done] `timeout-minutes` on the Release job: pre-existing gap, not
+  introduced by this PR; the job ran under GitHub's default 6-hour
+  ceiling with no explicit shorter one. Resolved by "Release job timeout
+  and the closed pendings (PR #39)" below.
 - [accepted] The post-publish re-GET loop aborts on the first transient
   `gh api` error rather than retrying within its own budget - fails closed
   and loud, which is the right default for a check guarding a published,
@@ -1069,10 +1110,12 @@ assets - not inferred from source reading or static checks.
   Lesson: derive operator command sequences from the README's numbered
   steps, not from memory. Static-tool question: the preflight's own
   refusal message already names the fix, so no new tool is needed here.
-- **Still pending** (unchanged; the two `[pending]` items of the PR #36
-  section's "Ship-gate round 3 fixes"):
-  `--source-digest` pinning to the resolved commit sha, and
-  `timeout-minutes` on the Release job.
+- **Still pending:** of the two `[pending]` items the PR #36 section's
+  "Ship-gate round 3 fixes" recorded, only `timeout-minutes` on the
+  Release job remained pending. `--source-digest` pinning to the resolved
+  commit sha is now `[declined, operator-agreed]` there instead of
+  `[pending]`. Both are resolved by "Release job timeout and the closed
+  pendings (PR #39)" below.
 - **Operator decision on this entry** (2026-09-27). After PR #37 merged,
   the orchestrator offered one optional follow-up: a docs PR recording in
   this file that the v0.10.5 run resolved the PR #36 section's two open
@@ -1080,3 +1123,79 @@ assets - not inferred from source reading or static checks.
   v0.10.5 release was the first real end-to-end run"). The operator's answer,
   verbatim pt-BR: "Vamos resoler o Opcional." This section and the
   "Confirmed" bullets above are that follow-up.
+
+## Release job timeout and the closed pendings (PR #39)
+
+Closes both `[pending]` items the PR #36 section's "Ship-gate round 3
+fixes" left open, plus one documentation nit in that same section.
+
+- **`timeout-minutes: 30` on the Release job.** The `release` job in
+  `.github/workflows/release.yml` had no `timeout-minutes`, so it ran
+  under GitHub's default 6-hour ceiling. All 9 successful runs from
+  v0.6.0 (35308883501) through v0.10.5 (36345101054) finished in
+  1m04s-1m56s wall time (`gh run list --workflow release.yml --json
+  createdAt,updatedAt,conclusion`, `updatedAt` minus `createdAt`,
+  measured 2026-09-27):
+
+  | Release | Run | Seconds |
+  | --- | --- | --- |
+  | v0.6.0 | 35308883501 | 74 |
+  | v0.7.0 | 35310355978 | 72 |
+  | v0.8.0 | 35316294090 | 86 |
+  | v0.9.0 | 35648494082 | 64 |
+  | v0.10.0 | 36206853553 | 73 |
+  | v0.10.1 | 36208337412 | 82 |
+  | v0.10.2 | 36217176585 | 77 |
+  | v0.10.4 | 36232145634 | 79 |
+  | v0.10.5 | 36345101054 | 116 |
+
+  30 minutes gives roughly 15x headroom over the slowest of those (116s),
+  including the post-publish re-GET retry loop, while stopping a hung run
+  far sooner than 6 hours. A timeout before "Publish the release" leaves
+  at most a draft, which the next run of the same tag replaces: GoReleaser
+  v2.18.2's `release.replace_existing_draft: true` deletes the previous
+  draft matched by name and recreates it (`.goreleaser.yml`; see also
+  "Design" above). The edge case of two same-named drafts existing at
+  once is refused by the workflow's own check, not assumed away: the
+  "Publish the release" step requires exactly one draft release for the
+  pushed tag and fails ("want exactly one draft release for
+  <tag>, found <count>") otherwise. One timeout during or after "Publish
+  the release" may leave the release already public. README "Releasing"'s
+  refusal table gained the matching row, including that `gh api
+  repos/.../releases/tags/<tag>` does not return a draft release, so a
+  404 there means nothing is public yet and a re-run is safe.
+- **HANDOFF citation fix.** The "Tag ruleset for `v*`" entry under this
+  section's "Left open" cited "round-2 ship-gate finding R2-L1
+  ("Release provenance" section above)" - the section title was
+  truncated, and the direction was backwards: R2-L1 is defined below, in
+  this same section's "Ship-gate round 2 fixes (2026-09-27)". Fixed to
+  cite it by its full title and correct direction. A grep of the whole
+  file for other truncated `"Release provenance"` citations, or
+  above/below directions of this same kind, found none.
+- **`--source-digest` pinning: declined, not deferred.** The "Ship-gate
+  round 3 fixes" entry is now `[declined, operator-agreed]`, with the
+  argument recorded there: the attestation check matches by tag name, not
+  commit, so a commit-pinned `--source-digest` only adds protection if a
+  tag could name a different commit than the one its release was built
+  from; v0.10.5 is attested and measured immutable, and the workflow's
+  own post-publish re-GET loop goes red for any future release that does
+  not settle immutable, so immutable releases plus the `v*` tag ruleset
+  make a tag's binding to its published release's commit hold without
+  `--source-digest` - except for whichever actor, if any, can bypass the
+  immutable-release tag lock, which GitHub's documentation does not say;
+  if one exists, the admin is the plausible candidate, since the admin
+  already holds the ruleset's bypass and the trust root regardless. See
+  that entry for the full argument and the reopen condition.
+- **Accepted gap (test-engineer).** No CI check validates the Release
+  workflow's own semantics (for example, that `timeout-minutes` is
+  present and set, or that a step it depends on still exists under the
+  name this file cites) or that README/HANDOFF prose describing
+  `release.yml` stays consistent with the file itself. The timeout is
+  observable only in a real run that actually hits it, which nothing here
+  exercises. Accepted as-is: a workflow-semantics or docs-consistency
+  check is real, not-yet-started tooling work, not a one-line fix, and
+  nothing has drifted yet that this would have caught.
+
+Operator decisions (2026-09-27, verbatim pt-BR): for B and C together,
+"Combiunado, escolha 1 (b+c num PR só)."; for A, "Também vamos argumentar A
+onde ele foi salvo pra que não seja mais pendencia."
