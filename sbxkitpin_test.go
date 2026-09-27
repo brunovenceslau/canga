@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -71,8 +72,16 @@ var (
 // repository's name, or $FAKE_GH/full_name when present, or a 404 when
 // $FAKE_GH/repo-404 is present (a token that cannot see the repository). It
 // insists on the flags that make the list "published releases", and on the
-// repository named outright, never taken from the checkout's remotes.
+// repository named outright, never taken from the checkout's remotes. It
+// also insists GH_HOST is pinned to github.com on every call: the script is
+// meant to export that itself, so every case in this file doubles as a
+// regression test for that pin, not only the cases that mention it by name.
+// FAKE_GH_SLEEP, when set, sleeps that many seconds before answering
+// "release list" - the one hook TestSbxKitPin_CheckPrevious_SignalCleanup
+// uses to give itself a window to signal the script while it is genuinely
+// blocked on gh, not a window guessed at with a timer.
 const _fakeGh = `#!/bin/sh
+[ "${GH_HOST:-}" = "github.com" ] || { echo "fake gh: GH_HOST is '${GH_HOST:-}', not pinned to github.com" >&2; exit 98; }
 case "$1 $2" in
 "api repos/brunovenceslau/canga")
 	[ "$3 $4" = "--jq .full_name" ] || { echo "fake gh: unexpected: $*" >&2; exit 99; }
@@ -80,6 +89,7 @@ case "$1 $2" in
 	if [ -f "$FAKE_GH/full_name" ]; then cat "$FAKE_GH/full_name"; else echo brunovenceslau/canga; fi
 	;;
 "release list")
+	[ -z "${FAKE_GH_SLEEP:-}" ] || sleep "${FAKE_GH_SLEEP}"
 	case " $* " in *" -R brunovenceslau/canga "*) ;; *) echo "fake gh: no -R brunovenceslau/canga" >&2; exit 99 ;; esac
 	case " $* " in *" --exclude-drafts "*) ;; *) echo "fake gh: no --exclude-drafts" >&2; exit 99 ;; esac
 	case " $* " in *" --exclude-pre-releases "*) ;; *) echo "fake gh: no --exclude-pre-releases" >&2; exit 99 ;; esac
@@ -275,22 +285,85 @@ func (w pinWorld) setTags(t *testing.T, tags ...string) {
 	writeFile(t, filepath.Join(w.gh, "tags"), strings.Join(tags, "\n")+"\n")
 }
 
-// setAssets makes the fake gh serve tag's release with the canga-sandbox_
-// archives of version at those digests; an empty digest is one GitHub
-// did not report.
-func (w pinWorld) setAssets(t *testing.T, tag, version, amd64, arm64 string) {
-	t.Helper()
+// _botUploader is the only uploader check_published accepts for a
+// canga-sandbox_ asset: the identity every workflow's default GITHUB_TOKEN
+// uploads under in this repository - not proof it was specifically the
+// Release workflow (see check_published's own comment in the script).
+const _botUploader = "github-actions[bot]"
 
-	var b strings.Builder
+// _noUploader is a table-driven case's sentinel for "GitHub reports no
+// uploader for this asset", distinct from that same case's zero value
+// (which instead means "default to _botUploader, the passing case").
+const _noUploader = "\x00 no uploader"
 
-	fmt.Fprintf(&b, "canga-host_%s_linux_amd64.tar.gz sha256:%s\n", version, strings.Repeat("0", 64))
+// Refusal messages goconst would otherwise ask to be named, repeated across
+// several tables in this file: check_published's digest-mismatch and
+// uploader-mismatch wording, and sandbox_sum's "found the wrong number of
+// matching lines" wording (shared by a missing arch, another version's
+// lines, and a checksums.txt built for an entirely different release).
+const (
+	_wantDigestMismatch   = "not the ones pinned"
+	_wantUploaderMismatch = "not github-actions[bot]"
+	_wantSandboxSumZero   = "found 0"
+)
 
-	for arch, digest := range map[string]string{_amd64: amd64, _arm64: arm64} {
-		fmt.Fprintf(&b, "canga-sandbox_%s_linux_%s.tar.gz %s\n", version, arch, digest)
+// naOr is s, or the "-" release_assets's own --jq prints for a field GitHub
+// did not report (see assets_jq in the script), when s is empty. Tests pass
+// "" for "GitHub did not report this", exactly as before this field grew a
+// third column; naOr is what keeps that convention working now that a
+// missing field must never collapse into its neighbour under awk's default
+// whitespace splitting.
+func naOr(s string) string {
+	if s == "" {
+		return "-"
 	}
 
-	b.WriteString("checksums.txt sha256:" + strings.Repeat("1", 64) + "\n")
-	writeFile(t, filepath.Join(w.gh, tag+".assets"), b.String())
+	return s
+}
+
+// assetsBody is one release's assets in release_assets's own shape: a
+// "_meta false false" line (not a draft, not a prerelease - see
+// assetsBodyMeta for the cases that need something else there), then one
+// "<name> <digest> <uploader>" line per asset (see release_jq in the
+// script). An empty amd64, arm64 or uploader is one GitHub did not report.
+func assetsBody(version, amd64, arm64, uploader string) string {
+	return assetsBodyMeta(version, amd64, arm64, uploader, false, false)
+}
+
+// metaLine is release_jq's own leading "_meta <draft> <prerelease>" line,
+// built from the two booleans rather than written out literally: a literal
+// "_meta false false" reads as an accidental duplicate word to a linter,
+// and this is the one spelling every caller (assetsBodyMeta, the two raw
+// fixtures in TestSbxKitPin_Rewrite_MalformedAssetName, and
+// TestSbxKitPin_ReleaseJQ's own assertions) shares.
+func metaLine(draft, prerelease bool) string {
+	return fmt.Sprintf("_meta %t %t", draft, prerelease)
+}
+
+// assetsBodyMeta is assetsBody with the release's own draft/prerelease
+// state given explicitly, for the cases that exercise release_assets's
+// draft/prerelease refusal itself.
+func assetsBodyMeta(version, amd64, arm64, uploader string, draft, prerelease bool) string {
+	var b strings.Builder
+
+	b.WriteString(metaLine(draft, prerelease) + "\n")
+	fmt.Fprintf(&b, "canga-host_%s_linux_amd64.tar.gz sha256:%s %s\n", version, strings.Repeat("0", 64), naOr(uploader))
+
+	for arch, digest := range map[string]string{_amd64: amd64, _arm64: arm64} {
+		fmt.Fprintf(&b, "canga-sandbox_%s_linux_%s.tar.gz %s %s\n", version, arch, naOr(digest), naOr(uploader))
+	}
+
+	fmt.Fprintf(&b, "checksums.txt sha256:%s %s\n", strings.Repeat("1", 64), naOr(uploader))
+
+	return b.String()
+}
+
+// setAssets makes the fake gh serve tag's release with the canga-sandbox_
+// archives of version at those digests, uploaded by uploader; an empty
+// digest or uploader is one GitHub did not report.
+func (w pinWorld) setAssets(t *testing.T, tag, version, amd64, arm64, uploader string) {
+	t.Helper()
+	writeFile(t, filepath.Join(w.gh, tag+".assets"), assetsBody(version, amd64, arm64, uploader))
 }
 
 // leftovers is what the script left in TMPDIR.
@@ -394,7 +467,7 @@ func rewriteRefusals(good string) []rewriteRefusal {
 		{
 			name: "arm64 line missing", version: _bumpVersion,
 			sums: checksums(sandboxLine(_sumAMD64, _amd64)),
-			want: "found 0",
+			want: _wantSandboxSumZero,
 		},
 		{
 			name: "amd64 line twice", version: _bumpVersion,
@@ -403,7 +476,7 @@ func rewriteRefusals(good string) []rewriteRefusal {
 		},
 		{
 			name: "another version's lines", version: "9.8.8", sums: good,
-			want: "found 0",
+			want: _wantSandboxSumZero,
 		},
 		{
 			name: "a sum that is not hex", version: _bumpVersion,
@@ -499,29 +572,79 @@ func TestSbxKitPin_Version(t *testing.T) {
 	}
 }
 
+// rewriteGhEnv is the environment one TestSbxKitPin_Rewrite case runs
+// under: a fresh fake gh serving "v"+version's release with exactly those
+// canga-sandbox_ archs' sha256 (bare hex, as sandbox_sum itself prints; an
+// empty one is a digest GitHub did not report) and uploader (rewrite always
+// checks against them; see cmd_rewrite in the script).
+func rewriteGhEnv(t *testing.T, bin, version, amd64, arm64, uploader string) scrubbedEnv {
+	t.Helper()
+
+	sha256Prefixed := func(sum string) string {
+		if sum == "" {
+			return ""
+		}
+
+		return "sha256:" + sum
+	}
+
+	return rewriteGhEnvRaw(t, bin, version, assetsBody(version, sha256Prefixed(amd64), sha256Prefixed(arm64), uploader))
+}
+
+// rewriteGhEnvRaw is rewriteGhEnv with the release's ".assets" fixture body
+// given verbatim, for a case assetsBody's own shape cannot express (a
+// duplicate asset name, an asset name with an embedded space, a
+// draft/prerelease _meta line - see assetsBodyMeta for that one instead).
+func rewriteGhEnvRaw(t *testing.T, bin, version, body string) scrubbedEnv {
+	t.Helper()
+
+	gh := t.TempDir()
+	writeFile(t, filepath.Join(gh, "v"+version+".assets"), body)
+
+	return childEnv(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_GH="+gh,
+	)
+}
+
+// copyKit writes body, or the committed kit, to dir/sbx-kit/spec.yaml.
+func copyKit(t *testing.T, dir, body string) string {
+	t.Helper()
+
+	if body == "" {
+		data, err := os.ReadFile(_kitSpec)
+		require.NoError(t, err)
+
+		body = string(data)
+	}
+
+	path := filepath.Join(dir, _kitSpec)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+
+	return writeFile(t, path, body)
+}
+
 // TestSbxKitPin_Rewrite moves a copy of the kit to a fixture release, and
-// checks the refusals leave the kit byte-for-byte untouched.
+// checks the refusals leave the kit byte-for-byte untouched. rewrite always
+// verifies the sums it is given against the release's published digests
+// (cmd_rewrite calls check_published before writing anything), so every
+// case here runs against a fake gh, the same one TestSbxKitPin_CheckPrevious
+// and TestSbxKitPin_Bump use. TestSbxKitPin_Rewrite_PublishedDigest is this
+// test's sibling for the published-digest and uploader refusals themselves.
+//
+// fakeGhBin runs before t.Parallel: see its comment.
 func TestSbxKitPin_Rewrite(t *testing.T) {
+	bin := fakeGhBin(t)
 	t.Parallel()
 
 	good := checksums(sandboxLine(_sumAMD64, _amd64), sandboxLine(_sumARM64, _arm64))
 
-	// copyKit writes body, or the committed kit, to dir/sbx-kit/spec.yaml.
-	copyKit := func(t *testing.T, dir, body string) string {
-		t.Helper()
-
-		if body == "" {
-			data, err := os.ReadFile(_kitSpec)
-			require.NoError(t, err)
-
-			body = string(data)
-		}
-
-		path := filepath.Join(dir, _kitSpec)
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-
-		return writeFile(t, path, body)
-	}
+	// The fixture every success case and every kit-refusal case (all of
+	// which use sums: good, matching this release's own digests) runs
+	// against. A case whose checksums.txt or version is itself malformed
+	// (sandbox_sum fails first) never reaches check_published, so it does
+	// not need a matching release and this fixture is harmless for it too.
+	env := rewriteGhEnv(t, bin, _bumpVersion, _sumAMD64, _sumARM64, _botUploader)
 
 	t.Run("rewrites the version and both sums, and nothing else", func(t *testing.T) {
 		t.Parallel()
@@ -532,8 +655,9 @@ func TestSbxKitPin_Rewrite(t *testing.T) {
 		require.NoError(t, err)
 
 		sums := writeFile(t, filepath.Join(dir, "checksums.txt"), good)
-		res := runPin(t, dir, childEnv(os.Environ()), "rewrite", _bumpVersion, sums)
+		res := runPin(t, dir, env, "rewrite", _bumpVersion, sums)
 		require.Equal(t, 0, res.exit, res.stderr)
+		assert.Contains(t, res.stdout, "verified against release v"+_bumpVersion+"'s published digests")
 
 		after, err := os.ReadFile(kit)
 		require.NoError(t, err)
@@ -549,7 +673,7 @@ func TestSbxKitPin_Rewrite(t *testing.T) {
 		assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 
 		// Idempotent: a second run changes nothing.
-		require.Equal(t, 0, runPin(t, dir, childEnv(os.Environ()), "rewrite", _bumpVersion, sums).exit)
+		require.Equal(t, 0, runPin(t, dir, env, "rewrite", _bumpVersion, sums).exit)
 
 		again, err := os.ReadFile(kit)
 		require.NoError(t, err)
@@ -566,7 +690,7 @@ func TestSbxKitPin_Rewrite(t *testing.T) {
 			require.NoError(t, err)
 
 			sums := writeFile(t, filepath.Join(dir, "checksums.txt"), tt.sums)
-			res := runPin(t, dir, childEnv(os.Environ()), "rewrite", tt.version, sums)
+			res := runPin(t, dir, env, "rewrite", tt.version, sums)
 			assert.Equal(t, 1, res.exit)
 			assert.Contains(t, res.stderr, tt.want)
 
@@ -579,6 +703,185 @@ func TestSbxKitPin_Rewrite(t *testing.T) {
 			assert.Empty(t, leftovers, "a refused rewrite must not leave its temp file")
 		})
 	}
+}
+
+// TestSbxKitPin_Rewrite_PublishedDigest is TestSbxKitPin_Rewrite's sibling
+// for the check cmd_rewrite's check_published call itself adds: each case
+// below is a published-digest or uploader state rewrite must refuse, given
+// checksums.txt inputs (good, from TestSbxKitPin_Rewrite) that pass every
+// pre-existing local check on their own - proving check_published actually
+// runs and actually blocks the write, not only the local checks that test
+// covers.
+//
+// fakeGhBin runs before t.Parallel: see its comment.
+func TestSbxKitPin_Rewrite_PublishedDigest(t *testing.T) {
+	bin := fakeGhBin(t)
+	t.Parallel()
+
+	good := checksums(sandboxLine(_sumAMD64, _amd64), sandboxLine(_sumARM64, _arm64))
+
+	for _, tt := range []struct {
+		name, amd64, arm64, uploader, want, wantNot string
+	}{
+		{
+			name: "a digest GitHub does not confirm", amd64: strings.Repeat("c3", 32), arm64: _sumARM64, uploader: _botUploader,
+			want: _wantDigestMismatch,
+		},
+		{
+			name: "a digest GitHub does not report", amd64: "", arm64: _sumARM64, uploader: _botUploader,
+			want: "reports no digest",
+		},
+		{
+			name: "an asset uploaded by someone other than github-actions[bot]", amd64: _sumAMD64, arm64: _sumARM64, uploader: "a-human",
+			want: _wantUploaderMismatch,
+		},
+		{
+			name: "an asset GitHub reports no uploader for", amd64: _sumAMD64, arm64: _sumARM64, uploader: "",
+			want: "reports no uploader",
+		},
+		{
+			// Both wrong at once: check_published's digest check runs
+			// before its uploader check (see its own comment), so this
+			// must refuse for the digest, deterministically, never for the
+			// uploader - pinning that order down, not just its existence.
+			name: "a digest AND an uploader both wrong (the digest error wins)", amd64: strings.Repeat("c3", 32), arm64: _sumARM64, uploader: "a-human",
+			want: _wantDigestMismatch, wantNot: _wantUploaderMismatch,
+		},
+	} {
+		t.Run("refuses "+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			kit := copyKit(t, dir, "")
+			before, err := os.ReadFile(kit)
+			require.NoError(t, err)
+
+			env := rewriteGhEnv(t, bin, _bumpVersion, tt.amd64, tt.arm64, tt.uploader)
+			sums := writeFile(t, filepath.Join(dir, "checksums.txt"), good)
+			res := runPin(t, dir, env, "rewrite", _bumpVersion, sums)
+			assert.Equal(t, 1, res.exit)
+			assert.Contains(t, res.stderr, tt.want)
+
+			if tt.wantNot != "" {
+				assert.NotContains(t, res.stderr, tt.wantNot)
+			}
+
+			after, err := os.ReadFile(kit)
+			require.NoError(t, err)
+			assert.Equal(t, string(before), string(after), "a refused rewrite must not touch the kit")
+
+			leftovers, err := filepath.Glob(kit + ".*")
+			require.NoError(t, err)
+			assert.Empty(t, leftovers, "a refused rewrite must not leave its temp file")
+		})
+	}
+}
+
+// TestSbxKitPin_Rewrite_ReleaseState refuses a draft or a prerelease
+// outright, before any digest or uploader is even looked at: rewrite and
+// bump take a version/tag directly from the caller (unlike check-previous,
+// which only ever compares against published_tags's own list, already
+// excluding both), so release_assets's own check is the only thing that
+// catches this for them.
+//
+// fakeGhBin runs before t.Parallel: see its comment.
+func TestSbxKitPin_Rewrite_ReleaseState(t *testing.T) {
+	bin := fakeGhBin(t)
+	t.Parallel()
+
+	good := checksums(sandboxLine(_sumAMD64, _amd64), sandboxLine(_sumARM64, _arm64))
+
+	for _, tt := range []struct {
+		name          string
+		draft, prerel bool
+		want          string
+	}{
+		{name: "a draft release", draft: true, want: "is a draft"},
+		{name: "a prerelease", prerel: true, want: "is a prerelease"},
+	} {
+		t.Run("refuses "+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			kit := copyKit(t, dir, "")
+			before, err := os.ReadFile(kit)
+			require.NoError(t, err)
+
+			body := assetsBodyMeta(_bumpVersion, "sha256:"+_sumAMD64, "sha256:"+_sumARM64, _botUploader, tt.draft, tt.prerel)
+			env := rewriteGhEnvRaw(t, bin, _bumpVersion, body)
+			sums := writeFile(t, filepath.Join(dir, "checksums.txt"), good)
+			res := runPin(t, dir, env, "rewrite", _bumpVersion, sums)
+			assert.Equal(t, 1, res.exit)
+			assert.Contains(t, res.stderr, tt.want)
+
+			after, err := os.ReadFile(kit)
+			require.NoError(t, err)
+			assert.Equal(t, string(before), string(after), "a refused rewrite must not touch the kit")
+		})
+	}
+}
+
+// TestSbxKitPin_Rewrite_MalformedAssetName covers check_published's own
+// NF == 3 guard: a release_jq line is only ever treated as naming a known
+// asset when the WHOLE line splits into exactly three fields, so a name
+// that itself somehow contains whitespace (which real GitHub does not
+// allow today, but this check does not lean on that alone) can never be
+// misread as if trailing words inside it were the digest and uploader.
+//
+// fakeGhBin runs before t.Parallel: see its comment.
+func TestSbxKitPin_Rewrite_MalformedAssetName(t *testing.T) {
+	bin := fakeGhBin(t)
+	t.Parallel()
+
+	good := checksums(sandboxLine(_sumAMD64, _amd64), sandboxLine(_sumARM64, _arm64))
+	arm64Line := "canga-sandbox_" + _bumpVersion + "_linux_arm64.tar.gz sha256:" + _sumARM64 + " " + _botUploader
+
+	t.Run("refuses an asset name with an embedded space, as if it were missing", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		kit := copyKit(t, dir, "")
+		before, err := os.ReadFile(kit)
+		require.NoError(t, err)
+
+		// A name containing a space, followed by what would be the real
+		// digest and uploader if this line's first field alone ($1) were
+		// trusted as the match: NF == 3 must refuse this line as a match
+		// for the clean name entirely, not read "evil" as the digest.
+		amd64Line := "canga-sandbox_" + _bumpVersion + "_linux_amd64.tar.gz evil sha256:" + _sumAMD64 + " " + _botUploader
+		body := metaLine(false, false) + "\n" + amd64Line + "\n" + arm64Line + "\n"
+		env := rewriteGhEnvRaw(t, bin, _bumpVersion, body)
+		sums := writeFile(t, filepath.Join(dir, "checksums.txt"), good)
+		res := runPin(t, dir, env, "rewrite", _bumpVersion, sums)
+		assert.Equal(t, 1, res.exit)
+		assert.Contains(t, res.stderr, "carries no canga-sandbox_"+_bumpVersion+"_linux_amd64.tar.gz at all")
+
+		after, err := os.ReadFile(kit)
+		require.NoError(t, err)
+		assert.Equal(t, string(before), string(after), "a refused rewrite must not touch the kit")
+	})
+
+	t.Run("refuses a release that lists the same asset name twice", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		kit := copyKit(t, dir, "")
+		before, err := os.ReadFile(kit)
+		require.NoError(t, err)
+
+		amd64Line := "canga-sandbox_" + _bumpVersion + "_linux_amd64.tar.gz sha256:" + _sumAMD64 + " " + _botUploader
+		duplicateLine := "canga-sandbox_" + _bumpVersion + "_linux_amd64.tar.gz sha256:" + strings.Repeat("c3", 32) + " " + _botUploader
+		body := metaLine(false, false) + "\n" + amd64Line + "\n" + duplicateLine + "\n" + arm64Line + "\n"
+		env := rewriteGhEnvRaw(t, bin, _bumpVersion, body)
+		sums := writeFile(t, filepath.Join(dir, "checksums.txt"), good)
+		res := runPin(t, dir, env, "rewrite", _bumpVersion, sums)
+		assert.Equal(t, 1, res.exit)
+		assert.Contains(t, res.stderr, "lists 2 assets named canga-sandbox_"+_bumpVersion+"_linux_amd64.tar.gz")
+
+		after, err := os.ReadFile(kit)
+		require.NoError(t, err)
+		assert.Equal(t, string(before), string(after), "a refused rewrite must not touch the kit")
+	})
 }
 
 // TestSbxKitPin_CheckPrevious is the preflight rule: the kit at HEAD must pin
@@ -597,9 +900,11 @@ func TestSbxKitPin_CheckPrevious(t *testing.T) {
 		tags                 []string
 		// The release whose digests the fake gh serves, and which ones.
 		assetsTag, amd64, arm64 string
-		olderLine               string // SBX_KIT_OLDER_LINE
-		noTags                  bool
-		exit                    int
+		// The assets' uploader; empty means _botUploader, the passing case.
+		uploader  string
+		olderLine string // SBX_KIT_OLDER_LINE
+		noTags    bool
+		exit      int
 	}{
 		{name: "kit pins the previous release", kit: _prevVersion, tags: []string{_prevTag, _olderTag, _tag}, tag: _nextTag, want: "pins " + _prevTag},
 		{name: "the tag's own release is already published", kit: _prevVersion, tags: []string{_nextTag, _prevTag, _tag}, tag: _nextTag, want: "pins " + _prevTag},
@@ -617,13 +922,21 @@ func TestSbxKitPin_CheckPrevious(t *testing.T) {
 		{name: "the previous bump never merged", kit: "0.10.0", tags: []string{_prevTag, _olderTag}, tag: _nextTag, exit: 1, want: "chore/sbx-kit-" + _prevTag},
 		{name: "the kit already names this tag", kit: _nextVersion, tags: []string{_prevTag}, tag: _nextTag, exit: 1, want: "newest published\nrelease below v0.10.2 is v0.10.1"},
 		{name: "an older line pinning an unpublished release", kit: "0.9.5", tags: []string{_prevTag, _tag}, tag: "v0.9.6", olderLine: "v0.9.6", exit: 1, want: "not a published release"},
-		{name: "a pinned sum GitHub serves otherwise", kit: _prevVersion, tags: []string{_prevTag}, tag: _nextTag, arm64: "sha256:" + strings.Repeat("c3", 32), exit: 1, want: "not the ones pinned"},
-		{name: "a pinned sum GitHub reports no digest for", kit: _prevVersion, tags: []string{_prevTag}, tag: _nextTag, amd64: " ", exit: 1, want: "serves no digest"},
+		{name: "a pinned sum GitHub serves otherwise", kit: _prevVersion, tags: []string{_prevTag}, tag: _nextTag, arm64: "sha256:" + strings.Repeat("c3", 32), exit: 1, want: _wantDigestMismatch},
+		{name: "a pinned sum GitHub reports no digest for", kit: _prevVersion, tags: []string{_prevTag}, tag: _nextTag, amd64: " ", exit: 1, want: "reports no digest"},
 		{name: "no release below this one", kit: _prevVersion, tags: []string{_nextTag}, tag: _nextTag, exit: 1, want: "no published release below"},
 		{name: "gh fails", kit: _prevVersion, tag: _nextTag, noTags: true, exit: 1, want: "could not list"},
 		{name: _notATag, kit: _prevVersion, tags: []string{_prevTag}, tag: _nextVersion, exit: 1, want: _notATag},
 		{name: "a tag with a leading zero", kit: _prevVersion, tags: []string{_prevTag}, tag: "v0.010.2", exit: 1, want: _notATag},
 		{name: "a malformed kit version", kit: "0.10", tags: []string{_prevTag}, tag: _nextTag, exit: 1, want: "is not X.Y.Z"},
+		{
+			name: "a pinned release uploaded by someone other than github-actions[bot]", kit: _prevVersion, tags: []string{_prevTag}, tag: _nextTag,
+			uploader: "a-human", exit: 1, want: _wantUploaderMismatch,
+		},
+		{
+			name: "a pinned release GitHub reports no uploader for", kit: _prevVersion, tags: []string{_prevTag}, tag: _nextTag,
+			uploader: _noUploader, exit: 1, want: "reports no uploader",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -648,7 +961,16 @@ func TestSbxKitPin_CheckPrevious(t *testing.T) {
 				arm64 = tt.arm64
 			}
 
-			w.setAssets(t, assetsTag, strings.TrimPrefix(assetsTag, "v"), amd64, arm64)
+			uploader := _botUploader
+			switch tt.uploader {
+			case "":
+			case _noUploader:
+				uploader = ""
+			default:
+				uploader = tt.uploader
+			}
+
+			w.setAssets(t, assetsTag, strings.TrimPrefix(assetsTag, "v"), amd64, arm64, uploader)
 
 			res := w.run(t, "check-previous", tt.tag)
 			assert.Equal(t, tt.exit, res.exit, res.stderr)
@@ -662,7 +984,7 @@ func TestSbxKitPin_CheckPrevious(t *testing.T) {
 
 		w := newPinWorld(t, bin, realKit(t, "0.10.0", _sumAMD64, _sumARM64), false)
 		w.setTags(t, _prevTag, _olderTag)
-		w.setAssets(t, _prevTag, _prevVersion, digestAMD64, digestARM64)
+		w.setAssets(t, _prevTag, _prevVersion, digestAMD64, digestARM64, _botUploader)
 		w.writeKit(t, realKit(t, _prevVersion, _sumAMD64, _sumARM64))
 
 		res := w.run(t, "check-previous", _nextTag)
@@ -727,7 +1049,7 @@ func TestSbxKitPin_CheckClobber(t *testing.T) {
 				hostOnly := "canga-host_" + _nextVersion + "_linux_amd64.tar.gz sha256:" + strings.Repeat("0", 64) + "\n"
 				writeFile(t, filepath.Join(w.gh, _nextTag+".assets"), hostOnly)
 			default:
-				w.setAssets(t, _nextTag, _nextVersion, digestAMD64, digestARM64)
+				w.setAssets(t, _nextTag, _nextVersion, digestAMD64, digestARM64, _botUploader)
 			}
 
 			if tt.pushBranch {
@@ -798,7 +1120,7 @@ func newBumpWorldFrom(t *testing.T, inherited []string, bin string) bumpWorld {
 	w.amd64, w.arm64 = strings.Fields(lines[0])[0], strings.Fields(lines[1])[0]
 	w.sums = writeFile(t, filepath.Join(w.dist, "checksums.txt"), checksums(lines...))
 	w.setTags(t, _bumpTag, _bumpPrevTag)
-	w.setAssets(t, _bumpTag, _bumpVersion, "sha256:"+w.amd64, "sha256:"+w.arm64)
+	w.setAssets(t, _bumpTag, _bumpVersion, "sha256:"+w.amd64, "sha256:"+w.arm64, _botUploader)
 
 	return w
 }
@@ -870,10 +1192,27 @@ func bumpRefusals() []bumpRefusal {
 			t.Helper()
 			writeFile(t, filepath.Join(w.repo, "stray"), "x")
 		}},
-		{name: "a checksums.txt missing an arch", want: "found 0", prepare: func(t *testing.T, w *bumpWorld) {
+		{name: "a checksums.txt missing an arch", want: _wantSandboxSumZero, prepare: func(t *testing.T, w *bumpWorld) {
 			t.Helper()
 			writeFile(t, w.sums, checksums(sandboxLine(w.amd64, _amd64)))
 		}},
+		{
+			// Cross-version confusion: a checksums.txt genuinely built for
+			// a different release (well-formed, both archs present) fed to
+			// bump under _bumpTag/_bumpVersion. sandbox_sum matches by
+			// filename equality against the version bump was actually
+			// invoked with, so a file naming only 9.8.8 has zero lines for
+			// 9.8.7 and is refused the same way a missing arch is - never
+			// silently accepted as if it were this release's own file.
+			name: "a checksums.txt built for a different version", want: _wantSandboxSumZero, prepare: func(t *testing.T, w *bumpWorld) {
+				t.Helper()
+
+				otherVersion := func(sum, arch string) string {
+					return fmt.Sprintf("%s  canga-sandbox_9.8.8_linux_%s.tar.gz", sum, arch)
+				}
+				writeFile(t, w.sums, checksums(otherVersion(w.amd64, _amd64), otherVersion(w.arm64, _arm64)))
+			},
+		},
 		{name: "a second tag on HEAD", want: "exactly the tag " + _bumpTag, prepare: func(t *testing.T, w *bumpWorld) {
 			t.Helper()
 			w.git(t, "tag", "v9.8.8")
@@ -891,13 +1230,21 @@ func bumpRefusals() []bumpRefusal {
 			t.Helper()
 			writeFile(t, w.archive(_amd64), "rebuilt after the upload")
 		}},
-		{name: "a release serving other bytes", want: "not the ones pinned", prepare: func(t *testing.T, w *bumpWorld) {
+		{name: "a release serving other bytes", want: _wantDigestMismatch, prepare: func(t *testing.T, w *bumpWorld) {
 			t.Helper()
-			w.setAssets(t, _bumpTag, _bumpVersion, "sha256:"+w.amd64, "sha256:"+strings.Repeat("c3", 32))
+			w.setAssets(t, _bumpTag, _bumpVersion, "sha256:"+w.amd64, "sha256:"+strings.Repeat("c3", 32), _botUploader)
 		}},
-		{name: "a release reporting no digest", want: "serves no digest", prepare: func(t *testing.T, w *bumpWorld) {
+		{name: "a release reporting no digest", want: "reports no digest", prepare: func(t *testing.T, w *bumpWorld) {
 			t.Helper()
-			w.setAssets(t, _bumpTag, _bumpVersion, "", "sha256:"+w.arm64)
+			w.setAssets(t, _bumpTag, _bumpVersion, "", "sha256:"+w.arm64, _botUploader)
+		}},
+		{name: "a release uploaded by someone other than github-actions[bot]", want: _wantUploaderMismatch, prepare: func(t *testing.T, w *bumpWorld) {
+			t.Helper()
+			w.setAssets(t, _bumpTag, _bumpVersion, "sha256:"+w.amd64, "sha256:"+w.arm64, "a-human")
+		}},
+		{name: "a release GitHub reports no uploader for", want: "reports no uploader", prepare: func(t *testing.T, w *bumpWorld) {
+			t.Helper()
+			w.setAssets(t, _bumpTag, _bumpVersion, "sha256:"+w.amd64, "sha256:"+w.arm64, "")
 		}},
 		{name: "a release list gh cannot read", want: "could not list", prepare: func(t *testing.T, w *bumpWorld) {
 			t.Helper()
@@ -1167,4 +1514,208 @@ func TestSbxKitPin_IgnoresRealGitEnv(t *testing.T) {
 	assert.NotEmpty(t, w.git(t, "branch", "--list", w.branch), "the bump lands in the case's own repository")
 
 	decoy.assertUntouched(t)
+}
+
+// scriptJQVars prints scripts/sbx-kit-pin.sh's own assets_jq and release_jq,
+// exactly as gh --jq would receive them: it sources everything in the
+// script up to (not including) its final dispatch line - which never runs a
+// command and so cannot fail for lacking one - into a real sh, and asks
+// that sh to print the two variables. This is the actual shell resolving
+// or_dash_def's substitution and every escape the same way the script
+// itself does, so the test can never silently drift from what gh --jq
+// actually runs, the way a hand-copied jq string could.
+func scriptJQVars(t *testing.T) (assetsJQ, releaseJQ string) {
+	t.Helper()
+
+	data, err := os.ReadFile(_pinScript)
+	require.NoError(t, err)
+
+	src := string(data)
+	marker := `[ $# -ge 1 ] || die "usage:`
+	idx := strings.Index(src, marker)
+	require.NotEqual(t, -1, idx, "sbx-kit-pin.sh's dispatch line moved; update this test's marker")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prefix.sh")
+	require.NoError(t, os.WriteFile(path, []byte(src[:idx]), 0o644))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", `. "$1"; printf '%s\0%s' "$assets_jq" "$release_jq"`, "sh", path)
+
+	var stdout, stderr bytes.Buffer
+
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	require.NoError(t, cmd.Run(), "sourcing sbx-kit-pin.sh's prefix: %s", stderr.String())
+
+	parts := strings.SplitN(stdout.String(), "\x00", 2)
+	require.Len(t, parts, 2, "expected assets_jq\\0release_jq, got: %q", stdout.String())
+
+	return parts[0], parts[1]
+}
+
+// runJQ runs jqBin -r <filter>, feeding it doc, and returns its output
+// split into lines (empty on empty output, never a slice holding one empty
+// string).
+func runJQ(t *testing.T, jqBin, filter, doc string) []string {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, jqBin, "-r", filter)
+	cmd.Stdin = strings.NewReader(doc)
+
+	var stdout, stderr bytes.Buffer
+
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	require.NoError(t, cmd.Run(), "jq -r %q: %s", filter, stderr.String())
+
+	out := strings.TrimSuffix(stdout.String(), "\n")
+	if out == "" {
+		return nil
+	}
+
+	return strings.Split(out, "\n")
+}
+
+// TestSbxKitPin_ReleaseJQ pipes a realistic release document through the
+// real assets_jq and release_jq strings scripts/sbx-kit-pin.sh actually
+// uses (via scriptJQVars, never a hand-copied string), through a real jq
+// binary. Every other test in this package feeds the fake gh canned text
+// directly and never runs jq at all, so a syntax or semantic mistake in
+// either --jq expression would only have surfaced against the real GitHub
+// API - this is what closes that gap.
+func TestSbxKitPin_ReleaseJQ(t *testing.T) {
+	t.Parallel()
+
+	jqBin, err := exec.LookPath("jq")
+	require.NoError(t, err, "jq is required for this test; install it (see .github/workflows/test.yml)")
+
+	assetsJQ, releaseJQ := scriptJQVars(t)
+
+	// One asset with a null digest, one with a null uploader.login (the
+	// realistic shape: GitHub omits digest/uploader as JSON null, not as
+	// ""), one with an empty-string digest AND uploader.login (the shape
+	// orDash's "or \"\"" branch exists for), and an unrelated extra asset,
+	// all in the one release document both expressions read.
+	doc := `{
+		"draft": false,
+		"prerelease": false,
+		"assets": [
+			{"name": "canga-sandbox_9.8.7_linux_amd64.tar.gz", "digest": "sha256:aaaa", "uploader": {"login": "github-actions[bot]"}},
+			{"name": "canga-sandbox_9.8.7_linux_arm64.tar.gz", "digest": null, "uploader": {"login": "github-actions[bot]"}},
+			{"name": "canga-host_9.8.7_linux_amd64.tar.gz", "digest": "", "uploader": {"login": ""}},
+			{"name": "checksums.txt", "digest": "sha256:cccc", "uploader": null}
+		]
+	}`
+
+	want := []string{
+		"canga-sandbox_9.8.7_linux_amd64.tar.gz sha256:aaaa github-actions[bot]",
+		"canga-sandbox_9.8.7_linux_arm64.tar.gz - github-actions[bot]",
+		"canga-host_9.8.7_linux_amd64.tar.gz - -",
+		"checksums.txt sha256:cccc -",
+	}
+
+	t.Run("assets_jq: null, empty and missing fields all print as -, never empty", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, want, runJQ(t, jqBin, assetsJQ, doc))
+	})
+
+	t.Run("release_jq: the same asset lines, behind one _meta line", func(t *testing.T) {
+		t.Parallel()
+
+		out := runJQ(t, jqBin, releaseJQ, doc)
+		require.NotEmpty(t, out)
+		assert.Equal(t, metaLine(false, false), out[0])
+		assert.Equal(t, want, out[1:])
+	})
+
+	for _, tt := range []struct {
+		name          string
+		draft, prerel bool
+	}{
+		{name: "draft", draft: true},
+		{name: "prerelease", prerel: true},
+		{name: "neither", draft: false, prerel: false},
+		{name: "both", draft: true, prerel: true},
+	} {
+		t.Run("release_jq's _meta line reflects "+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := fmt.Sprintf(`{"draft": %t, "prerelease": %t, "assets": []}`, tt.draft, tt.prerel)
+			out := runJQ(t, jqBin, releaseJQ, doc)
+			require.Len(t, out, 1)
+			assert.Equal(t, metaLine(tt.draft, tt.prerel), out[0])
+		})
+	}
+}
+
+// TestSbxKitPin_CheckPrevious_SignalCleanup demonstrates the INT/TERM trap
+// fix end to end: check-previous is killed while genuinely blocked on a
+// deliberately slow `gh release list` (FAKE_GH_SLEEP), after its scratch
+// directory already exists on disk, and that scratch directory must be
+// gone once the killed script has exited. Before trap_cleanup_dir gave
+// check-previous (and check-clobber, and bump - all three use the same
+// helper) traps on HUP, INT and TERM, only a bare `trap ... EXIT` guarded
+// this directory, which does not fire for these signals in every /bin/sh.
+//
+// fakeGhBin runs before t.Parallel: see its comment. Each case gets its own
+// pinWorld (its own TMPDIR, its own bare origin), so running SIGINT and
+// SIGTERM in parallel races nothing shared between them.
+func TestSbxKitPin_CheckPrevious_SignalCleanup(t *testing.T) {
+	bin := fakeGhBin(t)
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		sig      syscall.Signal
+		wantExit int
+	}{
+		{name: "SIGINT", sig: syscall.SIGINT, wantExit: 130},
+		{name: "SIGTERM", sig: syscall.SIGTERM, wantExit: 143},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newPinWorld(t, bin, realKit(t, _prevVersion, _sumAMD64, _sumARM64), false)
+			w.setTags(t, _prevTag, _olderTag, _tag)
+			w.setAssets(t, _prevTag, _prevVersion, "sha256:"+_sumAMD64, "sha256:"+_sumARM64, _botUploader)
+			w.env = append(w.env, "FAKE_GH_SLEEP=5")
+
+			script, err := filepath.Abs(_pinScript)
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+
+			cmd := exec.CommandContext(ctx, "sh", script, "check-previous", _nextTag)
+			cmd.Dir = w.repo
+			cmd.Env = w.childEnv().asEnv()
+
+			var stdout, stderr bytes.Buffer
+
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+
+			require.NoError(t, cmd.Start())
+
+			// Waits for the scratch directory to actually exist under
+			// TMPDIR before signalling: sending the signal on a timer
+			// alone would race the script's own mktemp -d and could pass
+			// for the wrong reason (nothing to clean up yet).
+			require.Eventually(t, func() bool {
+				return len(w.leftovers(t)) > 0
+			}, 5*time.Second, 20*time.Millisecond, "the scratch directory never appeared under TMPDIR")
+
+			require.NoError(t, cmd.Process.Signal(tt.sig))
+
+			err = cmd.Wait()
+
+			var exitErr *exec.ExitError
+			require.ErrorAs(t, err, &exitErr, "stdout: %s\nstderr: %s", stdout.String(), stderr.String())
+			assert.Equal(t, tt.wantExit, exitErr.ExitCode())
+			assert.Empty(t, w.leftovers(t), "the scratch directory must not survive the signal")
+		})
+	}
 }

@@ -1078,6 +1078,19 @@ release and re-derives the pin from them, so a lost branch and a first run
 go through the exact same path and commit the exact same pin (a new commit,
 re-signed, but pinning the identical version and hashes).
 
+`scripts/sbx-kit-pin.sh rewrite X.Y.Z <checksums.txt>` is the lower-level
+primitive underneath `bump`: it rewrites `CANGA_VERSION` and both `sha256`
+values in the *working tree's* kit, with no commit and no branch. It exists
+for the one case `bump` cannot cover - a release cut before this script
+existed, so there is no tag-side copy of it to run `bump` from (the v0.10.2
+pin was moved this way). Like `bump`, it always checks the sums it is given
+against release `vX.Y.Z`'s published digests before writing anything, and
+refuses on any mismatch, a missing digest, a draft or a prerelease, or an
+asset not uploaded under the `github-actions[bot]` identity - proof the
+upload used some workflow's GITHUB_TOKEN in this repository, not proof it
+was the Release workflow specifically (see `check_published`'s own comment
+in `scripts/sbx-kit-pin.sh`) - there is no flag to skip that check.
+
 ### Commit hook
 
 `.canga/hooks/pre-commit` runs `make pre-commit`, which applies every fix a

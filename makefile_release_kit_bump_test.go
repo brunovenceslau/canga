@@ -120,6 +120,11 @@ func TestReleaseKitBump_TagGuard(t *testing.T) {
 		{name: "a single-quote breakout", tag: sentinelPayload("SENTINEL")},
 		{name: "a backtick payload", tag: "v1.0.0`touch SENTINEL`"},
 		{name: "an embedded newline before a shell breakout", tag: newlinePayload("SENTINEL")},
+		// An unbounded TAG fails closed in git ("invalid refspec") rather
+		// than in this guard, but failing closed later is still failing
+		// closed later: the length cap catches it here, before gh, git or
+		// mktemp run at all, the same as every other malformed shape above.
+		{name: "far too long", tag: "v" + strings.Repeat("1", 100000) + ".0.0"},
 	}
 
 	for _, tc := range cases {
@@ -178,8 +183,11 @@ func TestReleaseKitBump_TagGuard(t *testing.T) {
 // digests for check_published, and listing FAKE_TAG as the only published
 // release, so bump's own "does the kit move backwards" check finds nothing
 // newer. Every case's env pins exactly one FAKE_TAG, so a call about any
-// other tag is a fixture bug, not a real refusal, and fails loudly.
+// other tag is a fixture bug, not a real refusal, and fails loudly. It also
+// insists GH_HOST is pinned to github.com, the same regression coverage
+// _fakeGh gives scripts/sbx-kit-pin.sh's other commands.
 const _fakeGhForMake = `#!/bin/sh
+[ "${GH_HOST:-}" = "github.com" ] || { echo "fake gh: GH_HOST is '${GH_HOST:-}', not pinned to github.com" >&2; exit 98; }
 case "$1 $2" in
 "api repos/brunovenceslau/canga/git/ref/tags/"*)
 	tag="${2##*/tags/}"
@@ -233,8 +241,9 @@ func fakeGhForMakeBin(t *testing.T) string {
 
 // buildReleaseDir writes a fixture release's checksums.txt and both
 // canga-sandbox_ archives for _bumpVersion into dir, plus dir/assets.txt in
-// release_assets's own "<name> <digest>" shape, and returns each arch's
-// sha256.
+// release_assets's own shape (a leading "_meta false false" line, then
+// "<name> <digest> <uploader>" per asset), uploaded by _botUploader, and
+// returns each arch's sha256.
 func buildReleaseDir(t *testing.T, dir string) (amd64, arm64 string) {
 	t.Helper()
 
@@ -256,8 +265,12 @@ func buildReleaseDir(t *testing.T, dir string) (amd64, arm64 string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte(checksums(lines...)), 0o644))
 
 	var assets strings.Builder
+	// release_assets (release_jq) always expects this line first: not a
+	// draft, not a prerelease.
+	assets.WriteString(metaLine(false, false) + "\n")
+
 	for _, arch := range []string{_amd64, _arm64} {
-		fmt.Fprintf(&assets, "canga-sandbox_%s_linux_%s.tar.gz sha256:%s\n", _bumpVersion, arch, sums[arch])
+		fmt.Fprintf(&assets, "canga-sandbox_%s_linux_%s.tar.gz sha256:%s %s\n", _bumpVersion, arch, sums[arch], _botUploader)
 	}
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "assets.txt"), []byte(assets.String()), 0o644))
