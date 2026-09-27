@@ -185,10 +185,22 @@ func TestReleaseKitBump_TagGuard(t *testing.T) {
 // newer. Every case's env pins exactly one FAKE_TAG, so a call about any
 // other tag is a fixture bug, not a real refusal, and fails loudly. It also
 // insists GH_HOST is pinned to github.com, the same regression coverage
-// _fakeGh gives scripts/sbx-kit-pin.sh's other commands.
+// _fakeGh gives scripts/sbx-kit-pin.sh's other commands. _bumpVersion is
+// above the script's attestation cutover, so it also answers bump's build
+// provenance calls the way _fakeGh does: `gh --version`, and
+// `gh attestation verify`, logged to $FAKE_RELEASE_DIR/attest.log and
+// passing only for a sha256 listed in $FAKE_RELEASE_DIR/attested.
 const _fakeGhForMake = `#!/bin/sh
 [ "${GH_HOST:-}" = "github.com" ] || { echo "fake gh: GH_HOST is '${GH_HOST:-}', not pinned to github.com" >&2; exit 98; }
 case "$1 $2" in
+"--version ")
+	echo "gh version ` + _fakeGhVersion + ` (2026-09-01)"
+	;;
+"attestation verify")
+	printf '%s\n' "$*" >>"$FAKE_RELEASE_DIR/attest.log"
+	sum=$( (sha256sum "$3" 2>/dev/null || shasum -a 256 "$3") | awk '{ print $1 }')
+	grep -qx "$sum" "$FAKE_RELEASE_DIR/attested" || { echo "fake gh: no attestation found for $3" >&2; exit 1; }
+	;;
 "api repos/brunovenceslau/canga/git/ref/tags/"*)
 	tag="${2##*/tags/}"
 	[ "$tag" = "$FAKE_TAG" ] || { echo "fake gh: unexpected tag: $tag" >&2; exit 99; }
@@ -243,7 +255,8 @@ func fakeGhForMakeBin(t *testing.T) string {
 // canga-sandbox_ archives for _bumpVersion into dir, plus dir/assets.txt in
 // release_assets's own shape (a leading "_meta false false" line, then
 // "<name> <digest> <uploader>" per asset), uploaded by _botUploader, and
-// returns each arch's sha256.
+// dir/attested naming both archives' sums (attested by release.yml, as far
+// as the fake gh is concerned), and returns each arch's sha256.
 func buildReleaseDir(t *testing.T, dir string) (amd64, arm64 string) {
 	t.Helper()
 
@@ -274,6 +287,7 @@ func buildReleaseDir(t *testing.T, dir string) (amd64, arm64 string) {
 	}
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "assets.txt"), []byte(assets.String()), 0o644))
+	attest(t, dir, sums[_amd64], sums[_arm64])
 
 	return sums[_amd64], sums[_arm64]
 }
@@ -400,6 +414,8 @@ func TestReleaseKitBump_CommitsFromValidTag(t *testing.T) {
 	require.Equal(t, 0, run.exit, "stdout: %s\nstderr: %s", run.stdout, run.stderr)
 	assert.Contains(t, run.stdout,
 		"sbx-kit-pin: committed the "+_bumpTag+" kit pin on branch chore/sbx-kit-"+_bumpTag)
+	assert.Equal(t, wantAttestCalls(_bumpTag, _bumpVersion), attestCalls(t, f.releaseDir),
+		"the tag's own script verifies both archives' build provenance, under the target's GH_HOST")
 
 	got := f.git(t, "show", "chore/sbx-kit-"+_bumpTag+":"+_kitSpec)
 	// f.git trims trailing whitespace from `git show`'s output; f.want

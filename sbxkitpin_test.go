@@ -76,25 +76,77 @@ var (
 // also insists GH_HOST is pinned to github.com on every call: the script is
 // meant to export that itself, so every case in this file doubles as a
 // regression test for that pin, not only the cases that mention it by name.
-// FAKE_GH_SLEEP, when set, sleeps that many seconds before answering
-// "release list" - the one hook TestSbxKitPin_CheckPrevious_SignalCleanup
-// uses to give itself a window to signal the script while it is genuinely
-// blocked on gh, not a window guessed at with a timer.
+// FAKE_GH_SLEEP, when set, creates $FAKE_GH/release-list.started and then
+// sleeps that many seconds before answering "release list" - the one hook
+// TestSbxKitPin_CheckPrevious_SignalCleanup uses to signal the script only
+// once it is genuinely blocked on gh, not at a moment guessed with a timer.
+//
+// The build provenance calls (see check_published's attestation step in
+// the script): `gh --version` answers $FAKE_GH/version, or _fakeGhVersion
+// when absent. `gh release download <tag> -R brunovenceslau/canga -D <dir>
+// -p <name>...` copies each named file from $FAKE_GH/<tag>.files/, failing
+// the way gh does when one is missing (unless $FAKE_GH/download-partial
+// exists: then it copies what it has and succeeds, the one way to reach the
+// script's own "the download carries no ..." check). `gh attestation verify <file> ...`
+// appends its whole argument list to $FAKE_GH/attest.log, then succeeds
+// only when the file's sha256 is a line of $FAKE_GH/attested: an
+// attestation, as GitHub stores one, is bound to the artifact's digest.
+// It accepts any flags; the cases that matter assert the exact argument
+// list from attest.log instead, so a flag the script drops is a failing
+// assertion, not a silently lenient fake.
 const _fakeGh = `#!/bin/sh
 [ "${GH_HOST:-}" = "github.com" ] || { echo "fake gh: GH_HOST is '${GH_HOST:-}', not pinned to github.com" >&2; exit 98; }
 case "$1 $2" in
+"--version ")
+	if [ -f "$FAKE_GH/version" ]; then cat "$FAKE_GH/version"; else echo "gh version ` + _fakeGhVersion + ` (2026-09-01)"; fi
+	echo "https://github.com/cli/cli/releases/latest"
+	;;
+"release download")
+	case " $* " in *" -R brunovenceslau/canga "*) ;; *) echo "fake gh: no -R brunovenceslau/canga" >&2; exit 99 ;; esac
+	tag="$3" dest="" prev="" names=""
+	for a in "$@"; do
+		case "$prev" in
+		-D) dest="$a" ;;
+		-p) names="$names $a" ;;
+		esac
+		prev="$a"
+	done
+	[ -n "$dest" ] && [ -n "$names" ] || { echo "fake gh: release download without -D or -p: $*" >&2; exit 99; }
+	for n in $names; do
+		if [ ! -f "$FAKE_GH/$tag.files/$n" ]; then
+			[ -f "$FAKE_GH/download-partial" ] && continue
+			echo "no assets match the file pattern" >&2
+			exit 1
+		fi
+		cat "$FAKE_GH/$tag.files/$n" >"$dest/$n" || exit 1
+	done
+	;;
+"attestation verify")
+	printf '%s\n' "$*" >>"$FAKE_GH/attest.log"
+	sum=$( (sha256sum "$3" 2>/dev/null || shasum -a 256 "$3") | awk '{ print $1 }')
+	[ -f "$FAKE_GH/attested" ] && grep -qx "$sum" "$FAKE_GH/attested" || {
+		echo "fake gh: no attestation found for $3 (sha256:$sum)" >&2
+		exit 1
+	}
+	echo "fake gh: verified $3"
+	;;
 "api repos/brunovenceslau/canga")
 	[ "$3 $4" = "--jq .full_name" ] || { echo "fake gh: unexpected: $*" >&2; exit 99; }
 	[ ! -f "$FAKE_GH/repo-404" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
 	if [ -f "$FAKE_GH/full_name" ]; then cat "$FAKE_GH/full_name"; else echo brunovenceslau/canga; fi
 	;;
 "release list")
-	[ -z "${FAKE_GH_SLEEP:-}" ] || sleep "${FAKE_GH_SLEEP}"
+	[ -z "${FAKE_GH_SLEEP:-}" ] || { : >"$FAKE_GH/release-list.started"; sleep "${FAKE_GH_SLEEP}"; }
 	case " $* " in *" -R brunovenceslau/canga "*) ;; *) echo "fake gh: no -R brunovenceslau/canga" >&2; exit 99 ;; esac
 	case " $* " in *" --exclude-drafts "*) ;; *) echo "fake gh: no --exclude-drafts" >&2; exit 99 ;; esac
 	case " $* " in *" --exclude-pre-releases "*) ;; *) echo "fake gh: no --exclude-pre-releases" >&2; exit 99 ;; esac
 	[ -f "$FAKE_GH/tags" ] || { echo "gh: HTTP 401" >&2; exit 1; }
 	cat "$FAKE_GH/tags"
+	;;
+"api repos/brunovenceslau/canga/immutable-releases")
+	[ "$3 $4" = "--jq .enabled" ] || { echo "fake gh: unexpected: $*" >&2; exit 99; }
+	[ -f "$FAKE_GH/immutable" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+	cat "$FAKE_GH/immutable"
 	;;
 "api repos/brunovenceslau/canga/releases/tags/"*)
 	[ ! -f "$FAKE_GH/api-500" ] || { echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; }
@@ -366,6 +418,112 @@ func (w pinWorld) setAssets(t *testing.T, tag, version, amd64, arm64, uploader s
 	writeFile(t, filepath.Join(w.gh, tag+".assets"), assetsBody(version, amd64, arm64, uploader))
 }
 
+// _attestedFrom and _ghAttestFloor mirror the script's attested_from and
+// gh_attest_floor: the first release that must carry an attestation, and
+// the oldest gh trusted to verify one.
+const (
+	_attestedFrom  = "0.10.5"
+	_ghAttestFloor = "2.93.0"
+)
+
+// _fakeGhVersion is what the fake gh reports for `gh --version` unless a
+// case writes $FAKE_GH/version: new enough for the script's attestation
+// floor (gh_attest_floor in the script).
+const _fakeGhVersion = "2.101.0"
+
+// _releaseWorkflow is the one workflow whose build provenance attestation
+// the script accepts, as the signing certificate's identity spells it
+// (`gh attestation verify --cert-identity`), without the @ref the script
+// appends.
+const _releaseWorkflow = "https://github.com/brunovenceslau/canga/.github/workflows/release.yml"
+
+// serveArchives makes the fake gh at gh serve tag's two canga-sandbox_
+// archives of version for `gh release download`, with bodies of their own,
+// and returns each one's sha256 as bare hex. Nothing is attested yet; see
+// attest.
+func serveArchives(t *testing.T, gh, tag, version string) (amd64, arm64 string) {
+	t.Helper()
+
+	dir := filepath.Join(gh, tag+".files")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	sums := make(map[string]string, 2)
+
+	for _, arch := range []string{_amd64, _arm64} {
+		body := "the " + arch + " archive of " + tag
+		writeFile(t, filepath.Join(dir, "canga-sandbox_"+version+"_linux_"+arch+".tar.gz"), body)
+
+		sum := sha256.Sum256([]byte(body))
+		sums[arch] = hex.EncodeToString(sum[:])
+	}
+
+	return sums[_amd64], sums[_arm64]
+}
+
+// attest makes the fake gh at gh verify a build provenance attestation for
+// every file whose sha256 is one of sums.
+func attest(t *testing.T, gh string, sums ...string) {
+	t.Helper()
+
+	f, err := os.OpenFile(filepath.Join(gh, "attested"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, f.Close()) }()
+
+	for _, sum := range sums {
+		_, err := fmt.Fprintln(f, sum)
+		require.NoError(t, err)
+	}
+}
+
+// attestCalls is every `gh attestation verify` the fake gh at gh answered,
+// in order, with the artifact's path cut down to its file name (the script
+// downloads it into a scratch directory of its own). None is nil.
+func attestCalls(t *testing.T, gh string) []string {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(gh, "attest.log"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+
+	require.NoError(t, err)
+
+	var calls []string
+
+	for line := range strings.Lines(string(data)) {
+		fields := strings.Fields(line)
+		require.GreaterOrEqual(t, len(fields), 3, "attest.log line %q", line)
+		fields[2] = filepath.Base(fields[2])
+		calls = append(calls, strings.Join(fields, " "))
+	}
+
+	return calls
+}
+
+// wantAttestCalls is the exact `gh attestation verify` pair check_published
+// must make for tag's two canga-sandbox_ archives of version: amd64 first,
+// then arm64, each bound to this repository, to exactly release.yml as run
+// for that very tag, and to a GitHub-hosted runner.
+func wantAttestCalls(tag, version string) []string {
+	calls := make([]string, 0, 2)
+	for _, arch := range []string{_amd64, _arm64} {
+		calls = append(calls, wantAttestCall(tag, "canga-sandbox_"+version+"_linux_"+arch+".tar.gz"))
+	}
+
+	return calls
+}
+
+// wantAttestCall is the exact `gh attestation verify` the script makes for
+// one file named name, as attestCalls reports it.
+func wantAttestCall(tag, name string) string {
+	return "attestation verify " + name +
+		" --repo brunovenceslau/canga" +
+		" --cert-identity " + _releaseWorkflow + "@refs/tags/" + tag +
+		" --source-ref refs/tags/" + tag +
+		" --deny-self-hosted-runners"
+}
+
 // leftovers is what the script left in TMPDIR.
 func (w pinWorld) leftovers(t *testing.T) []string {
 	t.Helper()
@@ -607,6 +765,25 @@ func rewriteGhEnvRaw(t *testing.T, bin, version, body string) scrubbedEnv {
 	)
 }
 
+// rewriteGhEnvAttested is rewriteGhEnv for a release that passes every
+// check_published step, build provenance included: the fake gh serves
+// "v"+version's two canga-sandbox_ archives, their digests as uploaded by
+// github-actions[bot], and an attestation for each. It returns each
+// archive's sha256 as bare hex, the sums a checksums.txt must carry.
+func rewriteGhEnvAttested(t *testing.T, bin, version string) (env scrubbedEnv, amd64, arm64 string) {
+	t.Helper()
+
+	gh := t.TempDir()
+	amd64, arm64 = serveArchives(t, gh, "v"+version, version)
+	attest(t, gh, amd64, arm64)
+	writeFile(t, filepath.Join(gh, "v"+version+".assets"), assetsBody(version, "sha256:"+amd64, "sha256:"+arm64, _botUploader))
+
+	return childEnv(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_GH="+gh,
+	), amd64, arm64
+}
+
 // copyKit writes body, or the committed kit, to dir/sbx-kit/spec.yaml.
 func copyKit(t *testing.T, dir, body string) string {
 	t.Helper()
@@ -637,14 +814,14 @@ func TestSbxKitPin_Rewrite(t *testing.T) {
 	bin := fakeGhBin(t)
 	t.Parallel()
 
-	good := checksums(sandboxLine(_sumAMD64, _amd64), sandboxLine(_sumARM64, _arm64))
-
 	// The fixture every success case and every kit-refusal case (all of
-	// which use sums: good, matching this release's own digests) runs
-	// against. A case whose checksums.txt or version is itself malformed
-	// (sandbox_sum fails first) never reaches check_published, so it does
-	// not need a matching release and this fixture is harmless for it too.
-	env := rewriteGhEnv(t, bin, _bumpVersion, _sumAMD64, _sumARM64, _botUploader)
+	// which use sums: good, matching this release's own digests and
+	// attested archives) runs against. A case whose checksums.txt or
+	// version is itself malformed (sandbox_sum fails first) never reaches
+	// check_published, so it does not need a matching release and this
+	// fixture is harmless for it too.
+	env, sumAMD64, sumARM64 := rewriteGhEnvAttested(t, bin, _bumpVersion)
+	good := checksums(sandboxLine(sumAMD64, _amd64), sandboxLine(sumARM64, _arm64))
 
 	t.Run("rewrites the version and both sums, and nothing else", func(t *testing.T) {
 		t.Parallel()
@@ -664,8 +841,8 @@ func TestSbxKitPin_Rewrite(t *testing.T) {
 
 		pin := parseKitPin(kitInstallScript(t, kit))
 		assert.Equal(t, []string{_bumpVersion}, pin.versions)
-		assert.Equal(t, map[string][]string{_amd64: {_sumAMD64}, _arm64: {_sumARM64}}, pin.sums)
-		assert.Equal(t, pinKit(t, string(before), _bumpVersion, _sumAMD64, _sumARM64), string(after),
+		assert.Equal(t, map[string][]string{_amd64: {sumAMD64}, _arm64: {sumARM64}}, pin.sums)
+		assert.Equal(t, pinKit(t, string(before), _bumpVersion, sumAMD64, sumARM64), string(after),
 			"only the three pin values change")
 
 		info, err := os.Stat(kit)
@@ -993,6 +1170,527 @@ func TestSbxKitPin_CheckPrevious(t *testing.T) {
 	})
 }
 
+// attestedWorld is a pinWorld whose kit, committed at HEAD, pins release
+// "v"+version by the real sha256 of two archives the fake gh serves, as
+// uploaded by github-actions[bot] - everything check_published asks of a
+// release except, until a case calls attest, a build provenance
+// attestation.
+type attestedWorld struct {
+	pinWorld
+
+	tag, version, amd64, arm64 string
+}
+
+func newAttestedWorld(t *testing.T, bin, version string) attestedWorld {
+	t.Helper()
+
+	gh := t.TempDir()
+	tag := "v" + version
+	amd64, arm64 := serveArchives(t, gh, tag, version)
+	w := attestedWorld{
+		pinWorld: newPinWorld(t, bin, realKit(t, version, amd64, arm64), false),
+		tag:      tag, version: version, amd64: amd64, arm64: arm64,
+	}
+	// newPinWorld made w.gh a directory of its own; the archives were
+	// served from a scratch one because their sums had to exist before the
+	// kit that pins them could be committed. Move them into place.
+	require.NoError(t, os.Rename(filepath.Join(gh, tag+".files"), filepath.Join(w.gh, tag+".files")))
+	w.setTags(t, tag)
+	w.setAssets(t, tag, version, "sha256:"+amd64, "sha256:"+arm64, _botUploader)
+
+	return w
+}
+
+// attestBoth attests both archives the kit pins.
+func (w attestedWorld) attestBoth(t *testing.T) {
+	t.Helper()
+	attest(t, w.gh, w.amd64, w.arm64)
+}
+
+// nextPatch is the release tag right after version: X.Y.(Z+1).
+func nextPatch(t *testing.T, version string) string {
+	t.Helper()
+
+	parts := strings.Split(version, ".")
+	require.Len(t, parts, 3)
+
+	var patch int
+
+	_, err := fmt.Sscanf(parts[2], "%d", &patch)
+	require.NoError(t, err)
+
+	return fmt.Sprintf("v%s.%s.%d", parts[0], parts[1], patch+1)
+}
+
+// TestSbxKitPin_Attestation is the build provenance cutover: from
+// v0.10.5 on (attested_from in the script), check_published requires each
+// canga-sandbox_ archive to carry a build provenance attestation from
+// release.yml as run for that release's own tag; a release below it is
+// checked by digest and uploader alone, as before. check-previous drives
+// these cases, because its kit is the one the preflight trusts; rewrite and
+// bump share the same check_published (TestSbxKitPin_Bump's own cases run
+// above the cutover, attested, and TestSbxKitPin_Attestation_Rewrite
+// closes the loop). TestSbxKitPin_Attestation_Refusals has the ways an
+// attested release can still be refused.
+//
+// fakeGhBin runs before t.Parallel: see its comment.
+func TestSbxKitPin_Attestation(t *testing.T) {
+	bin := fakeGhBin(t)
+	t.Parallel()
+
+	// Compared as numbers, never as strings: "0.10.10" sorts below
+	// "0.10.5" as text, and "1.0.0" below "0.9.99" is what a
+	// component-by-component string compare gets wrong the other way.
+	for _, tt := range []struct {
+		version  string
+		required bool
+	}{
+		{version: "0.9.99"},
+		{version: "0.10.4"},
+		{version: _attestedFrom, required: true},
+		{version: "0.10.10", required: true},
+		{version: "0.11.0", required: true},
+		{version: "1.0.0", required: true},
+	} {
+		next := nextPatch(t, tt.version)
+
+		t.Run(tt.version+" attested passes, with exactly the expected verification", func(t *testing.T) {
+			t.Parallel()
+
+			w := newAttestedWorld(t, bin, tt.version)
+			w.attestBoth(t)
+
+			res := w.run(t, "check-previous", next)
+			require.Equal(t, 0, res.exit, res.stderr)
+			assert.Contains(t, res.stdout, "pins "+w.tag+", the newest published release below "+next)
+
+			if tt.required {
+				assert.Equal(t, wantAttestCalls(w.tag, tt.version), attestCalls(t, w.gh))
+				assert.Contains(t, res.stdout, "carries a build provenance attestation")
+			} else {
+				assert.Empty(t, attestCalls(t, w.gh), "a release below the cutover is never asked for an attestation")
+				assert.Contains(t, res.stdout, "below v0.10.5")
+			}
+
+			assert.Empty(t, w.leftovers(t))
+		})
+
+		t.Run(tt.version+" without an attestation", func(t *testing.T) {
+			t.Parallel()
+
+			w := newAttestedWorld(t, bin, tt.version)
+
+			res := w.run(t, "check-previous", next)
+			if !tt.required {
+				require.Equal(t, 0, res.exit, res.stderr)
+				assert.Empty(t, attestCalls(t, w.gh))
+
+				return
+			}
+
+			assert.Equal(t, 1, res.exit, res.stdout)
+			assert.Contains(t, res.stderr, "release "+w.tag+"'s canga-sandbox_"+tt.version+"_linux_amd64.tar.gz has no build provenance attestation")
+			assert.Equal(t, wantAttestCalls(w.tag, tt.version)[:1], attestCalls(t, w.gh),
+				"the refusal comes from gh attestation verify itself, on the first archive")
+			assert.Empty(t, w.leftovers(t))
+		})
+	}
+
+	t.Run("a release below the cutover never asks gh its version", func(t *testing.T) {
+		t.Parallel()
+
+		w := newAttestedWorld(t, bin, "0.10.4")
+		// A gh too old to verify anything: irrelevant below the cutover.
+		writeFile(t, filepath.Join(w.gh, "version"), "gh version 2.46.0 (2025-12-13 Ubuntu 2.46.0-4)\n")
+
+		res := w.run(t, "check-previous", "v0.10.5")
+		require.Equal(t, 0, res.exit, res.stderr)
+		assert.Empty(t, attestCalls(t, w.gh))
+	})
+
+	t.Run("a gh exactly at the attestation floor passes", func(t *testing.T) {
+		t.Parallel()
+
+		w := newAttestedWorld(t, bin, _attestedFrom)
+		w.attestBoth(t)
+		writeFile(t, filepath.Join(w.gh, "version"), "gh version 2.93.0 (2026-06-01)\n")
+
+		res := w.run(t, "check-previous", "v0.10.6")
+		require.Equal(t, 0, res.exit, res.stderr)
+		assert.Equal(t, wantAttestCalls(w.tag, w.version), attestCalls(t, w.gh))
+	})
+}
+
+// TestSbxKitPin_Attestation_Refusals is every way a release at the
+// cutover is refused around the attestation itself: gh's own verdict on
+// one archive of two, a gh too old or unreadable to trust, archives the
+// release cannot serve, and downloaded bytes that are not the pinned ones.
+//
+// fakeGhBin runs before t.Parallel: see its comment.
+func TestSbxKitPin_Attestation_Refusals(t *testing.T) {
+	bin := fakeGhBin(t)
+	// A mkdir that always fails, for the one case that puts it first on
+	// PATH: the script's only mkdir is check_attested's (mktemp makes its
+	// own directories). Written before t.Parallel, like fakeGhBin.
+	failingMkdir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(failingMkdir, "mkdir"), []byte("#!/bin/sh\necho 'mkdir: refused' >&2\nexit 1\n"), 0o755))
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name, want string
+		prepare    func(t *testing.T, w attestedWorld)
+	}{
+		{
+			name: "only one archive attested", want: "canga-sandbox_0.10.5_linux_arm64.tar.gz has no build provenance attestation",
+			prepare: func(t *testing.T, w attestedWorld) {
+				t.Helper()
+				attest(t, w.gh, w.amd64)
+			},
+		},
+		{
+			name: "a gh just below the attestation floor", want: "gh 2.92.99 is older than 2.93.0",
+			prepare: func(t *testing.T, w attestedWorld) {
+				t.Helper()
+				w.attestBoth(t)
+				writeFile(t, filepath.Join(w.gh, "version"), "gh version 2.92.99 (2026-01-01)\n")
+			},
+		},
+		{
+			name: "a partial download gh reports as a failure", want: "could not download",
+			prepare: func(t *testing.T, w attestedWorld) {
+				t.Helper()
+				w.attestBoth(t)
+				require.NoError(t, os.Remove(filepath.Join(w.gh, w.tag+".files", "canga-sandbox_0.10.5_linux_arm64.tar.gz")))
+			},
+		},
+		{
+			name: "a partial download gh reports as a success", want: "the download carries no canga-sandbox_0.10.5_linux_arm64.tar.gz",
+			prepare: func(t *testing.T, w attestedWorld) {
+				t.Helper()
+				w.attestBoth(t)
+				require.NoError(t, os.Remove(filepath.Join(w.gh, w.tag+".files", "canga-sandbox_0.10.5_linux_arm64.tar.gz")))
+				writeFile(t, filepath.Join(w.gh, "download-partial"), "")
+			},
+		},
+		{
+			name: "a download directory that cannot be created", want: "could not create",
+			prepare: func(t *testing.T, w attestedWorld) {
+				t.Helper()
+				w.attestBoth(t)
+				w.env[0] = "PATH=" + failingMkdir + string(os.PathListSeparator) + strings.TrimPrefix(w.env[0], "PATH=")
+			},
+		},
+		{
+			name: "a gh whose version cannot be read", want: "could not read gh's version",
+			prepare: func(t *testing.T, w attestedWorld) {
+				t.Helper()
+				w.attestBoth(t)
+				writeFile(t, filepath.Join(w.gh, "version"), "gh version DEV\n")
+			},
+		},
+		{
+			name: "archives the release cannot serve", want: "could not download",
+			prepare: func(t *testing.T, w attestedWorld) {
+				t.Helper()
+				w.attestBoth(t)
+				require.NoError(t, os.RemoveAll(filepath.Join(w.gh, w.tag+".files")))
+			},
+		},
+		{
+			// GitHub's reported digest matches the pin, but the bytes it
+			// actually serves do not: the download is checked against the
+			// pin itself, never trusted because the metadata agreed.
+			name: "downloaded bytes that are not the pinned ones", want: "is sha256:",
+			prepare: func(t *testing.T, w attestedWorld) {
+				t.Helper()
+				w.attestBoth(t)
+
+				other := "other bytes"
+				sum := sha256.Sum256([]byte(other))
+				attest(t, w.gh, hex.EncodeToString(sum[:]))
+				writeFile(t, filepath.Join(w.gh, w.tag+".files", "canga-sandbox_0.10.5_linux_amd64.tar.gz"), other)
+			},
+		},
+	} {
+		t.Run("refuses "+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newAttestedWorld(t, bin, _attestedFrom)
+			tt.prepare(t, w)
+
+			res := w.run(t, "check-previous", "v0.10.6")
+			assert.Equal(t, 1, res.exit, res.stdout)
+			assert.Contains(t, res.stderr, tt.want)
+			assert.Empty(t, w.leftovers(t))
+		})
+	}
+}
+
+// TestSbxKitPin_Attestation_Rewrite is rewrite at the cutover: it writes
+// the pin only for attested archives, and leaves the kit untouched
+// otherwise.
+//
+// fakeGhBin runs before t.Parallel: see its comment.
+func TestSbxKitPin_Attestation_Rewrite(t *testing.T) {
+	bin := fakeGhBin(t)
+	t.Parallel()
+
+	for _, attested := range []bool{true, false} {
+		t.Run(fmt.Sprintf("attested=%t", attested), func(t *testing.T) {
+			t.Parallel()
+
+			gh := t.TempDir()
+			amd64, arm64 := serveArchives(t, gh, "v0.10.5", _attestedFrom)
+			writeFile(t, filepath.Join(gh, "v0.10.5.assets"), assetsBody(_attestedFrom, "sha256:"+amd64, "sha256:"+arm64, _botUploader))
+
+			if attested {
+				attest(t, gh, amd64, arm64)
+			}
+
+			env := childEnv(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_GH="+gh)
+			dir := t.TempDir()
+			kit := copyKit(t, dir, "")
+			before, err := os.ReadFile(kit)
+			require.NoError(t, err)
+
+			line := func(sum, arch string) string {
+				return sum + "  canga-sandbox_0.10.5_linux_" + arch + ".tar.gz"
+			}
+			sums := writeFile(t, filepath.Join(dir, "checksums.txt"), line(amd64, _amd64)+"\n"+line(arm64, _arm64)+"\n")
+			res := runPin(t, dir, env, "rewrite", _attestedFrom, sums)
+
+			after, err := os.ReadFile(kit)
+			require.NoError(t, err)
+
+			if attested {
+				require.Equal(t, 0, res.exit, res.stderr)
+				assert.Equal(t, pinKit(t, string(before), _attestedFrom, amd64, arm64), string(after))
+				assert.Equal(t, wantAttestCalls("v0.10.5", _attestedFrom), attestCalls(t, gh))
+			} else {
+				assert.Equal(t, 1, res.exit, res.stdout)
+				assert.Contains(t, res.stderr, "has no build provenance attestation")
+				assert.Equal(t, string(before), string(after), "a refused rewrite must not touch the kit")
+			}
+		})
+	}
+}
+
+// TestSbxKitPin_CheckAttestation is the Release workflow's pre-publish
+// check: each local file must verify against release.yml as run for the
+// tag, with exactly the flags the kit pin checks use, and under the same
+// gh floor.
+//
+// fakeGhBin runs before t.Parallel: see its comment.
+func TestSbxKitPin_CheckAttestation(t *testing.T) {
+	bin := fakeGhBin(t)
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name, version, want string
+		attestSecond        bool
+		missing             bool
+		args                []string
+		exit                int
+	}{
+		{name: "every file attested", attestSecond: true, want: "checksums.txt carries a build provenance attestation"},
+		{name: "one file not attested", exit: 1, want: "checksums.txt has no build provenance attestation"},
+		{name: "a gh below the floor", attestSecond: true, version: "gh version 2.46.0 (2025-12-13)\n", exit: 1, want: "gh 2.46.0 is older than 2.93.0"},
+		{name: "a file that does not exist", attestSecond: true, missing: true, exit: 1, want: "not found"},
+		{name: "no file at all", args: []string{"check-attestation", "v0.10.5"}, exit: 1, want: "usage: check-attestation"},
+		{name: "not a tag", args: []string{"check-attestation", _attestedFrom, "x"}, exit: 1, want: "not a release tag"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newPinWorld(t, bin, realKit(t, _prevVersion, _sumAMD64, _sumARM64), false)
+			dist := t.TempDir()
+			first := writeFile(t, filepath.Join(dist, "canga-sandbox_0.10.5_linux_amd64.tar.gz"), "first")
+			second := writeFile(t, filepath.Join(dist, "checksums.txt"), "second")
+
+			for _, pair := range []struct {
+				body string
+				on   bool
+			}{{"first", true}, {"second", tt.attestSecond}} {
+				if pair.on {
+					sum := sha256.Sum256([]byte(pair.body))
+					attest(t, w.gh, hex.EncodeToString(sum[:]))
+				}
+			}
+
+			if tt.version != "" {
+				writeFile(t, filepath.Join(w.gh, "version"), tt.version)
+			}
+
+			if tt.missing {
+				require.NoError(t, os.Remove(second))
+			}
+
+			args := tt.args
+			if args == nil {
+				args = []string{"check-attestation", "v0.10.5", first, second}
+			}
+
+			res := w.run(t, args...)
+			assert.Equal(t, tt.exit, res.exit, res.stderr)
+			assert.Contains(t, res.stdout+res.stderr, tt.want)
+			assert.Empty(t, w.leftovers(t))
+
+			if tt.exit == 0 {
+				assert.Equal(t, []string{
+					wantAttestCall("v0.10.5", "canga-sandbox_0.10.5_linux_amd64.tar.gz"),
+					wantAttestCall("v0.10.5", "checksums.txt"),
+				}, attestCalls(t, w.gh))
+			}
+		})
+	}
+}
+
+// TestSbxKitPin_CheckImmutable is release-preflight's immutable-releases
+// check: on passes, off refuses, and a token GitHub will not answer (a
+// 404, which is what a non-admin token gets) refuses too, never read as on.
+//
+// fakeGhBin runs before t.Parallel: see its comment.
+func TestSbxKitPin_CheckImmutable(t *testing.T) {
+	bin := fakeGhBin(t)
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name, answer, want string
+		noAnswer           bool
+		args               []string
+		exit               int
+	}{
+		{name: "on", answer: "true\n", want: "has immutable releases on"},
+		{name: "off", answer: "false\n", exit: 1, want: "does not have immutable releases on (GitHub says enabled=false)"},
+		{name: "an empty answer", answer: "", exit: 1, want: "enabled=nothing"},
+		{name: "a token GitHub will not answer", noAnswer: true, exit: 1, want: "only to a token with admin access"},
+		{name: "an argument", answer: "true\n", args: []string{"extra"}, exit: 1, want: "usage: check-immutable"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newPinWorld(t, bin, realKit(t, _prevVersion, _sumAMD64, _sumARM64), false)
+			if !tt.noAnswer {
+				writeFile(t, filepath.Join(w.gh, "immutable"), tt.answer)
+			}
+
+			res := w.run(t, append([]string{"check-immutable"}, tt.args...)...)
+			assert.Equal(t, tt.exit, res.exit, res.stderr)
+			assert.Contains(t, res.stdout+res.stderr, tt.want)
+		})
+	}
+}
+
+// scriptFunc is the text of one shell function from scripts/sbx-kit-pin.sh,
+// from its "name() {" line to the first line that is exactly "}", so a
+// test can run that very function, not a copy that could drift from it.
+func scriptFunc(t *testing.T, name string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(_pinScript)
+	require.NoError(t, err)
+
+	text := string(data)
+	start := strings.Index(text, "\n"+name+"() {\n")
+	require.NotEqual(t, -1, start, "no function %s in the script", name)
+
+	end := strings.Index(text[start:], "\n}\n")
+	require.NotEqual(t, -1, end, "function %s never ends", name)
+
+	return text[start+1 : start+end+3]
+}
+
+// TestSbxKitPin_VersionAtLeast runs the script's own version_at_least (and
+// the die it refuses through) directly: numeric, per component, and closed
+// on failure - an awk that crashes or answers nothing is a refusal, never
+// "below", which is what would skip the attestation check.
+//
+// The fake awks are written before t.Parallel: see fakeGhBin's comment.
+func TestSbxKitPin_VersionAtLeast(t *testing.T) {
+	badAwks := []struct{ name, awk, dir string }{
+		{name: "an awk that crashes", awk: "#!/bin/sh\nexit 2\n"},
+		{name: "an awk that answers nothing", awk: "#!/bin/sh\nexit 0\n"},
+		{name: "an awk that answers something else", awk: "#!/bin/sh\necho maybe\n"},
+	}
+	for i := range badAwks {
+		badAwks[i].dir = t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(badAwks[i].dir, "awk"), []byte(badAwks[i].awk), 0o755))
+	}
+
+	t.Parallel()
+
+	lib := scriptFunc(t, "die") + scriptFunc(t, "version_at_least")
+
+	run := func(t *testing.T, path, a, b string) pinRun {
+		t.Helper()
+
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "sh", "-c", lib+`version_at_least "$1" "$2"`, "sh", a, b)
+		cmd.Env = childEnv(os.Environ(), "PATH="+path).asEnv()
+
+		var stdout, stderr bytes.Buffer
+
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+
+		var res pinRun
+
+		if err := cmd.Run(); err != nil {
+			var exit *exec.ExitError
+			require.ErrorAs(t, err, &exit, stderr.String())
+			res.exit = exit.ExitCode()
+		}
+
+		res.stdout, res.stderr = stdout.String(), stderr.String()
+
+		return res
+	}
+
+	for _, tt := range []struct {
+		a, b string
+		ge   bool
+	}{
+		{a: _attestedFrom, b: _attestedFrom, ge: true},
+		{a: "0.10.4", b: _attestedFrom},
+		{a: "0.10.10", b: _attestedFrom, ge: true},
+		{a: "0.9.99", b: _attestedFrom},
+		{a: "0.11.0", b: _attestedFrom, ge: true},
+		{a: "1.0.0", b: "0.99.99", ge: true},
+		{a: "0.99.99", b: "1.0.0"},
+		{a: _ghAttestFloor, b: _ghAttestFloor, ge: true},
+		{a: "2.92.99", b: _ghAttestFloor},
+		{a: "2.101.0", b: _ghAttestFloor, ge: true},
+	} {
+		t.Run(tt.a+" vs "+tt.b, func(t *testing.T) {
+			t.Parallel()
+
+			want := 1
+			if tt.ge {
+				want = 0
+			}
+
+			res := run(t, os.Getenv("PATH"), tt.a, tt.b)
+			assert.Equal(t, want, res.exit, res.stderr)
+			assert.Empty(t, res.stderr)
+		})
+	}
+
+	for _, tt := range badAwks {
+		t.Run("refuses "+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// 0.10.4 vs 0.10.5 is "below": a fail-open version_at_least
+			// would return 1 here too, silently, which is exactly what
+			// skips the attestation; only the refusal message tells the
+			// two apart.
+			res := run(t, tt.dir+string(os.PathListSeparator)+os.Getenv("PATH"), "0.10.4", _attestedFrom)
+			assert.Equal(t, 1, res.exit)
+			assert.Contains(t, res.stderr, "could not compare versions 0.10.4 and 0.10.5")
+		})
+	}
+}
+
 // TestSbxKitPin_CheckClobber refuses to rebuild a release whose archives a
 // pushed or merged kit bump already pins.
 //
@@ -1122,6 +1820,20 @@ func newBumpWorldFrom(t *testing.T, inherited []string, bin string) bumpWorld {
 	w.setTags(t, _bumpTag, _bumpPrevTag)
 	w.setAssets(t, _bumpTag, _bumpVersion, "sha256:"+w.amd64, "sha256:"+w.arm64, _botUploader)
 
+	// _bumpVersion is above the script's attestation cutover, so bump
+	// downloads both archives from the release and verifies their build
+	// provenance too: serve the same bytes dist/ holds, attested.
+	files := filepath.Join(w.gh, _bumpTag+".files")
+	require.NoError(t, os.MkdirAll(files, 0o755))
+
+	for _, arch := range []string{_amd64, _arm64} {
+		body, err := os.ReadFile(w.archive(arch))
+		require.NoError(t, err)
+		writeFile(t, filepath.Join(files, filepath.Base(w.archive(arch))), string(body))
+	}
+
+	attest(t, w.gh, w.amd64, w.arm64)
+
 	return w
 }
 
@@ -1246,6 +1958,10 @@ func bumpRefusals() []bumpRefusal {
 			t.Helper()
 			w.setAssets(t, _bumpTag, _bumpVersion, "sha256:"+w.amd64, "sha256:"+w.arm64, "")
 		}},
+		{name: "a release without a build provenance attestation", want: "no build provenance attestation", prepare: func(t *testing.T, w *bumpWorld) {
+			t.Helper()
+			require.NoError(t, os.Remove(filepath.Join(w.gh, "attested")))
+		}},
 		{name: "a release list gh cannot read", want: "could not list", prepare: func(t *testing.T, w *bumpWorld) {
 			t.Helper()
 			require.NoError(t, os.Remove(filepath.Join(w.gh, "tags")))
@@ -1324,6 +2040,8 @@ func TestSbxKitPin_Bump(t *testing.T) {
 
 		arm64Asset := "canga-sandbox_" + _bumpVersion + "_linux_arm64.tar.gz"
 		assert.Contains(t, res.stdout, "release "+_bumpTag+" serves "+arm64Asset+" as sha256:"+w.arm64)
+		assert.Equal(t, wantAttestCalls(_bumpTag, _bumpVersion), attestCalls(t, w.gh),
+			"bump verifies both archives' build provenance, with exactly these flags")
 		assert.Contains(t, res.stdout, "git push -u origin "+w.branch)
 		assert.Contains(t, res.stdout, "gh pr create --base main --head "+w.branch)
 		w.assertUntouched(t)
@@ -1700,13 +2418,20 @@ func TestSbxKitPin_CheckPrevious_SignalCleanup(t *testing.T) {
 
 			require.NoError(t, cmd.Start())
 
-			// Waits for the scratch directory to actually exist under
-			// TMPDIR before signalling: sending the signal on a timer
-			// alone would race the script's own mktemp -d and could pass
-			// for the wrong reason (nothing to clean up yet).
+			// Waits until the script is blocked inside the slow gh call
+			// before signalling. The scratch directory existing is not
+			// enough: it appears the moment mktemp -d returns, a few
+			// commands BEFORE trap_cleanup_dir installs the traps, and a
+			// signal landing in between kills the script by its default
+			// disposition (exit -1, the directory left behind) - a
+			// failure of the test's timing, not of the traps. By the time
+			// gh runs, the traps are in place.
 			require.Eventually(t, func() bool {
-				return len(w.leftovers(t)) > 0
-			}, 5*time.Second, 20*time.Millisecond, "the scratch directory never appeared under TMPDIR")
+				_, err := os.Stat(filepath.Join(w.gh, "release-list.started"))
+
+				return err == nil
+			}, 5*time.Second, 20*time.Millisecond, "the script never reached gh release list")
+			require.NotEmpty(t, w.leftovers(t), "the scratch directory exists while gh runs")
 
 			require.NoError(t, cmd.Process.Signal(tt.sig))
 

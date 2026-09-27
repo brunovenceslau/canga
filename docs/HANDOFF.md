@@ -391,7 +391,8 @@ brunovenceslau/canga/.github/workflows/release.yml` against each asset. The
 Release workflow does not currently generate an attestation
 (`actions/attest-build-provenance` or GoReleaser's own signing step is not
 wired in yet), so this is real, not-yet-started work, not a one-line
-follow-up.
+follow-up. Resolved in "Release provenance: attestation, draft-first,
+immutable releases (PR #36)" below.
 
 ### Round-1 ship-gate fixes: the rest (2026-09-27)
 
@@ -508,7 +509,9 @@ the uploader-identity gap itself (pending item 3 above).
 - **Pending item 3** (P3, per the operator decision quoted above): bind
   `canga-sandbox_` assets to `release.yml` specifically via build provenance
   attestation. Not started; the Release workflow does not yet produce an
-  attestation for `check_published` to verify.
+  attestation for `check_published` to verify. Resolved in "Release
+  provenance: attestation, draft-first, immutable releases (PR #36)" below,
+  for every release from v0.10.5 on.
 - HANDOFF residual 2 from the PR #34 entry (GNU Make's own `TAG=$(shell
   ...)` argv-expansion sharp edge) is unrelated to this PR's scope and
   remains open, unchanged.
@@ -538,3 +541,467 @@ the uploader-identity gap itself (pending item 3 above).
   adding a test-only delay hook to production code, which was deliberately
   not added. Not a gap in the fix itself, a gap in how far a real-signal
   test can reach without instrumenting the script.
+
+## Release provenance: attestation, draft-first, immutable releases (PR #36)
+
+Resolves pending item 3 from the PR #35 entry above: `check_published` now
+binds `canga-sandbox_` archives to `release.yml` itself, not only to "some
+workflow in this repository", for every release from v0.10.5 on - bound to
+whatever commit the tag named when the release was built, and matched by
+tag name alone, so the `v*` tag ruleset (see "Left open" below) is what
+keeps that binding meaningful.
+
+### Operator decisions
+
+- (2026-09-26, choosing how releases get provenance, verbatim pt-BR):
+  "Attestation + immutable (Recomendado)". The Release workflow creates the
+  release as a draft, uploads the assets, generates a build provenance
+  attestation (`actions/attest-build-provenance`, pinned by full commit
+  SHA), then publishes; immutable releases get enabled on the repository.
+- (2026-09-27, verbatim pt-BR): "Reescrever agora + fechar na P3
+  (Recomendado)". The uploader-identity wording was corrected in PR #35;
+  this PR closes the gap itself: `check_published` verifies the
+  attestation with `gh attestation verify`, bound to release.yml. The
+  decision named `--signer-workflow`; the ship gate's round 1 found that
+  flag is a prefix match (below), so the binding uses `--cert-identity`
+  instead - the exact form of the same identity. Put to the operator with
+  this PR, since it departs from the flag the decision's wording named
+  (2026-09-27, verbatim pt-BR): "Concordo, usar --cert-identity
+  (Recomendado)".
+- (2026-09-27, deciding how releases published before any attestation
+  existed are treated, verbatim pt-BR): "Corte fixo na v0.10.5
+  (Recomendado)". A fixed constant in the script (`attested_from="0.10.5"`):
+  releases below it pass with the digest and uploader checks as before;
+  v0.10.5 onward REQUIRE a valid attestation. No bypass flag; the constant
+  changes only by a reviewed PR.
+- (2026-09-27, deciding who enables immutable releases and when, verbatim
+  pt-BR): "Eu ligo após o merge da P3 (Recomendado)". The orchestrator
+  enables immutable releases through the API AFTER this PR merges and
+  BEFORE v0.10.5 is tagged. This PR changes no repository setting.
+- (2026-09-27, deciding whether to apply the `v*` tag ruleset proposed
+  under "Left open" below, verbatim pt-BR): "Sim, eu aplico após a P3
+  (Recomendado)". Decided, not yet applied: the orchestrator applies the
+  ruleset through the API together with enabling immutable releases,
+  AFTER this PR merges and BEFORE v0.10.5 is tagged. This PR changes no
+  repository setting; the payload is kept under "Left open" for that step
+  to use.
+
+### Design
+
+- **Draft first, public last** (`.github/workflows/release.yml`,
+  `.goreleaser.yml`). GoReleaser creates the release as a draft
+  (`release.draft: true`) and uploads every asset to it; the workflow then
+  attests, verifies the attestation, and only then publishes the draft by
+  id. Why the order matters: an immutable release refuses any asset change
+  once published, so publish-then-upload would fail on its own upload
+  under immutability; a draft stays editable until the workflow publishes
+  it. Measured against GoReleaser's source (v2.18.2, which `version: "~>
+  v2"` resolved to on 2026-09-27 and which `release.yml` now pins exactly,
+  `internal/client/github.go`): GoReleaser already
+  creates every release as a draft while uploading and un-drafts it in
+  `PublishRelease`, which returns early, leaving the draft, when
+  `release.draft` is set. It finds an existing release with
+  `GetReleaseByTag`, which never returns a draft, so a rerun after a failed
+  run would add a second draft for the same tag;
+  `release.replace_existing_draft: true` deletes the previous draft (matched
+  by name, which `release.name_template: "{{ .Tag }}"` pins to the tag,
+  the same as GoReleaser's default in `internal/pipe/release/release.go`,
+  written out so the name and the publish step's tag match cannot drift)
+  first. `changelog.use: github-native`
+  is unaffected: the notes are generated from the tag range, not from the
+  release's draft state. GoReleaser also refuses outright to update an
+  immutable release ("already exists and is immutable"), so under
+  immutability a rerun of a published tag fails before uploading anything.
+- **Publish by id, not by tag.** The publish step lists the repository's
+  releases, requires exactly one draft whose `tag_name` is the pushed tag,
+  compares the draft's assets with `dist/` (the exact set of names, each
+  with the `sha256:` digest GitHub serves for it), and only then PATCHes
+  that id to `draft=false`, checking the answer is a published release for
+  the same tag. `gh release edit <tag>` would fall back to the first draft
+  matching the tag without saying so. The tag reaches jq only through
+  `--arg`, never spliced into the filter. `immutable` is not read from that
+  PATCH response (round-2 ship-gate finding R2-L2, security-auditor Low: a
+  single PATCH response is not trusted for a setting that can lag behind
+  the publish call): the step re-GETs the release by id, up to 6 times
+  with a short sleep, until it reports `draft == false`, the same tag, and
+  `immutable == true`, and only then repeats the asset name+digest
+  comparison against `dist/` from that final GET - race-free, since
+  nothing can change an immutable release's assets. It fails red only once
+  the retry budget is exhausted.
+- **Attestation subjects.** `subject-path` over `dist/canga-host_*.tar.gz`,
+  `dist/canga-sandbox_*.tar.gz` and `dist/checksums.txt`, rather than
+  `subject-checksums: dist/checksums.txt`: the latter attests only the
+  files `checksums.txt` lists, not `checksums.txt` itself, and hashes a
+  file's claims rather than the bytes on disk.
+- **Pinned action.** `actions/attest-build-provenance` v4.2.2, commit
+  `4d101475d8b20a2381f78447822ac1eab6504dd8`, resolved read-only on
+  2026-09-27 with `gh api repos/actions/attest-build-provenance/releases/latest`
+  and `gh api repos/actions/attest-build-provenance/git/ref/tags/v4.2.2`
+  (a lightweight tag, so the ref's sha is the commit). v4 is a thin wrapper
+  over `actions/attest`, which it pins by SHA itself (v4.2.1, `508db95`).
+- **Permissions.** The workflow level is `permissions: {}`; the one job
+  gets `contents: write` (as before), `id-token: write` (the OIDC token the
+  Sigstore signing certificate is issued against) and `attestations: write`
+  (store the attestation), and nothing else. `artifact-metadata: write` is
+  not needed: it is for storage records, which only apply with
+  `push-to-registry`.
+- **Verify before publishing.** The workflow runs `scripts/sbx-kit-pin.sh
+  check-attestation <tag> <files>` on every attested file while the release
+  is still a draft: the same `attestation_verify` function, flags and gh
+  floor the kit pin checks use, from one definition. Under immutability a
+  published release with an attestation that does not match the policy
+  could never be pinned or fixed in place; this catches it while a rerun
+  still costs nothing. It is a same-job, same-disk check: it proves the
+  attestation and the policy agree about the bytes this run built, which
+  catches configuration and policy mistakes, not tampering. The
+  independent check is `check_attested`, later, which downloads the
+  published archives from GitHub and verifies those.
+- **The script's check** (`check_attested` in `scripts/sbx-kit-pin.sh`,
+  run by `check_published` after its digest and uploader checks, for a
+  version at or above `attested_from`). It downloads both
+  `canga-sandbox_` archives into the caller's trap-cleaned scratch
+  directory (`gh attestation verify` needs the bytes: an attestation is
+  looked up by the artifact's sha256), refuses unless each download is the
+  pinned sha256, then runs `gh attestation verify <file> --repo
+  brunovenceslau/canga --cert-identity
+  https://github.com/brunovenceslau/canga/.github/workflows/release.yml@refs/tags/<tag>
+  --source-ref refs/tags/<tag> --deny-self-hosted-runners`. One path for
+  all three callers (`rewrite`, `check-previous`, `bump`), even though
+  `bump` already holds the archives: simpler than two ways to get the
+  bytes, and the download is checked against the same pin. `rewrite` gained
+  a scratch directory of its own for it, removed before the kit's temp
+  file exists, so each has exactly one trap guarding it at a time.
+- **`--cert-identity`, not `--signer-workflow`.** Measured in gh's source
+  (v2.101.0, `pkg/cmd/attestation/verify/policy.go`,
+  `validateSignerWorkflow`): a `--signer-workflow` value becomes `^` + the
+  quoted URL, a regular expression anchored only at the start, so it is a
+  prefix match against the signing certificate's workflow identity
+  (`https://github.com/<repo>/<workflow path>@<ref>`); even with the
+  `@refs/tags/<tag>` appended, an identity that merely starts with it
+  passes. `--cert-identity` is an exact string comparison (sigstore-go
+  v1.3.0, `SubjectAlternativeNameMatcher.Verify`, `actualCert.SubjectAlternativeName
+  != s.SubjectAlternativeName`); gh makes it mutually exclusive with
+  `--signer-workflow`. Live (2026-09-27, gh 2.101.0, gh's own attested
+  v2.101.0 linux arm64 archive): `--cert-identity
+  https://github.com/cli/cli/.github/workflows/deployment.yml@refs/heads/trunk`
+  with `--source-ref refs/heads/trunk --deny-self-hosted-runners` exits 0;
+  the same identity truncated to `...@refs/heads/trun`, truncated to
+  `.../deployment.y`, with a wrong ref, or with a wrong workflow file each
+  exit 1; and, for contrast, `--signer-workflow
+  cli/cli/.github/workflows/deployment.y` exits 0 - the prefix match,
+  demonstrated. `--source-ref` stays: the identity names the workflow's
+  ref, and `--source-ref` pins the source repository's ref independently.
+- **gh version floor: 2.93.0**, checked by the script before any
+  attestation call (`gh_can_attest`), and only when one is verified, so an
+  older gh still checks the releases below the cutover. From gh's release
+  notes (read-only, `gh api repos/cli/cli/releases`): 2.49.0 introduced
+  `gh attestation`, 2.67.0 fixed a false exit 0 when no attestation of the
+  requested predicate type existed, 2.68.0 added `--source-ref` (checked in
+  the v2.68.0 source: `--cert-identity`, `--source-ref` and
+  `--deny-self-hosted-runners` are all there), and 2.93.0 stopped sending
+  the GitHub token to TUF repository mirrors (GHSA-8xvp-7hj6-mcj9). The
+  first cut of this PR used 2.97.0, for 2.97.0's fix of `--signer-workflow`
+  regex escaping; with `--cert-identity` that fix no longer applies, and
+  2.93.0 is the newest release whose fix does. The Release workflow's
+  pre-publish check goes through the same script, so the runner image's gh
+  is held to the same floor.
+- **Cutover comparison.** `version_at_least` compares X.Y.Z component by
+  component as numbers in POSIX awk, never as text (0.10.10 is above
+  0.10.5). It fails closed: awk prints `ge` or `lt`, and anything else
+  (awk missing, crashing, or silent) is a refusal. Reading awk's exit
+  status alone would have taken a crash for "below the cutover", which
+  skips the attestation check.
+- **Immutable releases, enforced where a token can see them.** `GET
+  repos/<repo>/immutable-releases` answers only a token with admin access
+  (measured 2026-09-27: the operator's token reads
+  `{"enabled":false,"enforced_by_owner":false}` for this repository, and
+  gets 404 for `octocat/Hello-World`, where it is not an admin). A
+  workflow's `GITHUB_TOKEN` cannot be granted repository administration,
+  so the workflow cannot check it before publishing. The enforcement point
+  is therefore `make release-preflight`, which now runs
+  `scripts/sbx-kit-pin.sh check-immutable` first, on the operator's token,
+  and refuses unless it reads `true` (a 404 or any other answer is a
+  refusal). Backstop in the workflow: after publishing, the publish step
+  goes red if the release GitHub returns is not `immutable: true` (the
+  field is on every release object; v0.10.4 reads `false`). That is
+  detection, not prevention: the release is already public by then.
+- **One run per tag.** `concurrency: release-${{ github.ref }}`,
+  `cancel-in-progress: false`: a second run of the same tag queues instead
+  of deleting the first run's draft through `replace_existing_draft`, and
+  no run is cancelled halfway through an upload.
+- **check-clobber stays.** A draft left by a failed run answers 404 by
+  tag, so check-clobber treats it as "no release yet", which is right: no
+  kit can pin a draft. Under immutability GitHub itself refuses to replace
+  a published release's assets, `SBX_KIT_ALLOW_CLOBBER` included; the check
+  still refuses first, with the reason and the way out (a new patch
+  release). Only comments changed.
+- **Makefile unchanged.** `release-kit-bump` runs the tag's own
+  `scripts/sbx-kit-pin.sh bump`, which does its own download for the
+  attestation check. A tag cut before this PR carries a script without the
+  check, which is fine: every such tag is below the cutover.
+
+### Tests
+
+(Written for the first cut; see "Ship-gate round 1 fixes" below for the
+flag, floor and test changes since.) `sbxkitpin_test.go`'s fake gh now
+answers `gh --version`, `gh release
+download` (from `$FAKE_GH/<tag>.files/`), and `gh attestation verify`,
+which logs its whole argument list and passes only for a file whose sha256
+is listed in `$FAKE_GH/attested`. `TestSbxKitPin_Attestation` covers:
+releases below the cutover pass without any attestation call (0.9.99,
+0.10.4, and 0.10.4 with a gh 2.46.0 that could not verify one); at or above
+it (0.10.5, 0.10.10, 0.11.0, 1.0.0) a verifying attestation passes with the
+exact expected `gh attestation verify` argument lists, and a missing one is
+refused by gh's own failure on the first archive; one archive attested and
+not the other; gh below the floor; an unreadable gh version; archives the
+release cannot serve; downloaded bytes that differ from the pin (attested,
+so only the sha256 check can catch it); and `rewrite` at the cutover,
+attested and not. `TestSbxKitPin_Bump` now runs above the cutover with
+attested archives, asserts the exact calls, and gained a "no attestation"
+refusal; `TestReleaseKitBump_CommitsFromValidTag` asserts the tag's own
+script made the exact calls through the Makefile target. Each was
+reverted in a scratch copy, one mutation at a time (skip the attestation
+step, drop `--signer-workflow`, drop the `@ref` and `--source-ref`, drop
+`--deny-self-hosted-runners`, compare versions as text, skip the download's
+sha256 check, skip the gh floor), and the matching tests failed for each.
+
+Read-only checks against GitHub (2026-09-27): `scripts/sbx-kit-pin.sh
+check-previous v0.10.5` passes at this PR's HEAD (the kit pins v0.10.4,
+below the cutover, "checked by digest and uploader only"). With gh 2.101.0
+(built from source into a scratch directory; the sandbox's own gh is
+2.46.0, too old for any attestation command), `gh attestation verify` on
+the real v0.10.4 amd64 archive answers `HTTP 404` from
+`repos/brunovenceslau/canga/attestations/sha256:a91c3bd8...`, as expected
+for an unattested release, and a scratch copy of the script with the
+cutover moved to 0.10.4 refuses it with the new message. As a positive
+control of the exact flag shape, gh's own attested v2.101.0 linux arm64
+archive verifies with `--signer-workflow
+cli/cli/.github/workflows/deployment.yml@refs/heads/trunk --source-ref
+refs/heads/trunk --deny-self-hosted-runners`, and fails with a wrong ref
+or a wrong workflow file.
+
+### Flaky test fixed on the way: TestSbxKitPin_CheckPrevious_SignalCleanup
+
+`make ci` failed once on this branch with the SIGINT case exiting -1 (killed
+by the signal's default disposition) after 0.09s, its scratch directory left
+behind. Not a trap regression: the test signalled as soon as the scratch
+directory appeared, but `mktemp -d` returns a few commands before
+`trap_cleanup_dir` installs the traps, so under load the signal could land
+in between. Reproduced deterministically in a scratch copy by widening that
+window (`sleep 1` between the two lines): the old test failed exactly as in
+CI. Fixed in the test, not the script: the fake gh now creates
+`release-list.started` before its deliberate sleep, and the test signals
+only once that marker exists (the script is then inside gh, with its traps
+in place). With the widened window the new test passes; with the HUP/INT/TERM
+traps removed from `trap_cleanup_dir` it still fails, so it still proves the
+fix it was written for. Static-tool question: no linter sees a test that
+waits on the wrong readiness signal; the lesson is to make a fake announce
+the exact state a test needs, rather than inferring it from a side effect
+that happens earlier.
+
+### Ship-gate round 1 fixes (2026-09-27)
+
+Round 1 of the ship gate was GO with no must-fix finding; every
+non-blocking finding below is applied, per the house rule that they are
+included by default.
+
+- [security-auditor Low] `--signer-workflow` is a prefix match: replaced by
+  `--cert-identity` in the script (`attestation_verify`) and, through the
+  new `check-attestation` subcommand, in the workflow. See the design
+  bullet above for the measurements.
+- [security-auditor Low] Added the per-tag `concurrency` group; the
+  publish step now re-checks the draft's asset set and digests against
+  `dist/` before publishing, and checks the PATCH answer (`draft == false`,
+  same `tag_name`).
+- [security-auditor Low] "Enable immutable releases before v0.10.5" is now
+  enforced by `make release-preflight` (`check-immutable`), with a
+  post-publish backstop in the workflow; see the design bullet above for
+  why the workflow cannot check it first.
+- [security-auditor Low] GoReleaser is pinned to v2.18.2 in `release.yml`
+  instead of `~> v2`.
+- [security-auditor Low] A tag ruleset for `v*`: not implemented (a
+  repository setting, the operator's call); proposed under "Left open".
+- [security-auditor Info] `version_at_least` fails closed; the workflow's
+  pre-publish check now has the gh floor (it goes through the script); the
+  publish step's jq takes the tag through `--arg`.
+- [code-reviewer Optional] `release.name_template: "{{ .Tag }}"` pinned
+  explicitly; the same-job verification and the draft-mutable window are
+  written down (the design bullet above and "Left open" below).
+- [code-reviewer Nit, test-engineer] New tests: the gh floor boundary
+  (2.93.0 passes, 2.92.99 refuses); `version_at_least` run directly, taken
+  from the script's own text (numeric edges, and an awk that crashes, says
+  nothing, or says something else: each a refusal); `check_attested`'s
+  `mkdir` failing; a partial download that gh reports as a failure, and
+  one it reports as a success (the script's own "the download carries no
+  ..." check); `check-attestation` (exact argument lists, a file not
+  attested, a gh below the floor, a missing file, usage); `check-immutable`
+  (on, off, empty, a 404, usage). Each fails with its fix reverted in a
+  scratch copy.
+
+### Left open
+
+- **Tag ruleset for `v*` (decided, applied post-merge).** Today anyone with
+  push access can create, move or delete a `v*` tag, and a tag push is what
+  starts a release - and, per round-2 ship-gate finding R2-L1
+  (security-auditor Low, "Release provenance" section above), what a build
+  provenance attestation cannot restrict on its own: it binds bytes to
+  `release.yml` at whatever commit the tag named when the release was
+  built, not to reviewed content, and the check matches that binding by
+  tag name alone, so whoever can push a tag could tag a commit with a
+  modified `release.yml`, or move an existing tag to one.
+  Operator decision (2026-09-27, verbatim pt-BR): "Sim, eu aplico após a P3
+  (Recomendado)" - no longer just a proposal. The orchestrator applies this
+  ruleset through the API after this PR merges, together with enabling
+  immutable releases and before v0.10.5 is tagged; this PR itself changes
+  no repository setting. Repository ruleset (`POST
+  repos/brunovenceslau/canga/rulesets`):
+  `{"name": "release tags", "target": "tag", "enforcement": "active",
+  "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+  "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}],
+  "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole",
+  "bypass_mode": "always"}]}` - only the admin role (actor_id 5) may
+  create, move or delete release tags. Immutable releases already protect
+  a published release's tag; this covers tags before their release exists.
+  Verify the payload against GitHub's rulesets documentation before
+  applying it.
+- **The draft is mutable until it is published.** Between GoReleaser's
+  upload and the publish step, anyone with `contents: write` (a person, or
+  another workflow) could change the draft's assets. The publish step's
+  pre-publish digest comparison against `dist/` narrows that window to the
+  seconds between that comparison and the PATCH; `check_attested` later
+  refuses any archive whose bytes were not attested by this run. The
+  post-publish comparison (round-2 ship-gate finding R2-L2, below) is
+  race-free once it runs, since it reads from the same re-GET that
+  confirmed `immutable == true`, but the residual window before that - the
+  seconds between the pre-publish comparison and the PATCH - is unchanged.
+- **Immutability is not retroactive.** Enabling it leaves v0.10.4 and
+  earlier mutable. A rerun of the Release workflow on an already-published,
+  pre-immutability tag still replaces its assets and then attests the new
+  bytes (GoReleaser updates a published, mutable release in place);
+  `check-clobber` refuses that while a kit pins the tag, as before. This
+  residual predates this PR.
+- **Unverified until the v0.10.5 run:** whether GitHub reports a `digest`
+  for a draft's assets (the publish step refuses a draft whose digests do
+  not match `dist/`, so a draft without digests would block publishing
+  until fixed), and how many re-GETs, if any, it takes after the PATCH
+  before `immutable` reports `true` (the publish step retries up to 6
+  times with a short sleep before treating that as a real refusal; if a
+  genuinely-immutable release never settles within that budget, the retry
+  count needs raising, not the check removed). Neither could be measured
+  without a GitHub write.
+- **The first real end-to-end run is the v0.10.5 release.** Nothing here
+  has run in Actions yet: the draft, the attestation, the pre-publish
+  verification and the publish-by-id step are validated by actionlint,
+  `goreleaser check` and the reading of GoReleaser's and gh's sources
+  above, not by a real run. Watch that run's legs individually, then run
+  `make release-kit-bump TAG=v0.10.5` (it exercises the attested path for
+  real), and check the release page shows the attestation.
+- **Immutable releases are not on yet.** Per the operator's decision above,
+  the orchestrator enables them through the API after this PR merges and
+  before v0.10.5 is tagged. If v0.10.5 is tagged first, the run does not
+  stop at the draft: GoReleaser builds and uploads as usual, and the
+  publish step publishes the release. It is the re-GET loop right after
+  that publishes go red on - it retries up to 6 times waiting for
+  `immutable == true`, and with the setting off GitHub never reports that,
+  so the run exhausts its budget and fails, with the release already
+  public and mutable. Recovery is the same as any other run that fails
+  there (README's "Releasing" refusal table): turn immutable releases on
+  and cut a new patch release.
+- **gh on the runner and on the operator's mac.** The pre-publish step uses
+  the runner image's preinstalled gh, and `check-previous`/
+  `release-kit-bump` on a release at or above v0.10.5 need gh 2.93.0 or
+  newer locally. The first release that needs it locally is the one after
+  v0.10.5 (its preflight checks v0.10.5), plus `make release-kit-bump
+  TAG=v0.10.5` itself.
+
+### Ship-gate round 2 fixes (2026-09-27)
+
+Round 2 of the ship gate found no Critical or Required/High/Medium
+finding; both Low findings below are applied, per the house rule that
+they are included by default.
+
+- [code-reviewer Required] The switch from the operator's decision
+  (`--signer-workflow`) to `--cert-identity` (see "Operator decisions"
+  above) needed the operator's own agreement, not just a note that it was
+  flagged - added there, verbatim pt-BR: "Concordo, usar --cert-identity
+  (Recomendado)".
+- [security-auditor R2-L2, Low] The publish step trusted a single PATCH
+  response for `immutable`. `.github/workflows/release.yml`'s "Publish the
+  release" step now re-GETs the release by id, up to 6 times with a 5s
+  sleep, until `draft == false`, the tag matches, and `immutable == true`,
+  and takes the post-publish asset name+digest comparison against `dist/`
+  from that final GET, which is race-free once it runs (see "The draft is
+  mutable until it is published" and "Unverified until the v0.10.5 run"
+  above). It fails red only after the retry budget is exhausted. `GH_HOST`
+  stays pinned, `jq` still takes the tag through `--arg`, and
+  `actionlint`/`goreleaser check` stay clean.
+- [security-auditor R2-L1, Low] README and this file overclaimed that
+  attestation binds "the Release workflow specifically", read by a
+  reader as reviewed content. It binds `release.yml` **at whatever commit
+  the tag named when the release was built**, not reviewed or merged
+  content, and the check matches that binding by tag name alone - not by
+  whichever commit the tag names now: whoever can push a `v*` tag could
+  tag a commit carrying a modified `release.yml`, or move an existing tag
+  to one. Softened in README ("Verify a release", "Move the sbx kit's
+  pin") and in `scripts/sbx-kit-pin.sh` (the `check_published` header
+  comment and `attestation_verify`'s own comment, which now states this
+  caveat directly). The actual control on who can push a `v*` tag at all,
+  or move one after the fact, is the tag ruleset, decided by the operator
+  and moved from a proposal to "decided, applied post-merge" under "Left
+  open" above, with the operator's verbatim pt-BR agreement recorded there
+  and in "Operator decisions": "Sim, eu aplico após a P3 (Recomendado)".
+  README's "Releasing" section now lists both repository settings -
+  immutable releases and the `v*` tag ruleset - as prerequisites before
+  any tag is pushed.
+
+### Ship-gate round 3 fixes (2026-09-27)
+
+Round 3 of the ship gate found no Critical or Required/High/Medium
+finding. Operator decision on the round's capped items (2026-09-27,
+verbatim): "Seguir a recomendação (Recomendado)" - the three fix-now items
+below are applied, the two pending items are recorded here rather than
+fixed now, and the one accepted item is recorded as accepted, all per that
+same decision.
+
+- [R3-L1, fix now] `.github/workflows/release.yml`'s post-publish failure
+  message conflated "immutable releases is off" with "GitHub has not
+  reported immutable yet" - two different causes with two different
+  recoveries, read by an operator mid-incident as one. Reworded (echo text
+  only) to say the release is already public, that the workflow must not
+  be re-run for this tag, name both causes, and give the recovery: check
+  the setting with `make release-preflight` (`check-immutable`); if it was
+  off, turn it on and cut a new patch release; if it is on, the release
+  may already be immutable - confirm with `gh api
+  repos/brunovenceslau/canga/releases/tags/<tag> --jq .immutable`. README's
+  "Releasing" refusal table gained the matching row.
+- [R3-L3, fix now] This file said tagging v0.10.5 before immutable
+  releases are enabled "still works" - true only up through the publish
+  call. With the post-publish re-GET loop in place, an unpublished-immutable
+  run does not stop at "still mutable": it exhausts its 6-try retry budget
+  waiting for `immutable == true`, which GitHub never reports with the
+  setting off, and the run goes red, with the release already published
+  and mutable. Corrected under "Immutable releases are not on yet" above.
+- [R3-L2, fix now] "`release.yml` as it read at the tagged commit"
+  overclaimed a live binding. `--cert-identity` and `--source-ref` match by
+  tag NAME, not by commit, so until the `v*` tag ruleset is enforced, a tag
+  can be moved to point at another commit and an attestation for that
+  commit's `release.yml` still verifies under the same tag name. Reworded
+  everywhere the phrase appeared - README ("Verify a release"),
+  `scripts/sbx-kit-pin.sh` (the `check_published` header comment and
+  `attestation_verify`'s own comment), and this file (the "Tag ruleset for
+  `v*`" entry under "Left open", the R2-L1 entry above, and this section's
+  own opening summary line) - to say the binding is to whatever commit the
+  tag named when the release was built, and that the `v*` tag ruleset is
+  what keeps a tag from moving and so keeps that binding meaningful.
+- [pending] Pinning `--source-digest` to the resolved commit sha: deferred
+  hardening, narrowed once the `v*` tag ruleset is enforced (a tag that
+  cannot move makes the tag-name match above equivalent to a commit match).
+  Not implemented in this PR.
+- [pending] `timeout-minutes` on the Release job: pre-existing gap, not
+  introduced by this PR; the job runs under GitHub's default 6-hour
+  ceiling with no explicit shorter one. Not implemented in this PR.
+- [accepted] The post-publish re-GET loop aborts on the first transient
+  `gh api` error rather than retrying within its own budget - fails closed
+  and loud, which is the right default for a check guarding a published,
+  soon-to-be-immutable release. Revisit only if real transient-error noise
+  shows up on the v0.10.5 run.

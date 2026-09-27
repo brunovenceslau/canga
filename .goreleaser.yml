@@ -65,6 +65,21 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# A draft, left for the Release workflow to publish once it has attested
+# the assets (.github/workflows/release.yml): with immutable releases on,
+# nothing may be uploaded after publishing, and the attestation has to
+# exist before anyone can download and pin an archive. A rerun after a
+# failed run replaces the draft that run left instead of adding a second
+# draft for the same tag beside it; GitHub does not serve a draft by its
+# tag, so GoReleaser would never find it otherwise. replace_existing_draft
+# matches a draft by NAME, while the workflow's publish step matches it by
+# TAG, so the name is pinned to the tag here rather than left to
+# GoReleaser's default (which is the same today): the two must agree.
+release:
+  draft: true
+  replace_existing_draft: true
+  name_template: "{{ .Tag }}"
+
 # github-native asks GitHub to generate the release notes itself (the same
 # notes `gh release create --generate-notes` would write), which is why the
 # manual "create the release by hand" step existed in the first place. `sort`

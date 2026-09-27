@@ -3,19 +3,42 @@
 
 # Release. Restricted to v* tags, which only someone with push access can
 # create; a pull request can never reach this workflow.
+#
+# Draft first, public last: GoReleaser builds and uploads every asset to a
+# DRAFT release (release.draft in .goreleaser.yml), this workflow attests
+# the archives and checksums.txt, checks the attestation verifies, and only
+# then publishes the draft. Nothing is uploaded after publishing, which is
+# what lets the repository run with immutable releases enabled (README
+# "Releasing"): an immutable release refuses any asset change once it is
+# published, so the upload has to finish while the release is a draft.
 name: Release
 
 on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
+# One run per tag at a time, queued rather than cancelled: two runs of the
+# same tag would race each other's draft (GoReleaser's
+# replace_existing_draft deletes the other run's), and cancelling a run
+# midway could leave a half-uploaded draft behind.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
 
 jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    permissions:
+      # Create the release and upload its assets.
+      contents: write
+      # Mint the OIDC token Sigstore issues the attestation's signing
+      # certificate against; the certificate names this workflow and ref.
+      id-token: write
+      # Store the attestation on this repository.
+      attestations: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,16 +66,149 @@ jobs:
       # Also as in `make release-preflight`: refuse to rebuild a tag whose
       # sandbox archives a pushed or merged kit bump already pins. It reads
       # origin (the checkout's persisted credentials) and the release; a tag
-      # with no release yet, the normal case here, has nothing to clobber.
+      # with no release yet, the normal case here, has nothing to clobber,
+      # and neither does a draft left by a failed run (GitHub does not
+      # serve a draft by its tag, and GoReleaser replaces it below). Once
+      # immutable releases are on, GitHub itself refuses to change a
+      # published release's assets; this step still refuses first, with a
+      # message that says why and what to do instead.
       - name: Check no sbx kit pins this release's archives yet
         run: scripts/sbx-kit-pin.sh check-clobber "${GITHUB_REF_NAME}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Leaves the release a draft (.goreleaser.yml release.draft), with
+      # every asset uploaded. GoReleaser is pinned to an exact version: the
+      # draft-first flow relies on how this version creates, finds and
+      # replaces drafts (docs/HANDOFF.md, "Release provenance"), and a
+      # floating "~> v2" could change that under a release unreviewed.
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: "~> v2"
+          version: v2.18.2
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build provenance for every archive and checksums.txt, from the
+      # bytes on disk: the very files GoReleaser just uploaded. subject-path
+      # rather than subject-checksums, because the latter would attest the
+      # archives checksums.txt lists but not checksums.txt itself.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/canga-host_*.tar.gz
+            dist/canga-sandbox_*.tar.gz
+            dist/checksums.txt
+
+      # The release is still a draft, so a policy mismatch costs a rerun,
+      # not a published release no kit can ever pin (immutable releases
+      # cannot be fixed in place). scripts/sbx-kit-pin.sh check-attestation
+      # is the same verification, flags and gh version floor included, that
+      # the kit pin checks make later on the published archives.
+      - name: Verify the attestation before publishing
+        run: >-
+          scripts/sbx-kit-pin.sh check-attestation "${GITHUB_REF_NAME}"
+          dist/canga-host_*.tar.gz dist/canga-sandbox_*.tar.gz dist/checksums.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish exactly the one draft GoReleaser left for this tag, by id
+      # (zero or several drafts for it is a refusal, never a guess), and
+      # only while it still holds exactly the files this run built and
+      # attested: every asset's GitHub-served digest is compared with
+      # dist/ first, so a draft changed between the upload and this step is
+      # never published. After publishing, it re-GETs the release (a
+      # single PATCH response is not trusted for `immutable`) until draft,
+      # tag and immutable all settle, and repeats the digest comparison
+      # against that final, immutable-confirmed GET, which is race-free in
+      # a way the pre-publish comparison cannot be. The tag reaches jq only
+      # through --arg, never spliced into the filter text.
+      - name: Publish the release
+        run: |
+          set -euo pipefail
+          tmp="${RUNNER_TEMP}/publish"
+          mkdir -p "$tmp"
+
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" >"$tmp/releases.json"
+          ids=$(jq -r --arg tag "${GITHUB_REF_NAME}" '.[] | select(.draft and .tag_name == $tag) | .id' "$tmp/releases.json")
+          count=$(printf '%s' "$ids" | grep -c . || true)
+          if [ "$count" != 1 ]; then
+            echo "want exactly one draft release for ${GITHUB_REF_NAME}, found ${count}" >&2
+            exit 1
+          fi
+          case "$ids" in
+          '' | *[!0-9]*) echo "draft release id '$ids' is not a number" >&2; exit 1 ;;
+          esac
+          id=$ids
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${id}" >"$tmp/draft.json"
+          (
+            cd dist
+            for f in canga-host_*.tar.gz canga-sandbox_*.tar.gz checksums.txt; do
+              printf '%s sha256:%s\n' "$f" "$(sha256sum "$f" | cut -d' ' -f1)"
+            done
+          ) | sort >"$tmp/want"
+          jq -r '.assets[] | "\(.name) \(.digest)"' "$tmp/draft.json" | sort >"$tmp/got"
+          if ! diff -u "$tmp/want" "$tmp/got"; then
+            echo "draft ${id} does not hold exactly the files this run built (- dist/, + the draft); refusing to publish it" >&2
+            exit 1
+          fi
+
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${id}" -F draft=false >"$tmp/published.json"
+          if ! jq -e --arg tag "${GITHUB_REF_NAME}" '.draft == false and .tag_name == $tag' "$tmp/published.json" >/dev/null; then
+            echo "GitHub did not answer with a published release for ${GITHUB_REF_NAME}:" >&2
+            jq '{id, tag_name, draft}' "$tmp/published.json" >&2
+            exit 1
+          fi
+
+          # Published either way from here; red past this point means the
+          # release is mutable, which `make release-preflight`
+          # (check-immutable) exists to prevent, and a workflow token
+          # cannot check beforehand. The PATCH's own response is not
+          # trusted for `immutable`: it can answer before the setting has
+          # taken effect on the release, so this re-GETs the release
+          # itself, up to 6 times with a short sleep, until it reports
+          # draft == false, the same tag, and immutable == true.
+          tries=6
+          n=0
+          final="$tmp/published.json"
+          while :; do
+            n=$((n + 1))
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${id}" >"$tmp/check.json"
+            if jq -e --arg tag "${GITHUB_REF_NAME}" \
+              '.draft == false and .tag_name == $tag and .immutable == true' \
+              "$tmp/check.json" >/dev/null; then
+              final="$tmp/check.json"
+              break
+            fi
+            if [ "$n" -ge "$tries" ]; then
+              echo "${GITHUB_REF_NAME} is already published; do not re-run this workflow for this tag." >&2
+              echo "It did not settle to immutable == true after ${tries} checks. Two possible causes:" >&2
+              echo "  - the repository's immutable releases setting is off" >&2
+              echo "  - it is on, but GitHub has not reported immutable yet" >&2
+              echo "Recovery: run 'make release-preflight' (check-immutable) to see the setting." >&2
+              echo "  - if it was off: turn it on (README \"Immutable releases\"), then cut a new patch release" >&2
+              echo "  - if it is on: the release may already be immutable; confirm with" >&2
+              echo "    gh api repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME} --jq .immutable" >&2
+              jq '{id, tag_name, draft, immutable}' "$tmp/check.json" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          # The asset comparison above only narrows the mutable-draft
+          # window to the seconds before the PATCH; this one, read from the
+          # GET that just confirmed immutable == true, is race-free -
+          # nothing can change an immutable release's assets after that.
+          jq -r '.assets[] | "\(.name) \(.digest)"' "$final" | sort >"$tmp/got-final"
+          if ! diff -u "$tmp/want" "$tmp/got-final"; then
+            echo "the published, immutable release ${id} does not hold exactly the files this run built (- dist/, + the release)" >&2
+            exit 1
+          fi
+
+          jq -r .html_url "$final"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_HOST: github.com
