@@ -880,25 +880,34 @@ included by default.
   bytes (GoReleaser updates a published, mutable release in place);
   `check-clobber` refuses that while a kit pins the tag, as before. This
   residual predates this PR.
-- **Unverified until the v0.10.5 run:** whether GitHub reports a `digest`
-  for a draft's assets (the publish step refuses a draft whose digests do
-  not match `dist/`, so a draft without digests would block publishing
-  until fixed), and how many re-GETs, if any, it takes after the PATCH
-  before `immutable` reports `true` (the publish step retries up to 6
-  times with a short sleep before treating that as a real refusal; if a
-  genuinely-immutable release never settles within that budget, the retry
-  count needs raising, not the check removed). Neither could be measured
-  without a GitHub write.
-- **The first real end-to-end run is the v0.10.5 release.** Nothing here
-  has run in Actions yet: the draft, the attestation, the pre-publish
-  verification and the publish-by-id step are validated by actionlint,
-  `goreleaser check` and the reading of GoReleaser's and gh's sources
-  above, not by a real run. Watch that run's legs individually, then run
-  `make release-kit-bump TAG=v0.10.5` (it exercises the attested path for
-  real), and check the release page shows the attestation.
-- **Immutable releases are not on yet.** Per the operator's decision above,
-  the orchestrator enables them through the API after this PR merges and
-  before v0.10.5 is tagged. If v0.10.5 is tagged first, the run does not
+- **Confirmed by the v0.10.5 run (2026-09-27):** GitHub does report a
+  `digest` for a draft's assets - the publish step's pre-publish digest
+  comparison against `dist/` passed without needing a fix, and the
+  published release's assets carry a `digest` each. The re-GET loop
+  settled inside its retry budget: run 36345101054's "Publish the
+  release" step succeeded, and GitHub now serves the release with
+  `immutable: true`; the orchestrator did not capture the exact re-GET
+  attempt count from the run log, so only "within the 6-try budget" is
+  measured here, not the precise attempt number. Both were previously
+  unmeasurable without a GitHub write; see "v0.10.5: the first attested
+  release" below for the full account.
+- **Confirmed: the v0.10.5 release was the first real end-to-end run
+  (2026-09-27).** Run 36345101054 ran every step green, including
+  "Attest build provenance", "Verify the attestation before publishing"
+  and "Publish the release" - the draft, the attestation, the
+  pre-publish verification and the publish-by-id step all ran for real,
+  not just validated by actionlint and `goreleaser check` as before.
+  `make release-kit-bump TAG=v0.10.5` was then run for real (PR #37);
+  see "v0.10.5: the first attested release" below.
+- **Confirmed: immutable releases were enabled before v0.10.5
+  (2026-09-27).** Per the operator's decision above, the orchestrator
+  enabled them through the API after this PR merged
+  (`PUT repos/brunovenceslau/canga/immutable-releases`, answered 204;
+  the setting read `{"enabled":false}` before and `{"enabled":true}`
+  after) and before v0.10.5 was tagged; `make release-preflight`'s
+  `check-immutable` then passed. The failure mode this bullet described
+  stays documented for any repository where the setting is off: if a
+  release is tagged first, the run does not
   stop at the draft: GoReleaser builds and uploads as usual, and the
   publish step publishes the release. It is the re-GET loop right after
   that publishes go red on - it retries up to 6 times waiting for
@@ -931,7 +940,7 @@ they are included by default.
   sleep, until `draft == false`, the tag matches, and `immutable == true`,
   and takes the post-publish asset name+digest comparison against `dist/`
   from that final GET, which is race-free once it runs (see "The draft is
-  mutable until it is published" and "Unverified until the v0.10.5 run"
+  mutable until it is published" and "Confirmed by the v0.10.5 run"
   above). It fails red only after the retry budget is exhausted. `GH_HOST`
   stays pinned, `jq` still takes the tag through `--arg`, and
   `actionlint`/`goreleaser check` stay clean.
@@ -980,7 +989,8 @@ same decision.
   run does not stop at "still mutable": it exhausts its 6-try retry budget
   waiting for `immutable == true`, which GitHub never reports with the
   setting off, and the run goes red, with the release already published
-  and mutable. Corrected under "Immutable releases are not on yet" above.
+  and mutable. Corrected under "Confirmed: immutable releases were enabled before
+  v0.10.5 (2026-09-27)" above.
 - [R3-L2, fix now] "`release.yml` as it read at the tagged commit"
   overclaimed a live binding. `--cert-identity` and `--source-ref` match by
   tag NAME, not by commit, so until the `v*` tag ruleset is enforced, a tag
@@ -1003,5 +1013,70 @@ same decision.
 - [accepted] The post-publish re-GET loop aborts on the first transient
   `gh api` error rather than retrying within its own budget - fails closed
   and loud, which is the right default for a check guarding a published,
-  soon-to-be-immutable release. Revisit only if real transient-error noise
-  shows up on the v0.10.5 run.
+  soon-to-be-immutable release. Confirmed by the v0.10.5 run (2026-09-27):
+  run 36345101054 published clean, with no transient `gh api` error large
+  enough to exercise this abort path. Still accepted as-is; revisit only
+  if real transient-error noise shows up on a future run.
+
+## v0.10.5: the first attested release (PR #37)
+
+The measured, end-to-end confirmation that the PR #36 section's "Left
+open" entries "Confirmed by the v0.10.5 run" and "Confirmed: the v0.10.5
+release was the first real end-to-end run" pointed at:
+this is what the orchestrator verified directly against the tag, the
+Actions run, the published release and the independently downloaded
+assets - not inferred from source reading or static checks.
+
+- **Tag `v0.10.5`**: annotated, SSH-signed, on `de8b737` (main after
+  PR #36). `make release-preflight` passed - immutable releases on;
+  v0.10.4 checked by digest and uploader only, since it is below the
+  `attested_from` cutover; no clobber. The push printed "Bypassed rule
+  violations for refs/tags/v0.10.5: Cannot create ref due to creations
+  being restricted", i.e. the "release tags" ruleset (id 24082205, see
+  "Left open" above) enforced, and the admin bypass applied.
+- **Release run 36345101054**: every step succeeded, including "Attest
+  build provenance", "Verify the attestation before publishing" and
+  "Publish the release" - so draft assets do report `digest`, and
+  `immutable: true` settled inside the re-GET retry window (see
+  "Confirmed by the v0.10.5 run" above).
+- **Published release**: `draft: false`, `prerelease: false`,
+  `immutable: true`, author `github-actions[bot]`, all 7 assets uploaded
+  by `github-actions[bot]`.
+- **Independent verification (gh 2.101.0)**: both `canga-sandbox_`
+  archives pass `sha256sum -c` against `checksums.txt`, and each passes
+  `gh attestation verify --cert-identity
+  https://github.com/brunovenceslau/canga/.github/workflows/release.yml@refs/tags/v0.10.5
+  --source-ref refs/tags/v0.10.5 --deny-self-hosted-runners` (exit 0
+  each). A negative control with the identity's ref changed to
+  `@refs/tags/v0.10.4` exits 1. `scripts/sbx-kit-pin.sh
+  check-attestation v0.10.5 <amd64 archive>` accepts.
+- **PR #37** (the kit bump from `make release-kit-bump TAG=v0.10.5`): one
+  signed commit, `a2326ad`, on the tag commit, touching only
+  `sbx-kit/spec.yaml` - `CANGA_VERSION` `0.10.5`, amd64 sha256
+  `299d6b51a161ea285ee97c887a04af4ab76ce06e54995d23fffd8702311de46a`,
+  arm64
+  `f9d9f1a2c595eb3ab4250ed792aa89cdd00a7cd2ee47f37cdb803b93d8d6c4e9` -
+  equal to the served digests. `check-previous v0.10.6` at `a2326ad`
+  exits 0 through the full path (digest, uploader, attestation of both
+  archives) - the first time that path ran against a real, attested
+  release. Merged as `a865d40`; main CI green.
+- **Process lesson** (rework debrief, per the house rule that a lesson
+  from findings a better process would have prevented gets written down
+  here). The orchestrator first told the operator to run
+  `make release-preflight` before creating the tag; the preflight checks
+  the tag at HEAD, so it refused ("HEAD carries no tag"). README's
+  "Releasing" step 2 already had the right order (tag, preflight, push).
+  Lesson: derive operator command sequences from the README's numbered
+  steps, not from memory. Static-tool question: the preflight's own
+  refusal message already names the fix, so no new tool is needed here.
+- **Still pending** (unchanged; the two `[pending]` items of the PR #36
+  section's "Ship-gate round 3 fixes"):
+  `--source-digest` pinning to the resolved commit sha, and
+  `timeout-minutes` on the Release job.
+- **Operator decision on this entry** (2026-09-27). After PR #37 merged,
+  the orchestrator offered one optional follow-up: a docs PR recording in
+  this file that the v0.10.5 run resolved the PR #36 section's two open
+  v0.10.5 items (now "Confirmed by the v0.10.5 run" and "Confirmed: the
+  v0.10.5 release was the first real end-to-end run"). The operator's answer,
+  verbatim pt-BR: "Vamos resoler o Opcional." This section and the
+  "Confirmed" bullets above are that follow-up.
