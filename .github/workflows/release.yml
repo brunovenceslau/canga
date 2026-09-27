@@ -31,6 +31,19 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    # 30 minutes: all 9 successful runs from v0.6.0 (35308883501) through
+    # v0.10.5 (36345101054) finished in 1m04s-1m56s (`gh run list --workflow
+    # release.yml`, measured 2026-09-27; per-run figures in
+    # docs/HANDOFF.md), so this leaves roughly 15x headroom over the
+    # slowest of those runs, including the post-publish re-GET retry loop
+    # ("Publish the release" below), while stopping a hung run far sooner
+    # than GitHub's default 6-hour ceiling. A timeout before "Publish the
+    # release" leaves at most a draft, which the next run of the same tag
+    # replaces (GoReleaser deletes and recreates the name-matched draft;
+    # docs/HANDOFF.md has the detail); one during or after that step may
+    # leave the release already public - see README "Releasing"'s refusal
+    # table for the recovery.
+    timeout-minutes: 30
     permissions:
       # Create the release and upload its assets.
       contents: write
