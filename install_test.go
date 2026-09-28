@@ -68,6 +68,11 @@ const (
 	_shasum    = "shasum"
 	_wrong     = "wrong"
 	_absent    = "absent"
+
+	// The release floor's two refusal messages (install_host.sh,
+	// install_sandbox.sh): below it, or not canonical vX.Y.Z at all.
+	_wantBelowFloor   = "is older than v0.10.5"
+	_wantNotCanonical = "is not vX.Y.Z"
 )
 
 // _fakeCurl serves $FAKE_RELEASES/<tag>/<file> for
@@ -441,15 +446,15 @@ func TestInstallHost(t *testing.T) {
 		// Below the release floor is refused before any request: the release
 		// could have been recreated with unverified bytes (docs/HANDOFF.md,
 		// "Immutability is not retroactive").
-		{name: "a version below the release floor", args: []string{"v0.10.4"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: "is older than v0.10.5"},
-		{name: "a version well below the release floor", args: []string{"v0.1.0"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: "is older than v0.10.5"},
+		{name: "a version below the release floor", args: []string{"v0.10.4"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantBelowFloor},
+		{name: "a version well below the release floor", args: []string{"v0.1.0"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantBelowFloor},
 		// Defense in depth: the newest-release path (no tag on the command
 		// line) applies the floor too, to whichever tag /releases/latest
 		// resolves to. The redirect itself still has to be followed to learn
 		// that tag, so exactly one request is made before the refusal.
 		{
 			name: "the newest release resolves below the release floor", os: _linux, arch: _amd64, sha: sha,
-			wantExit: 1, wantStderr: "is older than v0.10.5", wantRequests: []string{requested("latest")},
+			wantExit: 1, wantStderr: _wantBelowFloor, wantRequests: []string{requested("latest")},
 			vars: []string{"FAKE_LATEST=v0.10.4"},
 		},
 		// Round-1 ship-gate finding 1 (docs/HANDOFF.md, "Release floor for
@@ -458,8 +463,8 @@ func TestInstallHost(t *testing.T) {
 		// itself compared equal to it and was wrongly accepted; a leading
 		// zero was likewise read as if it were not there. Both are refused
 		// before any request, the same way a version below the floor is.
-		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: "is not vX.Y.Z"},
-		{name: "a leading zero", args: []string{"v00.10.5"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: "is not vX.Y.Z"},
+		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantNotCanonical},
+		{name: "a leading zero", args: []string{"v00.10.5"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantNotCanonical},
 		{name: "unsupported architecture", os: _linux, arch: "riscv64", sha: sha, wantExit: 1, wantStderr: "unsupported architecture riscv64"},
 		{name: "unsupported system", os: "FreeBSD", arch: _amd64, sha: sha, wantExit: 1, wantStderr: "unsupported system FreeBSD"},
 	}
@@ -499,13 +504,13 @@ func TestInstallSandbox(t *testing.T) {
 		// Below the release floor is refused before any request, root or
 		// not: the release could have been recreated with unverified bytes
 		// (docs/HANDOFF.md, "Immutability is not retroactive").
-		{name: "a version below the release floor", args: []string{"v0.10.4"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: "is older than v0.10.5"},
-		{name: "a version well below the release floor", args: []string{"v0.1.0"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: "is older than v0.10.5"},
+		{name: "a version below the release floor", args: []string{"v0.10.4"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: _wantBelowFloor},
+		{name: "a version well below the release floor", args: []string{"v0.1.0"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: _wantBelowFloor},
 		// Round-1 ship-gate finding 1 (docs/HANDOFF.md, "Release floor for
 		// installers and canga upgrade (PR #41)"): the same two shapes as
 		// install_host.sh's own cases above, refused before any request.
-		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: "is not vX.Y.Z"},
-		{name: "a leading zero", args: []string{"v00.10.5"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: "is not vX.Y.Z"},
+		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: _wantNotCanonical},
+		{name: "a leading zero", args: []string{"v00.10.5"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: _wantNotCanonical},
 	}
 	for i := range tests {
 		tests[i].sha = _sha256sum

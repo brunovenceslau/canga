@@ -131,24 +131,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	// Round-1 ship-gate finding 2 (docs/HANDOFF.md, "Release floor for
-	// installers and canga upgrade (PR #41)"): an explicit --tag is looked
-	// up by that exact string, so found.Tag naming anything else would mean
-	// GitHub served the wrong release document. checkFloor below already
-	// refuses found.Tag if IT is not canonical, but that says nothing about
-	// whether found.Tag is the release that was actually asked for.
-	if wanted != "" && found.Tag != wanted {
-		return Result{}, fmt.Errorf("%w: asked github for %s, its release document names %s",
-			ErrTagMismatch, wanted, found.Tag)
-	}
-
-	// Belt and suspenders for the newest-release path (no --tag): an explicit
-	// --tag below MinReleaseTag is already refused in wantedTag, before this
-	// request ever ran, but the release GitHub's "latest" resolves to is
-	// checked too, since Path B (docs/HANDOFF.md, "Immutability is not
-	// retroactive") could recreate an old tag's release with today's publish
-	// date and make it the newest one.
-	if err := checkFloor(found.Tag); err != nil {
+	if err := checkResolvedRelease(wanted, found); err != nil {
 		return Result{}, err
 	}
 
@@ -173,6 +156,30 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	result.Installed = true
 
 	return result, nil
+}
+
+// checkResolvedRelease refuses found if it does not name the release that
+// was actually asked for, or if it is below the release floor.
+//
+// Round-1 ship-gate finding 2 (docs/HANDOFF.md, "Release floor for
+// installers and canga upgrade (PR #41)"): an explicit --tag is looked up
+// by that exact string, so found.Tag naming anything else would mean
+// GitHub served the wrong release document. checkFloor below already
+// refuses found.Tag if IT is not canonical, but that says nothing about
+// whether found.Tag is the release that was actually asked for.
+func checkResolvedRelease(wanted string, found release) error {
+	if wanted != "" && found.Tag != wanted {
+		return fmt.Errorf("%w: asked github for %s, its release document names %s",
+			ErrTagMismatch, wanted, found.Tag)
+	}
+
+	// Belt and suspenders for the newest-release path (no --tag): an explicit
+	// --tag below MinReleaseTag is already refused in wantedTag, before this
+	// request ever ran, but the release GitHub's "latest" resolves to is
+	// checked too, since Path B (docs/HANDOFF.md, "Immutability is not
+	// retroactive") could recreate an old tag's release with today's publish
+	// date and make it the newest one.
+	return checkFloor(found.Tag)
 }
 
 // wantedTag decides which release this run is about, and refuses the runs that

@@ -99,7 +99,7 @@ var releaseFloorEdgeCases = []struct {
 	{tag: "v00.10.5"},      // a leading zero
 	{tag: "v0.10"},         // missing the patch component
 	{tag: "0.10.5"},        // the goreleaser spelling: no "v"
-	{tag: "1.0.0"},         // no "v": not covered by the repository's v* tag ruleset
+	{tag: _laterMajor},     // no "v": not covered by the repository's v* tag ruleset
 	{tag: ""},              // empty
 	{tag: "latest"},        // not a version at all
 }
@@ -120,15 +120,18 @@ var releaseFloorEdgeCases = []struct {
 //nolint:paralleltest // serial so newBins writes the fakes while no other test in this package forks
 func TestReleaseFloorShapeAgreesAcrossInstallersAndGo(t *testing.T) {
 	bins := newBins(t)
+
 	sha := _sha256sum
 	if _, err := exec.LookPath(sha); err != nil {
 		sha = _shasum
 	}
+
 	bin, ok := bins[sha]
 	require.True(t, ok, "%s is not installed here", sha)
 
 	sh, err := exec.LookPath("sh")
 	require.NoError(t, err)
+
 	shell := []string{sh}
 
 	hostScript, err := filepath.Abs("install_host.sh")
@@ -142,9 +145,9 @@ func TestReleaseFloorShapeAgreesAcrossInstallersAndGo(t *testing.T) {
 
 			goErr := upgrade.CheckReleaseFloor(tt.tag)
 			if tt.accepted {
-				assert.NoError(t, goErr, "upgrade.CheckReleaseFloor")
+				require.NoError(t, goErr, "upgrade.CheckReleaseFloor")
 			} else {
-				assert.Error(t, goErr, "upgrade.CheckReleaseFloor")
+				require.Error(t, goErr, "upgrade.CheckReleaseFloor")
 			}
 
 			hostEnv := newEnv(t, bin)

@@ -1563,6 +1563,23 @@ of them as evidence (for example the v0.10.2 build-time sums in the
 that mattered were already copied into this file, and the run links in
 those entries no longer resolve.
 
+### Rework debrief: a local gate that skipped the linter
+
+The first push of this PR went red on CI's Lint leg (11 golangci-lint
+issues: goconst, gocyclo on `upgrade.Run`, testifylint require-error,
+wsl_v5). The local gate runs for this PR and for PR #39 reported `golangci-lint` and `govulncheck` as "not installed,
+CI runs them" and moved on, although the Makefile has pinned installers
+for both (`make tool-lint`, `make tool-vuln`). The ship gate's three
+rounds passed with the linter never run.
+
+Lesson: a missing tool that the repository pins and installs itself is
+not a skip condition; install it with the repository's own target and
+run `make lint` and `make vuln` locally before any gate reports. Static
+tool question: the builder and ship-gate briefs could require
+`make tools lint vuln` as their first gate step, so a missing linter
+fails loudly instead of being reported as skipped. Applied from this
+PR on, in the orchestrator's briefs.
+
 ### Pending
 
 - [pending, post-cap Info from the round-3 ship gate] README's by-hand

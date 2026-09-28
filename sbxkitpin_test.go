@@ -435,6 +435,13 @@ const (
 	_ghAttestFloor = "2.93.0"
 )
 
+// _laterMajor is a version one major above _attestedFrom's line, used here
+// for version_at_least's own numeric-vs-text ordering cases and, since this
+// file shares package scope with release_floor_test.go, for that file's
+// release floor edge-case table too (a bare "1.0.0", no "v" - not covered
+// by the repository's v* tag ruleset).
+const _laterMajor = "1.0.0"
+
 // _fakeGhVersion is what the fake gh reports for `gh --version` unless a
 // case writes $FAKE_GH/version: new enough for the script's attestation
 // floor (gh_attest_floor in the script).
@@ -1259,7 +1266,7 @@ func TestSbxKitPin_Attestation(t *testing.T) {
 		{version: _attestedFrom, required: true},
 		{version: "0.10.10", required: true},
 		{version: "0.11.0", required: true},
-		{version: "1.0.0", required: true},
+		{version: _laterMajor, required: true},
 	} {
 		next := nextPatch(t, tt.version)
 
@@ -1665,8 +1672,8 @@ func TestSbxKitPin_VersionAtLeast(t *testing.T) {
 		{a: "0.10.10", b: _attestedFrom, ge: true},
 		{a: "0.9.99", b: _attestedFrom},
 		{a: "0.11.0", b: _attestedFrom, ge: true},
-		{a: "1.0.0", b: "0.99.99", ge: true},
-		{a: "0.99.99", b: "1.0.0"},
+		{a: _laterMajor, b: "0.99.99", ge: true},
+		{a: "0.99.99", b: _laterMajor},
 		{a: _ghAttestFloor, b: _ghAttestFloor, ge: true},
 		{a: "2.92.99", b: _ghAttestFloor},
 		{a: "2.101.0", b: _ghAttestFloor, ge: true},

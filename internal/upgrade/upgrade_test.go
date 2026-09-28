@@ -412,7 +412,7 @@ func TestRunRefusesWhenGitHubsReleaseDocumentNamesAnotherTag(t *testing.T) {
 
 	_, err := Run(t.Context(), opts)
 	require.ErrorIs(t, err, ErrTagMismatch)
-	assert.ErrorContains(t, err, "v0.10.6")
+	require.ErrorContains(t, err, "v0.10.6")
 	assert.ErrorContains(t, err, "v0.10.9")
 }
 
