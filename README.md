@@ -60,7 +60,7 @@ curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_h
 To install one release instead of the newest, pass its tag:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_host.sh | sh -s -- v0.5.0
+curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_host.sh | sh -s -- v0.10.5
 ```
 
 The script stops before extracting anything when the checksum does not match,
@@ -469,7 +469,7 @@ archive, the sandbox build a `canga-sandbox_` one. See
 ```sh
 canga upgrade                # install the newest release
 canga upgrade --check        # say what is available, change nothing
-canga upgrade --tag v0.1.0   # install exactly that release
+canga upgrade --tag v0.10.5  # install exactly that release
 ```
 
 Only the release tag goes to stdout, one line, so `v=$(canga upgrade)` is the
@@ -546,7 +546,7 @@ published artifact, and `v0.1.0-3-gabc1234` sorts *below* `v0.1.0` under semver
 are refused, and `--tag` is how you say which release you meant:
 
 ```sh
-canga upgrade --tag v0.1.0
+canga upgrade --tag v0.10.5
 ```
 
 ## `canga reminders`
@@ -834,11 +834,16 @@ the upgrade still works, within GitHub's anonymous limit of 60 requests an hour.
 Sandbox builds up to v0.6.0 do not have this command. They answer
 `canga upgrade` with `upgrade is available in the host build only, not in the
 sandbox build`. Move those sandboxes to a release that has it by changing the
-pin.
+pin, or by running `install_sandbox.sh` again.
 
-`--tag` can install one of those builds: `sudo canga upgrade --tag v0.6.0`
-succeeds. After that, `canga upgrade` in the sandbox refuses until the sandbox
-is recreated or `install_sandbox.sh` runs again.
+Only v0.10.5 onward is currently a published release (`docs/HANDOFF.md`,
+"Immutability is not retroactive": every release before it that was not
+attested has since been deleted), so `--tag` can currently only name v0.10.5
+or a later one. This is not a permanent guarantee: the old tags themselves
+still exist, and a follow-up is planned that makes `install_host.sh`,
+`install_sandbox.sh` and `canga upgrade --tag` refuse a tag below v0.10.5
+outright, rather than relying on there being nothing published there to
+find.
 
 ## Moving from devctl and agtctl
 
