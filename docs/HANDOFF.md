@@ -295,13 +295,17 @@ What this made unnecessary, and why:
      uma" (sync canga with its origin/main and resolve the pending items
      one at a time). Resolved in "sbx-kit-pin: rewrite verifies, and
      canga-sandbox_ assets must carry this repo's Actions identity" below.
-  2. GNU Make's own argv sharp edge: a `TAG=$(shell ...)` value given on
-     make's command line is expanded by make at parse time, unconditionally,
-     regardless of which target runs - this is pre-existing GNU Make
-     behavior, not something a recipe can fix from inside itself, and it
-     only matters if something builds a `TAG=` argument from untrusted
-     input before invoking `make`. Nothing in this repository does that
-     today.
+  2. [accepted] GNU Make's own argv sharp edge: a `TAG=$(shell ...)` value
+     given on make's command line is expanded by make at parse time,
+     unconditionally, regardless of which target runs - pre-existing GNU
+     Make behavior, not something a recipe can fix from inside itself,
+     and it only matters if something builds a `TAG=` argument from
+     untrusted input before invoking `make`. Accepted: the orchestrator
+     measured (2026-09-27) that no file under `.github/`, `scripts/`,
+     `install_*.sh` or the Makefile does that - `grep -rn 'TAG=' .github
+     scripts Makefile install_*.sh` hits only the Makefile's own help
+     text (line 71) and usage message (line 265). Reopen condition: if
+     anything starts building a `TAG=` argument from untrusted input.
 
 ## sbx-kit-pin: rewrite verifies, and canga-sandbox_ assets must carry this repo's Actions identity (PR #35)
 
@@ -512,9 +516,10 @@ the uploader-identity gap itself (pending item 3 above).
   attestation for `check_published` to verify. Resolved in "Release
   provenance: attestation, draft-first, immutable releases (PR #36)" below,
   for every release from v0.10.5 on.
-- HANDOFF residual 2 from the PR #34 entry (GNU Make's own `TAG=$(shell
-  ...)` argv-expansion sharp edge) is unrelated to this PR's scope and
-  remains open, unchanged.
+- [accepted] HANDOFF residual 2 from the PR #34 entry (GNU Make's own
+  `TAG=$(shell ...)` argv-expansion sharp edge) is unrelated to this PR's
+  scope. Accepted there (see the PR #34 entry above for the why and the
+  reopen condition); no longer open.
 - `rewrite`'s new verification step means it now needs `gh` and network
   access to run at all; it previously worked fully offline against a local
   checksums.txt. This is the intended trade (a manual recovery path that
@@ -865,22 +870,168 @@ included by default.
   a published release's tag; this covers tags before their release exists.
   Verify the payload against GitHub's rulesets documentation before
   applying it.
-- **The draft is mutable until it is published.** Between GoReleaser's
-  upload and the publish step, anyone with `contents: write` (a person, or
-  another workflow) could change the draft's assets. The publish step's
-  pre-publish digest comparison against `dist/` narrows that window to the
-  seconds between that comparison and the PATCH; `check_attested` later
-  refuses any archive whose bytes were not attested by this run. The
-  post-publish comparison (round-2 ship-gate finding R2-L2, below) is
-  race-free once it runs, since it reads from the same re-GET that
-  confirmed `immutable == true`, but the residual window before that - the
-  seconds between the pre-publish comparison and the PATCH - is unchanged.
-- **Immutability is not retroactive.** Enabling it leaves v0.10.4 and
-  earlier mutable. A rerun of the Release workflow on an already-published,
-  pre-immutability tag still replaces its assets and then attests the new
-  bytes (GoReleaser updates a published, mutable release in place);
-  `check-clobber` refuses that while a kit pins the tag, as before. This
-  residual predates this PR.
+- [accepted] **The draft is mutable until it is published.** Between
+  GoReleaser's upload and the publish step, anyone with `contents: write`
+  (a person, or another workflow) could change the draft's assets. The
+  publish step's pre-publish digest comparison against `dist/` narrows
+  that window to the seconds between that comparison and the PATCH. That
+  comparison covers every asset the run built - `canga-host_*.tar.gz`,
+  `canga-sandbox_*.tar.gz` and `checksums.txt` alike (`.github/workflows/
+  release.yml`'s "Publish the release" step, `$tmp/want` vs `$tmp/got`).
+  `check_attested` (`scripts/sbx-kit-pin.sh`) is narrower than the
+  original wording claimed: it downloads and verifies only the two
+  `canga-sandbox_` archives for the tag named, comparing the download
+  against the pinned sha256 first and only then calling
+  `attestation_verify` - never `checksums.txt` or the `canga-host_`
+  archives - and it binds to whatever the tag currently serves, not to
+  this specific run's bytes - a later re-run at the same tag is exactly
+  what item "Immutability is not retroactive" below covers. Accepted: the
+  mutable-draft window is narrowed to seconds by the pre-publish digest
+  comparison, and the post-publish comparison (round-2 ship-gate finding
+  R2-L2, below), which does cover all three asset kinds, is race-free
+  once it runs and will catch a swap in that narrowed window - it cannot
+  undo a swap already published, only fail the run loudly once it
+  detects one. Reopen condition: if GitHub offers an immutable-draft or
+  atomic publish-with-assets primitive, if the pre-publish comparison is
+  ever removed, or if a direct API edit of a draft's assets by someone
+  with `contents: write` - the same access this bullet's opening
+  sentence already names as the threat - is ever observed to slip past
+  both comparisons undetected.
+- [narrowed; follow-up planned] **Immutability is not retroactive.** Enabling it left
+  v0.10.4 and earlier mutable, and only v0.10.5 on carries attestation
+  (`grep -c attest-build-provenance` over each tag's own
+  `.github/workflows/release.yml` reads 0 for v0.1.0 through v0.10.4 and
+  1 for v0.10.5 - the first attested run). Separately, `git show
+  <tag>:.github/workflows/release.yml | grep -c check-previous` (and the
+  same for `check-clobber`) reads 0 for both steps, for v0.1.0 through
+  v0.10.2, and 1 for both, for v0.10.3, v0.10.4 and v0.10.5 - neither step
+  (added together in "Release path: the workflow is the one official
+  path" above) existed before v0.10.3. A workflow re-run uses the tag's
+  own `release.yml` and the original run's `GITHUB_SHA`/`GITHUB_REF`
+  (GitHub docs, "Re-running workflows and jobs"), so a re-run of any tag
+  whose `release.yml` predates these steps has no automatic refusal
+  against recreating that tag's release from scratch.
+
+  Narrowed by deletion, not closed. Operator decision
+  (2026-09-27, verbatim pt-BR): "Remova todas as versões que não são
+  attested. Mais prático. Ninguém usa ainda, só eu." Every GitHub release
+  that is not attested has been deleted with `gh release delete <tag>
+  --yes` (no `--cleanup-tag`, so the tag itself is untouched): v0.1.0,
+  v0.2.0, v0.3.0, v0.4.0, v0.5.0, v0.6.0, v0.7.0, v0.8.0, v0.9.0, v0.10.0,
+  v0.10.1, v0.10.2 and v0.10.4. v0.10.3 already carried no release before
+  this (its asset-less release was deleted separately; see the PR #33
+  entry above), so v0.10.5 - attested, immutable - is now the only
+  release this repository has. The tags all stay: the Go module proxy
+  and checksum database already cache several of these versions (see the
+  PR #33 entry's v0.10.3 argument), so none of them may ever move. This
+  narrows, but does not close, round-3 ship-gate finding F1 (an explicit
+  install of v0.10.4 or earlier via `install_host.sh`/`install_sandbox.sh`
+  accepted swapped bytes checked only against that same release's own
+  `checksums.txt`): an explicit install naming one of these tags fails
+  today with a download error, until a release is recreated on it (Path B
+  below).
+
+  Narrowed, not closed: two distinct re-creation paths remain, of
+  different severity.
+
+  Path A - re-running one of these tags' own original Actions run.
+  Measured (2026-09-27): `gh run list --workflow release.yml --limit 50
+  --json databaseId,headBranch,createdAt` returns exactly 17 runs total
+  (below the 50-row limit, so this is every Release run the repository
+  has ever had), created between v0.1.0's 34977708345
+  (2026-09-15T13:51:14Z) and v0.10.5's own 36345101054
+  (2026-09-27T19:38:33Z). GitHub's "up to 30 days after its initial run"
+  re-run window (GitHub docs, "Re-running workflows and jobs") means none
+  of these 17 runs has elapsed as of today: even the earliest, v0.1.0's,
+  stays re-runnable until 2026-10-15T13:51:14Z, and every later run's
+  window closes later still. A re-run executes that tag's own
+  `release.yml` and `.goreleaser.yml`. For v0.1.0 through v0.10.2 -
+  neither of which carries `check-previous` or `check-clobber` (measured
+  above) - nothing in the tag's own workflow refuses a re-run, and its
+  own `.goreleaser.yml` carries no `release:` block at all (checked
+  directly at v0.10.2, v0.9.0 and v0.1.0), so GoReleaser's default
+  applies: `release --clean` builds fresh binaries and publishes a brand
+  new, non-draft release immediately - there is no draft step, no
+  "Publish the release" step and no attestation to reach or pass,
+  because none of those exist before v0.10.5's own `release.yml`. For
+  v0.10.3 and v0.10.4, whose own `release.yml` does carry
+  `check-previous` and `check-clobber`: `check-clobber` is not the gate
+  here (a security-auditor Medium finding corrected this) - it 404s
+  against the now-deleted release and returns 0, "has no release yet;
+  nothing to clobber" (`cmd_check_clobber`, `scripts/sbx-kit-pin.sh`),
+  never reaching its own "origin's main already pins" refusal at all.
+  The actual gate is `check-previous`: with no published release below
+  the tag it dies with "no published release below <tag>"
+  (`cmd_check_previous`, same script); if an older release were recreated
+  first, `pick above` still finds v0.10.5 and `older_line` dies, since the
+  workflow never sets `SBX_KIT_OLDER_LINE`. Either way the re-run is
+  refused before GoReleaser runs, for v0.10.3 and v0.10.4 alike, for as
+  long as v0.10.5 stays published. Bound:
+  re-running needs Actions write access (not merely repository push
+  access - the "release tags" ruleset restricts a fresh `v*` tag push to
+  the admin role, but a re-run needs no new tag push). v0.10.3 and
+  v0.10.4 are protected by `check-previous` regardless of the window, per
+  above. v0.1.0 through v0.10.2 have no such protection and are
+  otherwise unmitigated until each run's own 30-day window closes for
+  good - the last one among them, v0.10.2's own initial run
+  (36217176585, 2026-09-26T04:13:21Z), closes 2026-10-26T04:13:21Z.
+
+  Path B - direct release re-creation through the API, bypassing the
+  Actions workflow entirely. Security-auditor Medium finding: deletion
+  used no `--cleanup-tag`, so every one of these tags remains, and
+  `check-previous`/`check-clobber` are steps inside the Release
+  workflow - they run only when that workflow executes, never when
+  someone instead calls `gh release create <old-tag> <assets...>`
+  directly. Anyone holding `contents: write` (the repository admin, a
+  workflow token granted that permission, or an agent session using the
+  operator's own token) can create a release on any of these old tags
+  with arbitrary assets and a `checksums.txt` they wrote themselves to
+  match. Verified against the Go source: `canga upgrade`'s verification
+  (`internal/upgrade/verify.go`, `verifyChecksum`/`checksumFor`) checks
+  only that the downloaded archive's sha256 matches the line for it in
+  that same release's own `checksums.txt` - nothing cross-checks against
+  an attestation or any pin outside that one release - and
+  `verifyRuns` (`internal/upgrade/install.go`) only executes the staged
+  binary once to confirm it reports the expected tag and role, which a
+  forged binary can print regardless. `install_host.sh` and
+  `install_sandbox.sh` do the identical check (`checksums.txt` downloaded
+  from the same release, `sha256sum -c` against it). So an explicit
+  `install_host.sh <old-tag>`, `install_sandbox.sh <old-tag>` or
+  `canga upgrade --tag <old-tag>` would accept a release recreated this
+  way for any tag below v0.10.5. This path has no time bound and no
+  automatic gate at all - it is not something the deletion narrowed.
+
+  What the deletion actually closed: every unattested artifact that
+  existed before 2026-09-27 is gone, and an unprivileged reader can no
+  longer download one by simply naming an old tag. What it did not
+  close: an actor who already holds `contents: write` can still make an
+  old tag resolve to whatever they publish there, and today's installers
+  and `canga upgrade --tag` do not refuse a tag below v0.10.5 outright.
+  Marked `[narrowed; follow-up planned]` per the operator's decision
+  (2026-09-27, verbatim): "a1 b1" - (A1) record this residual as narrowed
+  with a follow-up planned, rather than closed; (B1) the four post-cap
+  Low/Nit items from this same round applied separately, in this pass.
+  Planned fix, not yet built: `install_host.sh`, `install_sandbox.sh` and
+  `canga upgrade --tag` refuse any tag below v0.10.5 outright, closing
+  Path B without waiting on Path A's 30-day windows. Reopen condition:
+  this stays open until that follow-up ships.
+
+  Attribution: this entry's check-previous/check-clobber-per-tag
+  measurement and its original deletion-resolved rewrite were written by
+  build-5, on top of a round-1 security-auditor Medium finding that
+  build-4 fixed first (operator quote "1"), correcting the original
+  v0.10.4-and-earlier coverage claim. The attestation-per-tag measurement
+  (`grep -c attest-build-provenance`) folded into this entry's opening
+  paragraph was the stray, unvetted addition described in "Rework
+  debrief: an unvetted write under a frozen ship gate" below - the
+  round-3 ship gate re-audited it in full and found it accurate, so it
+  was kept rather than reverted. This pass (build-6) corrects build-5's
+  own misattribution of v0.10.4's refusal to `check-clobber` instead of
+  `check-previous` (round-4 security-auditor Medium F2), and narrows the
+  `[resolved]` marker build-5 gave this entry back down to
+  `[narrowed; follow-up planned]` after round-4's security-auditor Medium
+  F1 showed the deletion does not stop a `contents: write` actor from
+  recreating an old release directly (operator quote "a1 b1").
 - **Confirmed by the v0.10.5 run (2026-09-27):** GitHub does report a
   `digest` for a draft's assets - the publish step's pre-publish digest
   comparison against `dist/` passed without needing a fix, and the
@@ -1199,3 +1350,56 @@ fixes" left open, plus one documentation nit in that same section.
 Operator decisions (2026-09-27, verbatim pt-BR): for B and C together,
 "Combiunado, escolha 1 (b+c num PR só)."; for A, "Também vamos argumentar A
 onde ele foi salvo pra que não seja mais pendencia."
+
+## Open residuals closed or narrowed (PR #40)
+
+The operator accepted closing two of the three open residuals rather than
+leaving them pending. Operator agreement (verbatim pt-BR, 2026-09-27):
+"aceitar". The third was narrowed, not closed, by a separate, later
+operator decision to delete every unattested release. Operator decision
+(verbatim pt-BR, 2026-09-27): "Remova todas as versões que não são
+attested. Mais prático. Ninguém usa ainda, só eu."
+
+1. HANDOFF residual 2 from the PR #34 entry, GNU Make's own `TAG=$(shell
+   ...)` argv-expansion sharp edge - "Release path: the workflow is the
+   one official path"'s "Addendum: ship-gate round-2 fixes on this same
+   change (2026-09-27)" subsection, "Two residuals deferred, not fixed
+   here" list, item 2 (see that entry for the measurement), and its
+   second mention under "sbx-kit-pin: rewrite verifies, and
+   canga-sandbox_ assets must carry this repo's Actions identity
+   (PR #35)"'s "Left open". Still accepted, unchanged by this section.
+2. "The draft is mutable until it is published", under "Release
+   provenance: attestation, draft-first, immutable releases (PR #36)"'s
+   "Left open". Still accepted, unchanged by this section.
+3. "Immutability is not retroactive", under the same section's "Left
+   open" - narrowed, not closed, by deleting every unattested release
+   (operator decision, verbatim pt-BR, 2026-09-27: "Remova todas as
+   versões que não são attested. Mais prático. Ninguém usa ainda, só
+   eu."). A round-4 ship-gate Medium finding showed the deletion does
+   not stop a `contents: write` actor from recreating an old release
+   directly, so that entry is now marked `[narrowed; follow-up planned]`
+   (operator quote "a1 b1"), not `[resolved]`; see that entry for the
+   measurements, the deletion list and the residual left after it.
+
+### Rework debrief: an unvetted write under a frozen ship gate
+
+During this PR's round-2 ship gate, the ship node meant to resume one of
+its round-1 persona agents with a message but instead launched a fork of
+itself, which inherited the round-2 fix instructions and wrote them into
+`docs/HANDOFF.md` in the frozen worktree after both round-2 personas had
+reported. The ship node caught and disclosed it; the write was confined to
+this file (`git status --short` showed only `docs/HANDOFF.md` changed, and
+the main tree was clean). Because a write under a completed verification
+pass invalidates its baseline, the orchestrator did not revert the stray
+write: it kept it and had round 3 re-audit the whole diff with fresh
+personas, rather than a targeted re-check, so every line the fork added
+was independently checked rather than discarded unread. Round 3 found the
+stray content accurate and it stands in "Immutability is not
+retroactive" above, attributed there to this fork.
+
+Lesson: a ship node that resumes a child must use the resume call, never a
+spawn; a fork inherits the node's full brief, including fix text meant for
+the builder. Static-tool question: the gate could record the worktree's
+`git diff` hash when it freezes the tree and compare it before reporting,
+which turns an unvetted write into a mechanical refusal instead of relying
+on the node noticing. Not built here.
