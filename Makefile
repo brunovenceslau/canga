@@ -11,9 +11,10 @@ SHELL := /bin/bash
 
 # One binary, canga, built in two roles from two main packages: cmd/host/canga
 # (everything) and cmd/sandbox/canga (what an agent may run). Both are built,
-# cross-compiled and released together; the sandbox role ships for linux only
-# (see .goreleaser.yml). Each lands in bin/<role>/canga, because they share a
-# name and would otherwise overwrite each other.
+# cross-compiled and released together; the host role ships for darwin only
+# and the sandbox role for linux only (see .goreleaser.yml). Each lands in
+# bin/<role>/canga, because they share a name and would otherwise overwrite
+# each other.
 ROLES    := host sandbox
 # Injected into main.version by ldflags. A release overrides it from the tag;
 # a local build reports the git description so `canga --version` never lies about
@@ -34,13 +35,18 @@ RACE_PROCS ?=
 # assuming it.
 RACE_STORE_DIR ?=
 
-# The platforms a release ships, kept in step with .goreleaser.yml. Compiling
-# every one of them is a real gate rather than a formality: a build tag, a
-# syscall, or a constant that exists on only one of them fails here, on any
-# machine, instead of at release time on a runner nobody is watching. It is also
-# why the test matrix does not need a second operating system to catch a
-# platform-specific compile error.
-PLATFORMS ?= darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
+# The platforms a release ships, exactly, kept in step with .goreleaser.yml
+# (platforms_test.go pins the two together). The host build runs on the
+# operator's Macs and nowhere else, so it is published for darwin only; the
+# sandbox build runs in the sbx sandboxes, which are linux VMs of the host's
+# architecture, so it is published for linux only (operator decision,
+# 2026-09-28). Compiling every one of them is a real gate rather than a
+# formality: a build tag, a syscall, or a constant that exists on only one of
+# them fails here, on any machine, instead of at release time. It does not
+# replace running each build where it runs: the Test workflow runs the host
+# build's tests on macOS and the sandbox build's on Linux, both architectures
+# each.
+HOST_PLATFORMS ?= darwin/arm64 darwin/amd64
 SANDBOX_PLATFORMS ?= linux/arm64 linux/amd64
 
 # Prerequisite order is load-bearing in this file, and `make -j` does not keep
@@ -51,7 +57,7 @@ SANDBOX_PLATFORMS ?= linux/arm64 linux/amd64
 .NOTPARALLEL:
 
 .DEFAULT_GOAL := help
-.PHONY: help build cross install fmt fix pre-commit lint license-check test race vuln ci release-preflight release-kit-bump tools tool-lint tool-vuln clean
+.PHONY: help build cross test-host test-sandbox e2e-sandbox install fmt fix pre-commit lint license-check test race vuln ci release-preflight release-kit-bump tools tool-lint tool-vuln clean
 
 help:
 	@echo "Targets:"
@@ -64,6 +70,9 @@ help:
 	@echo "  make lint     go vet + golangci-lint over the tree"
 	@echo "  make license-check  every commentable tracked file carries its SPDX tag"
 	@echo "  make test     go test -race -shuffle=on ./... with coverage"
+	@echo "  make test-host     the tests of what runs on a Mac: the host build and shared code"
+	@echo "  make test-sandbox  the tests of what runs in a sandbox: the sandbox build, shared code, release tooling"
+	@echo "  make e2e-sandbox   build the sandbox binary and drive it as an agent in a sandbox would"
 	@echo "  make race     the multi-process store race gate, verbosely"
 	@echo "  make vuln     govulncheck ./..."
 	@echo "  make ci       lint + license-check + cross + test + vuln — must be green before a push"
@@ -87,7 +96,7 @@ cross:
 	  CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch \
 	    go build -trimpath -ldflags '$(LDFLAGS)' -o /dev/null ./cmd/$$1/canga; \
 	}; \
-	for platform in $(PLATFORMS); do build host $$platform; done; \
+	for platform in $(HOST_PLATFORMS); do build host $$platform; done; \
 	for platform in $(SANDBOX_PLATFORMS); do build sandbox $$platform; done
 
 install:
@@ -117,12 +126,40 @@ pre-commit:
 # go vet runs separately from golangci-lint: it is the one static check that
 # needs no third-party binary, so it still reports something useful on a machine
 # where golangci-lint is missing.
+# Twice, once per operating system a build is published for: a file named
+# *_darwin_test.go (the real-APFS test) is invisible to a linux-only pass, and
+# the reverse would be true of a *_linux.go. GOOS is all it takes; nothing
+# runs.
 lint:
 	go vet ./...
+	GOOS=darwin go vet ./...
 	golangci-lint run ./...
+	GOOS=darwin golangci-lint run ./...
 
 test:
 	go test -race -shuffle=on -coverprofile=coverage.out ./...
+
+# The per-build test legs the Test workflow runs, each on the operating system
+# its build is published for (operator rule, 2026-09-28: gates test exactly the
+# expected usage). `make test` stays the whole tree, for a developer machine.
+#
+# The host leg is the host build, the shared packages, and install_host.sh,
+# which is what a Mac runs. The sandbox leg is the sandbox build, the shared
+# packages, and everything at the repository root: install_sandbox.sh and the
+# release tooling (scripts/sbx-kit-pin.sh), which run on Linux.
+HOST_TEST_PKGS    := ./cmd/host/... ./internal/...
+SANDBOX_TEST_PKGS := ./cmd/sandbox/... ./internal/... .
+
+test-host:
+	go test -race -shuffle=on $(HOST_TEST_PKGS)
+	go test -race -shuffle=on -run '^(TestInstallHost|TestPlatforms.*)$$' .
+
+test-sandbox:
+	go test -race -shuffle=on $(SANDBOX_TEST_PKGS)
+
+e2e-sandbox:
+	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/sandbox/canga ./cmd/sandbox/canga
+	scripts/e2e-sandbox.sh bin/sandbox/canga
 
 # The store's concurrency claim is a REAL gate, not a comment: this target runs
 # it alone and verbosely so its invariant counts are readable in a CI log.
@@ -163,7 +200,10 @@ license-check:
 vuln:
 	govulncheck ./...
 
-ci: lint license-check cross test vuln
+# e2e-sandbox is part of it: the sandbox build's end-to-end run is exactly the
+# expected usage, and a local gate that skips it is not the gate CI runs
+# (operator rule, 2026-09-28: gates test exactly the expected usage).
+ci: lint license-check cross test e2e-sandbox vuln
 
 # Everything that can refuse a release, checked on the signed tag at HEAD
 # BEFORE it is pushed: each check is a local git command or one GitHub query,

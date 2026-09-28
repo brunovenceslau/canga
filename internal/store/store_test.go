@@ -891,3 +891,133 @@ func TestRootContainment(t *testing.T) {
 		assert.ErrorIsf(t, err, fs.ErrNotExist, "%s escaped the root", name)
 	}
 }
+
+// TestOpen_RefusesALinkBelowTheBase is the auditor's PoC 11: the store root is
+// shared with sandboxes, which can replace an INTERMEDIATE key directory, not
+// only the leaf, with a link. Before the fix, os.MkdirAll and os.OpenRoot
+// followed it, and a host `reminders add` wrote its item wherever it pointed.
+// With Base set, every component from the base down is walked without
+// following a link, so both openers refuse and nothing lands outside.
+func TestOpen_RefusesALinkBelowTheBase(t *testing.T) {
+	t.Parallel()
+
+	openers := []struct {
+		name string
+		open func(Config, ...Option) (*Store, error)
+	}{
+		{name: "Open", open: Open},
+		{name: "OpenExisting", open: OpenExisting},
+	}
+
+	// Where the link is planted, relative to the base, for a store at
+	// <base>/local/!o!s/sub/repo.
+	links := []string{
+		"local",               // the first component
+		"local/!o!s/sub",      // an intermediate one, the PoC
+		"local/!o!s/sub/repo", // the leaf
+	}
+
+	for _, opener := range openers {
+		for _, link := range links {
+			for _, inside := range []bool{false, true} {
+				name := opener.name + "/" + link
+				if inside {
+					name += "/pointing inside the base"
+				}
+
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+
+					base := t.TempDir()
+					outside := t.TempDir()
+					target := outside
+
+					if inside {
+						// A link to another directory UNDER the base, which
+						// os.Root alone would allow: it would read and write
+						// another repository's store.
+						target = filepath.Join(base, "other")
+						require.NoError(t, os.MkdirAll(target, dirPerm))
+					}
+
+					linkPath := filepath.Join(base, filepath.FromSlash(link))
+					require.NoError(t, os.MkdirAll(filepath.Dir(linkPath), dirPerm))
+					// The real layout the sandbox replaced, so OpenExisting
+					// would otherwise have found a store behind the link.
+					require.NoError(t, os.MkdirAll(filepath.Join(target, "repo", itemsDir), dirPerm))
+					require.NoError(t, os.MkdirAll(filepath.Join(target, "sub", "repo", itemsDir), dirPerm))
+					require.NoError(t, os.MkdirAll(filepath.Join(target, "!o!s", "sub", "repo", itemsDir), dirPerm))
+					require.NoError(t, os.Symlink(target, linkPath))
+
+					before := snapshot(t, target)
+
+					reminders, err := opener.open(Config{
+						Base: base,
+						Dir:  filepath.Join(base, "local", "!o!s", "sub", "repo"),
+						Repo: "local/OS/sub", Scope: "repo",
+					})
+					if err == nil {
+						_, _ = reminders.Add("escaped")
+						_ = reminders.Close()
+					}
+
+					require.ErrorIs(t, err, ErrSymlinkedStore)
+					assert.Equal(t, before, snapshot(t, target), "a refused open wrote through the link")
+				})
+			}
+		}
+	}
+}
+
+// TestOpen_BaseMayBeALink: the base is the user's own layout, such as a
+// symlinked ~/.local/share, so a link there is followed. Only what is below
+// the base, the part a sandbox shares and can write, is held to no links.
+func TestOpen_BaseMayBeALink(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(target, link))
+
+	reminders, err := Open(Config{Base: link, Dir: filepath.Join(link, "a", "b", "repo"), Repo: "a/b", Scope: "repo"})
+	require.NoError(t, err)
+	require.NoError(t, reminders.Close())
+
+	_, err = os.Stat(filepath.Join(target, "a", "b", "repo", itemsDir))
+	require.NoError(t, err)
+
+	_, err = OpenExisting(Config{Base: link, Dir: filepath.Join(link, "a", "missing", "repo")})
+	require.ErrorIs(t, err, ErrNoStore)
+}
+
+// TestOpen_DirMustBeBelowTheBase: a Dir that is the base, or outside it, is a
+// programming error the store refuses rather than opens.
+func TestOpen_DirMustBeBelowTheBase(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+
+	for _, dir := range []string{base, t.TempDir(), filepath.Join(base, "..", "x")} {
+		_, err := Open(Config{Base: base, Dir: dir})
+		require.Error(t, err, dir)
+	}
+}
+
+// snapshot lists every path below dir, so a test can assert nothing appeared.
+func snapshot(t *testing.T, dir string) []string {
+	t.Helper()
+
+	var paths []string
+
+	require.NoError(t, filepath.WalkDir(dir, func(path string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		paths = append(paths, path)
+
+		return nil
+	}))
+
+	return paths
+}

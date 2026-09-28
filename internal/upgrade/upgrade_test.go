@@ -124,6 +124,7 @@ func runOptions(t *testing.T, current string, releases ...fixture) Options {
 
 	return Options{
 		Role:    RoleHost,
+		goos:    PlatformFor(RoleHost),
 		Current: current,
 		Token:   "token",
 		baseURL: fakeGitHub(t, releases...),
@@ -160,6 +161,7 @@ func TestRunInstallsItsOwnBuild(t *testing.T) {
 
 			opts := runOptions(t, installedVersion, releaseFixture(t, newerVersion))
 			opts.Role = role
+			opts.goos = PlatformFor(role)
 
 			result, err := Run(t.Context(), opts)
 			require.NoError(t, err)
@@ -192,6 +194,38 @@ func TestRunRefusesAnUnknownRole(t *testing.T) {
 			result, err := Run(t.Context(), opts)
 			require.ErrorContains(t, err, "unknown canga build role")
 			assert.Empty(t, result.Release)
+			assert.Equal(t, string(fakeBinary(installedVersion)), readFile(t, opts.path))
+		})
+	}
+}
+
+// TestRunRefusesABuildOffItsPlatform: the host build is published for macOS
+// only and the sandbox build for Linux only, so each refuses the other's
+// operating system before any request, rather than finding no archive.
+func TestRunRefusesABuildOffItsPlatform(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ role, goos string }{
+		{RoleHost, "linux"},
+		{RoleHost, "windows"},
+		{RoleSandbox, "darwin"},
+	} {
+		t.Run(tt.role+" on "+tt.goos, func(t *testing.T) {
+			t.Parallel()
+
+			opts := runOptions(t, installedVersion, releaseFixture(t, newerVersion))
+			opts.Role, opts.goos = tt.role, tt.goos
+
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("a build off its platform must be refused before any request")
+			}))
+			server.Start()
+
+			opts.baseURL = server.URL
+
+			_, err := Run(t.Context(), opts)
+			require.ErrorIs(t, err, ErrUnsupportedPlatform)
+			assert.Contains(t, err.Error(), PlatformFor(tt.role))
 			assert.Equal(t, string(fakeBinary(installedVersion)), readFile(t, opts.path))
 		})
 	}

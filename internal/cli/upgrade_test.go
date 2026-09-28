@@ -5,6 +5,7 @@ package cli
 
 import (
 	"bytes"
+	"runtime"
 	"testing"
 
 	"github.com/brunovenceslau/canga/internal/upgrade"
@@ -44,6 +45,33 @@ func TestNewUpgradeCmd_UsageErrors(t *testing.T) {
 				assert.Equal(t, ExitUsage, ExitCode(err))
 			})
 		}
+	}
+}
+
+// TestNewUpgradeCmd_RefusesTheWrongPlatform runs on the machine it runs on:
+// on Linux the host build's upgrade refuses, and on macOS the sandbox build's
+// does, with exit 2 and before any request, since the refusal comes right
+// after the tag and a release-stamped version gets past that.
+func TestNewUpgradeCmd_RefusesTheWrongPlatform(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{upgrade.RoleHost, upgrade.RoleSandbox} {
+		t.Run(role, func(t *testing.T) {
+			t.Parallel()
+
+			if runtime.GOOS == upgrade.PlatformFor(role) {
+				t.Skipf("the %s build is published for %s, which this is", role, runtime.GOOS)
+			}
+
+			cmd := NewUpgradeCmd(role, upgrade.MinReleaseTag)
+			cmd.SetArgs([]string{"--check"})
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+
+			err := cmd.ExecuteContext(t.Context())
+			require.ErrorIs(t, err, upgrade.ErrUnsupportedPlatform)
+			assert.Equal(t, ExitUsage, ExitCode(err))
+		})
 	}
 }
 

@@ -121,7 +121,7 @@ func TestClone(t *testing.T) {
 
 		source := sourceRepo(t)
 		base := t.TempDir()
-		t.Setenv(envBaseDir, base)
+		t.Setenv(BaseDirVar, base)
 
 		// insteadOf rewrites a real-looking URL onto the local source, so the
 		// derivation is exercised end to end without reaching the network. The
@@ -140,7 +140,7 @@ func TestClone(t *testing.T) {
 		hermeticGit(t)
 
 		base := t.TempDir()
-		t.Setenv(envBaseDir, base)
+		t.Setenv(BaseDirVar, base)
 
 		_, err := Clone(t.Context(), "not-a-url", quiet(""))
 		require.ErrorIs(t, err, ErrBadURL)
@@ -265,8 +265,8 @@ func TestGitEnv(t *testing.T) {
 }
 
 func TestTargetDir(t *testing.T) {
-	t.Run("honours CANGA_HOST_BASE_DIR", func(t *testing.T) {
-		t.Setenv(envBaseDir, "/tmp/elsewhere")
+	t.Run("honours CANGA_SRC_DIR", func(t *testing.T) {
+		t.Setenv(BaseDirVar, "/tmp/elsewhere")
 
 		got, err := TargetDir("git@github.com:owner/repo.git")
 		require.NoError(t, err)
@@ -275,7 +275,7 @@ func TestTargetDir(t *testing.T) {
 
 	t.Run("defaults to ~/src", func(t *testing.T) {
 		home := t.TempDir()
-		t.Setenv(envBaseDir, "")
+		t.Setenv(BaseDirVar, "")
 		t.Setenv("HOME", home)
 
 		got, err := TargetDir("https://github.com/owner/repo")
@@ -284,10 +284,10 @@ func TestTargetDir(t *testing.T) {
 	})
 
 	// The path is printed for `cd $(canga git clone …)` to consume, so a relative
-	// CANGA_HOST_BASE_DIR must not produce a relative answer.
+	// CANGA_SRC_DIR must not produce a relative answer.
 	t.Run("absolutizes a relative base", func(t *testing.T) {
 		t.Chdir(t.TempDir())
-		t.Setenv(envBaseDir, "relative-base")
+		t.Setenv(BaseDirVar, "relative-base")
 
 		got, err := TargetDir("https://github.com/owner/repo")
 		require.NoError(t, err)
@@ -305,7 +305,7 @@ func TestTargetDir(t *testing.T) {
 	// own spelling. Only the reminder store, which is shared between a
 	// case-insensitive and a case-sensitive filesystem, is escaped.
 	t.Run("keeps the readable spelling", func(t *testing.T) {
-		t.Setenv(envBaseDir, "/base")
+		t.Setenv(BaseDirVar, "/base")
 
 		got, err := TargetDir("git@github.com:Acme/Widget.git")
 		require.NoError(t, err)
@@ -343,4 +343,33 @@ func TestGitArgs(t *testing.T) {
 	assert.Equal(t,
 		[]string{"-c", flag, "clone", "--", "url", "dir"},
 		gitArgs("", []string{"-c", flag}, []string{"clone", "--", "url", "dir"}))
+}
+
+// TestBaseDir_RefusesTheRenamedVariable: CANGA_HOST_BASE_DIR was renamed to
+// CANGA_SRC_DIR. A machine still setting the old name must not quietly clone
+// into, or key reminders relative to, $HOME/src instead of the directory it
+// named: both resolvers refuse, and say which name to use.
+func TestBaseDir_RefusesTheRenamedVariable(t *testing.T) {
+	for name, resolve := range map[string]func() (string, error){
+		"BaseDir":       BaseDir,
+		"HandedBaseDir": HandedBaseDir,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(renamedBaseDirVar, "/Users/someone/code")
+			t.Setenv(BaseDirVar, "")
+			t.Setenv("HOME", t.TempDir())
+
+			_, err := resolve()
+			require.ErrorIs(t, err, ErrRenamedVariable)
+			assert.Contains(t, err.Error(), "CANGA_HOST_BASE_DIR")
+			assert.Contains(t, err.Error(), "CANGA_SRC_DIR")
+
+			// Even with the new name set too: two names for one directory can
+			// disagree, and nothing here can know which one was meant.
+			t.Setenv(BaseDirVar, "/Users/someone/src")
+
+			_, err = resolve()
+			require.ErrorIs(t, err, ErrRenamedVariable)
+		})
+	}
 }

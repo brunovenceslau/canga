@@ -59,6 +59,7 @@ const (
 	// Roles, and what the fake uname answers.
 	_host    = "host"
 	_linux   = "Linux"
+	_darwin  = "Darwin"
 	_amd64   = "amd64"
 	_aarch64 = "aarch64"
 
@@ -201,7 +202,8 @@ func newEnv(t *testing.T, bin string) env {
 	return e
 }
 
-// writeRelease writes every host and sandbox archive of _tag into dir, and a
+// writeRelease writes every archive a release of _tag publishes into dir (the
+// host build for darwin only, the sandbox build for linux only), and a
 // checksums.txt listing their real sha256.
 func writeRelease(t *testing.T, dir string) {
 	t.Helper()
@@ -212,8 +214,6 @@ func writeRelease(t *testing.T, dir string) {
 	for _, asset := range []struct{ role, platform string }{
 		{_host, "darwin_amd64"},
 		{_host, "darwin_arm64"},
-		{_host, "linux_amd64"},
-		{_host, "linux_arm64"},
 		{"sandbox", "linux_amd64"},
 		{"sandbox", "linux_arm64"},
 	} {
@@ -426,34 +426,34 @@ func TestInstallHost(t *testing.T) {
 	}
 
 	host := func(asset string) string { return fmt.Sprintf("canga-host_%s_%s.tar.gz", _version, asset) }
-	newest := append([]string{requested("latest")}, downloads(_tag, host("linux_amd64"))...)
+	newest := append([]string{requested("latest")}, downloads(_tag, host("darwin_amd64"))...)
 	tests := []installCase{
-		{name: "newest release", os: _linux, arch: "x86_64", sha: sha, wantRequests: newest, wantStderr: "is not on your PATH"},
+		{name: "newest release", os: _darwin, arch: "x86_64", sha: sha, wantRequests: newest, wantStderr: "is not on your PATH"},
 		{name: "pinned tag on a mac", args: []string{_tag}, os: "Darwin", arch: "arm64", sha: sha, wantRequests: downloads(_tag, host("darwin_arm64"))},
-		{name: "shasum only", args: []string{_tag}, os: _linux, arch: _aarch64, sha: _shasum, wantRequests: downloads(_tag, host("linux_arm64"))},
-		{name: "checksum mismatch", args: []string{_tag}, os: _linux, arch: _amd64, sha: sha, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
-		{name: "no checksum line", args: []string{_tag}, os: _linux, arch: _amd64, sha: sha, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
-		{name: "checksum mismatch, shasum", args: []string{_tag}, os: _linux, arch: _amd64, sha: _shasum, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
-		{name: "no checksum line, shasum", args: []string{_tag}, os: _linux, arch: _amd64, sha: _shasum, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
-		{name: "release that does not exist", args: []string{"v9.9.9"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v9.9.9/canga-host_9.9.9_linux_amd64.tar.gz")}, wantStderr: "404"},
-		{name: "not a release tag", args: []string{"latest"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: `"latest" is not a release tag`},
+		{name: "shasum only", args: []string{_tag}, os: _darwin, arch: _aarch64, sha: _shasum, wantRequests: downloads(_tag, host("darwin_arm64"))},
+		{name: "checksum mismatch", args: []string{_tag}, os: _darwin, arch: _amd64, sha: sha, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "no checksum line", args: []string{_tag}, os: _darwin, arch: _amd64, sha: sha, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "checksum mismatch, shasum", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _shasum, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "no checksum line, shasum", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _shasum, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "release that does not exist", args: []string{"v9.9.9"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v9.9.9/canga-host_9.9.9_darwin_amd64.tar.gz")}, wantStderr: "404"},
+		{name: "not a release tag", args: []string{"latest"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: `"latest" is not a release tag`},
 		// A version above the release floor is accepted: it reaches the
 		// network, exactly like "release that does not exist" above, since
 		// neither has a fixture on disk. Reaching (and failing) the download
 		// is how "accepted" is told apart from "refused before any request".
-		{name: "a version above the release floor", args: []string{"v0.10.6"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v0.10.6/canga-host_0.10.6_linux_amd64.tar.gz")}, wantStderr: "404"},
-		{name: "a version well above the release floor", args: []string{"v1.0.0"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v1.0.0/canga-host_1.0.0_linux_amd64.tar.gz")}, wantStderr: "404"},
+		{name: "a version above the release floor", args: []string{"v0.10.6"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v0.10.6/canga-host_0.10.6_darwin_amd64.tar.gz")}, wantStderr: "404"},
+		{name: "a version well above the release floor", args: []string{"v1.0.0"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v1.0.0/canga-host_1.0.0_darwin_amd64.tar.gz")}, wantStderr: "404"},
 		// Below the release floor is refused before any request: the release
 		// could have been recreated with unverified bytes (docs/HANDOFF.md,
 		// "Immutability is not retroactive").
-		{name: "a version below the release floor", args: []string{"v0.10.4"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantBelowFloor},
-		{name: "a version well below the release floor", args: []string{"v0.1.0"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantBelowFloor},
+		{name: "a version below the release floor", args: []string{"v0.10.4"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantBelowFloor},
+		{name: "a version well below the release floor", args: []string{"v0.1.0"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantBelowFloor},
 		// Defense in depth: the newest-release path (no tag on the command
 		// line) applies the floor too, to whichever tag /releases/latest
 		// resolves to. The redirect itself still has to be followed to learn
 		// that tag, so exactly one request is made before the refusal.
 		{
-			name: "the newest release resolves below the release floor", os: _linux, arch: _amd64, sha: sha,
+			name: "the newest release resolves below the release floor", os: _darwin, arch: _amd64, sha: sha,
 			wantExit: 1, wantStderr: _wantBelowFloor, wantRequests: []string{requested("latest")},
 			vars: []string{"FAKE_LATEST=v0.10.4"},
 		},
@@ -463,10 +463,15 @@ func TestInstallHost(t *testing.T) {
 		// itself compared equal to it and was wrongly accepted; a leading
 		// zero was likewise read as if it were not there. Both are refused
 		// before any request, the same way a version below the floor is.
-		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantNotCanonical},
-		{name: "a leading zero", args: []string{"v00.10.5"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantNotCanonical},
-		{name: "unsupported architecture", os: _linux, arch: "riscv64", sha: sha, wantExit: 1, wantStderr: "unsupported architecture riscv64"},
+		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantNotCanonical},
+		{name: "a leading zero", args: []string{"v00.10.5"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantNotCanonical},
+		{name: "unsupported architecture", os: _darwin, arch: "riscv64", sha: sha, wantExit: 1, wantStderr: "unsupported architecture riscv64"},
 		{name: "unsupported system", os: "FreeBSD", arch: _amd64, sha: sha, wantExit: 1, wantStderr: "unsupported system FreeBSD"},
+		// The host build is published for macOS only (operator decision,
+		// 2026-09-28): on Linux, which only ever runs the sandbox build, the
+		// script says so and where to go instead, before any request.
+		{name: "linux is refused", args: []string{_tag}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: "published for macOS only"},
+		{name: "linux is refused, newest release", os: _linux, arch: _aarch64, sha: sha, wantExit: 1, wantStderr: "install_sandbox.sh"},
 	}
 
 	runCases(t, _host, tests, func(t *testing.T, e env) (string, string) {

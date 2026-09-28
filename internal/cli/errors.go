@@ -79,6 +79,9 @@ func ExitCode(err error) int {
 		errors.Is(err, repo.ErrNoOrigin),
 		errors.Is(err, repo.ErrBadURL),
 		errors.Is(err, repo.ErrNotARepository),
+		// A variable set under its pre-rename name is configuration only the
+		// caller can fix; running the command again changes nothing.
+		errors.Is(err, repo.ErrRenamedVariable),
 		// An id that is not one ordinary path segment is a typo on the command
 		// line. Exit 1 would tell a caller to retry, and retrying a typo never
 		// stops.

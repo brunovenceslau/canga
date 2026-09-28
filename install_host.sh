@@ -21,7 +21,7 @@ main() {
 	releases=https://github.com/brunovenceslau/canga/releases
 	dir="$HOME/.local/bin"
 
-	# macOS ships shasum and no sha256sum; most Linux systems ship the reverse.
+	# macOS ships shasum and no sha256sum; a Mac with coreutils has both.
 	if command -v sha256sum >/dev/null 2>&1; then
 		sha256="sha256sum"
 	elif command -v shasum >/dev/null 2>&1; then
@@ -39,7 +39,12 @@ main() {
 
 	case "$(uname -s)" in
 	Darwin) os=darwin ;;
-	Linux) os=linux ;;
+	Linux)
+		# The host build is published for macOS only: Linux here only ever
+		# runs the sandbox build, which has its own installer.
+		echo "canga: the host build is published for macOS only, not Linux; in a sandbox, use install_sandbox.sh" >&2
+		exit 1
+		;;
 	*)
 		echo "canga: unsupported system $(uname -s)" >&2
 		exit 1

@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/brunovenceslau/canga/internal/repo"
 	"github.com/brunovenceslau/canga/internal/store"
@@ -28,6 +29,15 @@ type App struct {
 	// a flag rather than always the process's directory so a caller — a hook, a
 	// script, a test — can name the repository without chdir'ing into it.
 	RepoDir string
+
+	// BaseDir resolves the root an ORIGIN-LESS repository is keyed relative
+	// to: the root `canga git clone` lays repositories out under. Each build
+	// sets it, because the two resolve it differently: the host build uses
+	// repo.BaseDir ($HOME/src by default), and the sandbox build uses
+	// repo.HandedBaseDir, which never defaults, because the sandbox's $HOME is
+	// not the host's. Nil keeps the origin-only rule: a repository with no
+	// origin is refused.
+	BaseDir func() (string, error)
 }
 
 // BindRepoFlag registers -C/--repo on root, persistent so every subcommand
@@ -46,14 +56,10 @@ func (a *App) BindRepoFlag(root *cobra.Command) {
 }
 
 // Config derives the store's identity for the repository the App points at.
-// It touches the filesystem only to ask git for the origin URL.
+// It touches the filesystem to ask git for the origin URL and, for a
+// repository with no origin, to find where its working tree is.
 func (a *App) Config(ctx context.Context) (store.Config, error) {
-	origin, err := repo.Origin(ctx, a.RepoDir)
-	if err != nil {
-		return store.Config{}, err
-	}
-
-	name, err := repo.Path(origin)
+	name, err := a.repoName(ctx)
 	if err != nil {
 		return store.Config{}, err
 	}
@@ -69,10 +75,98 @@ func (a *App) Config(ctx context.Context) (store.Config, error) {
 		// filesystem, which is the boundary it is meant to be shared across.
 		// Repo below keeps the readable spelling, because that is what lands in
 		// each reminder's header and what a clone is named after.
+		// Base as well as Dir: the store walks every directory between the
+		// two without following a link, because everything below the base is
+		// shared with sandboxes that can write it.
+		Base:  base,
 		Dir:   filepath.Join(base, filepath.FromSlash(repo.EscapePath(name)), ScopeRepo),
 		Repo:  name,
 		Scope: ScopeRepo,
 	}, nil
+}
+
+// repoName is the repository's key: the "<host>/<owner>/<repo>" of its origin
+// when it has one, and otherwise its working tree's path below the clone base.
+//
+// Both are the same thing seen from two sides. A clone lands at
+// <base>/<host>/<owner>/<repo>, so for any tree `canga git clone` placed the
+// path below the base IS its origin's tail; the location only speaks for a
+// tree that names no upstream at all. It is never consulted when an origin
+// exists, so no key that worked before changes.
+//
+// Every refusal from the fallback wraps repo.ErrNoOrigin, so it stays the
+// usage error (exit 2) it was before the fallback existed, and says why the
+// location could not stand in.
+func (a *App) repoName(ctx context.Context) (string, error) {
+	origin, err := repo.Origin(ctx, a.RepoDir)
+	if err == nil {
+		return repo.Path(origin)
+	}
+
+	if !errors.Is(err, repo.ErrNoOrigin) || a.BaseDir == nil {
+		return "", err
+	}
+
+	// Only a repository with NO origin remote falls back. One that is not a
+	// repository, or that git refuses to read, keeps the original error, which
+	// carries git's own words about why.
+	has, remoteErr := repo.HasRemote(ctx, a.RepoDir, "origin")
+
+	switch {
+	case remoteErr != nil && errors.Is(remoteErr, repo.ErrNotARepository):
+		return "", err
+	case remoteErr != nil:
+		return "", remoteErr
+	case has:
+		return "", err
+	}
+
+	// A linked worktree is keyed by its main working tree; see repo.KeyTree.
+	top, err := repo.KeyTree(ctx, a.RepoDir)
+	if err != nil {
+		return "", noOriginAnd(a.RepoDir, err)
+	}
+
+	base, err := a.BaseDir()
+	if err != nil {
+		return "", noOriginAnd(top, err)
+	}
+
+	name, err := repo.PathUnder(base, top)
+	if err != nil {
+		return "", noOriginAnd(top, err)
+	}
+
+	return name, nil
+}
+
+// keySentinels are the refusals that mean "this location gives no key": the
+// caller pointed canga at the wrong place, or configured it wrongly, and
+// running the same command again changes nothing.
+var keySentinels = []error{
+	repo.ErrNotARepository,
+	repo.ErrNotUnderBase,
+	repo.ErrNoSuchBase,
+	repo.ErrBadPath,
+	repo.ErrWorktreeElsewhere,
+	repo.ErrWorktreeUnverified,
+	repo.ErrDotGitLink,
+	repo.ErrUnreadableSpelling,
+	repo.ErrNoBaseDir,
+	repo.ErrRenamedVariable,
+}
+
+// noOriginAnd reports a repository with no origin whose location could not
+// key it either, as ErrNoOrigin (exit 2), when err is one of keySentinels.
+// Anything else, an I/O failure such as EACCES or EIO, a cancellation, or a
+// missing git, passes through untouched: it is a runtime failure (exit 1),
+// not the caller pointing canga at the wrong place.
+func noOriginAnd(dir string, err error) error {
+	if !slices.ContainsFunc(keySentinels, func(sentinel error) bool { return errors.Is(err, sentinel) }) {
+		return err
+	}
+
+	return fmt.Errorf("%w in %s, and its location gives no key: %w", repo.ErrNoOrigin, dir, err)
 }
 
 // WithStore hands fn an already-open store, and fails with store.ErrNoStore if

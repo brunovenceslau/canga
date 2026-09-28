@@ -15,10 +15,11 @@ builds:
     binary: canga
     env:
       - CGO_ENABLED=0
-    # The macs are darwin/{arm64,amd64}. linux stays because the tests and the
-    # cross-compile gate run there, and a release that builds for it proves
-    # nothing platform-specific crept into the host build.
-    goos: [darwin, linux]
+    # The host build runs on the operator's Macs, darwin/{arm64,amd64}, and
+    # nowhere else, so that is all it is published for (operator decision,
+    # 2026-09-28). The Makefile's cross gate compiles exactly this set, and
+    # platforms_test.go pins the two together.
+    goos: [darwin]
     goarch: [amd64, arm64]
     flags:
       - -trimpath
@@ -32,8 +33,8 @@ builds:
       - -X main.version={{.Tag}}
       - -X main.commit={{.Commit}}
 
-  # The build the agent sandboxes get. They are linux VMs, so linux is the
-  # whole platform list.
+  # The build the agent sandboxes get. They are linux VMs of the host's
+  # architecture, so linux/{arm64,amd64} is the whole platform list.
   - id: sandbox
     main: ./cmd/sandbox/canga
     binary: canga

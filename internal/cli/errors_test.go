@@ -42,6 +42,9 @@ func TestExitCode(t *testing.T) {
 		// retry, and retrying a typo never stops.
 		{name: "malformed id", err: fmt.Errorf("x: %w", store.ErrInvalidID), want: ExitUsage},
 		{name: "runtime failure", err: fs.ErrPermission, want: ExitFailure},
+		// The pre-rename CANGA_HOST_BASE_DIR is configuration only the caller
+		// can fix, whichever command read the base.
+		{name: "renamed variable", err: fmt.Errorf("x: %w", repo.ErrRenamedVariable), want: ExitUsage},
 	}
 
 	for _, tt := range tests {

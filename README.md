@@ -10,8 +10,8 @@ working day:
 
 | Build | Runs on | What it does |
 | --- | --- | --- |
-| host | your Mac (darwin and linux builds) | `git` (clone, sync, hook setup), `workspace` (a repository beside its sandbox environment in cmux), reminders, its own upgrade |
-| sandbox | inside an agent sandbox (linux) | reminders `list` and `add`, its own upgrade |
+| host | your Mac (darwin/arm64 and darwin/amd64; published for macOS only) | `git` (clone, sync, hook setup), `workspace` (a repository beside its sandbox environment in cmux), reminders, its own upgrade |
+| sandbox | inside an agent sandbox (linux/arm64 and linux/amd64; published for Linux only) | reminders `list` and `add`, its own upgrade |
 
 Both builds are named `canga` and share one reminders list. The role is fixed
 when the binary is built: the sandbox build does not contain the host's
@@ -63,6 +63,10 @@ To install one release instead of the newest, pass its tag:
 curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_host.sh | sh -s -- v0.10.5
 ```
 
+The host build is published for macOS only. On Linux, where only the sandbox
+build runs, the script refuses before downloading anything and points to
+[Install it in a sandbox](#install-it-in-a-sandbox).
+
 The script stops before extracting anything when the checksum does not match,
 or when `checksums.txt` has no line for the archive. It prints the installed
 version last, and says so when `~/.local/bin` is not on your PATH.
@@ -81,7 +85,7 @@ check yourself that the tag is canonical `vX.Y.Z` and at least v0.10.5.
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
 tag=$(basename "$(curl -fsSL -o /dev/null -w '%{url_effective}' "$releases/latest")")
-asset=canga-host_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64, linux_amd64, linux_arm64
+asset=canga-host_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64
 
 curl -fsSLO "$releases/download/$tag/$asset"
 curl -fsSLO "$releases/download/$tag/checksums.txt"
@@ -173,7 +177,7 @@ safe.
 ### Where a clone lands
 
 ```
-${CANGA_HOST_BASE_DIR:-$HOME/src}/<host>/<owner>/<repo>
+${CANGA_SRC_DIR:-$HOME/src}/<host>/<owner>/<repo>
 ```
 
 The three segments come from the URL, with the scheme, any userinfo, any port
@@ -184,7 +188,7 @@ filesystem, encodes case.
 
 | Variable | Default | What it sets |
 | --- | --- | --- |
-| `CANGA_HOST_BASE_DIR` | `$HOME/src` | Root of the layout. |
+| `CANGA_SRC_DIR` | `$HOME/src` | Root of the layout. Also what an origin-less repository's reminders key is relative to. |
 | `CANGA_HOST_SIGNING_KEY` | `git config --global user.signingkey` | Key stamped into the clone. |
 | `CANGA_HOST_ALLOWED_SIGNERS` | `git config --global gpg.ssh.allowedSignersFile` | Allowed-signers file wired into the clone, so `git log --show-signature` works there. |
 | `CI` | unset | When set to anything, drops git's `\r` progress meter. |
@@ -336,7 +340,7 @@ The environments live in their own repository, cloned under the same base
 directory as every other clone, one directory per environment:
 
 ```
-${CANGA_HOST_BASE_DIR:-$HOME/src}/<environments repository>/envs/<host>/<owner>/<repo>-env
+${CANGA_SRC_DIR:-$HOME/src}/<environments repository>/envs/<host>/<owner>/<repo>-env
 ```
 
 The trailing `-env` is there so the environment directory's basename never
@@ -421,7 +425,7 @@ into the environment directory without going through `canga workspace` at all,
 which gets no protection otherwise:
 
 ```sh
-envs_ceiling="${CANGA_HOST_BASE_DIR:-$HOME/src}/github.com/acme/docker-sbx/envs"
+envs_ceiling="${CANGA_SRC_DIR:-$HOME/src}/github.com/acme/docker-sbx/envs"
 case ":${GIT_CEILING_DIRECTORIES:-}:" in
   *":$envs_ceiling:"*) ;;
   *) export GIT_CEILING_DIRECTORIES="$envs_ceiling${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}" ;;
@@ -436,7 +440,7 @@ in the same shell or across bash and zsh's own rc files, it finds the entry
 already there and leaves `GIT_CEILING_DIRECTORIES` alone.
 
 `envs_ceiling` must resolve to an absolute path: git silently ignores a
-relative `GIT_CEILING_DIRECTORIES` entry. Set `CANGA_HOST_BASE_DIR` itself to
+relative `GIT_CEILING_DIRECTORIES` entry. Set `CANGA_SRC_DIR` itself to
 an absolute path if you export it; canga's own `--layout` value never has this
 problem, since it always resolves the base directory to an absolute path
 first.
@@ -479,6 +483,10 @@ canga upgrade                # install the newest release
 canga upgrade --check        # say what is available, change nothing
 canga upgrade --tag v0.10.5  # install exactly that release
 ```
+
+Each build is published for one operating system: the host build for macOS,
+the sandbox build for Linux. Off it, `canga upgrade` refuses with exit `2`
+before any request, since there is no archive to upgrade into.
 
 Only the release tag goes to stdout, one line, so `v=$(canga upgrade)` is the
 version now installed. Everything else is a diagnostic on stderr.
@@ -608,6 +616,79 @@ directories on one side and one on the other, so the two sides disagree about
 whether they are looking at the same list. The readable spelling is kept in each
 item's `repo:` header.
 
+### Which key a repository gets
+
+A repository with an `origin` remote is keyed by that remote's
+`<host>/<owner>/<repo>`, whatever directory it sits in.
+
+A repository with no `origin` at all is keyed by where its working tree is:
+its path below the clone base, the same `${CANGA_SRC_DIR:-$HOME/src}`
+that `canga git clone` lays repositories out under. `~/src/local/OS` keys as
+`local/OS`. A tree at exactly the place `canga git clone` would put a
+repository gets that repository's key, so an origin-less
+`~/src/github.com/acme/widget` reads the same list as a clone of
+`github.com/acme/widget`. That shared key is the rule, not a collision: the
+layout defines that directory as that repository.
+
+The location is read from the filesystem, never from the repository's own
+configuration:
+
+- The working tree is the nearest directory holding a `.git`, from `-C` (or
+  the current directory) upwards, and git must report the same one. A
+  `core.worktree` or `GIT_WORK_TREE` that moves the working tree elsewhere is
+  refused, so nothing inside a repository can pick another repository's key.
+  "The same" is decided by file identity, not by comparing path strings.
+- Symbolic links are resolved on both sides first, so a link is another name
+  for the same key, and a link under the base that points out of it is
+  outside.
+- Each path component is taken in its on-disk spelling. On a
+  case-insensitive volume, such as APFS by default, `-C ~/SRC/LOCAL/os` or a
+  `CANGA_SRC_DIR` typed in another case still keys as `local/OS`.
+- The tree must be strictly below the base. The base itself, anywhere
+  outside it, and a path segment a URL could not carry either (a space, a
+  shell metacharacter) are refused with exit `2`, as a repository with no
+  `origin` was before.
+- An `origin` that exists but names no usable URL is refused as before; only
+  a repository with no `origin` remote falls back to its location.
+- A linked worktree (`git worktree add`) is keyed by its MAIN working tree,
+  wherever it sits, so every worktree of a repository reads one list:
+  `~/src/local/OS/.claude/worktrees/x` and `~/src/local/OS-wt` both key as
+  `local/OS`. The link is believed only when it checks out both ways: the
+  worktree's git directory sits in the main repository's `.git/worktrees/`,
+  that directory's `gitdir` names this worktree's `.git`, and the common
+  directory is the main tree's `.git`. A forged `gitdir` or `commondir` is
+  refused, never keyed by the worktree's own path instead. A submodule is
+  keyed by where it is. A worktree of a bare repository, or of one made with
+  `--separate-git-dir`, has no main working tree and is refused, exit `2`;
+  give the repository an `origin` to key it by that.
+- A `.git` that is a symbolic link is refused, exit `2`: it would let one
+  directory pass for another repository's main tree or worktree. The
+  worktree's `gitdir` record is read only as a regular file of at most 4096
+  bytes, never through a link or from a FIFO, and what it says is quoted,
+  never printed raw.
+- A segment the store uses inside a key's directory (`repo`, `items`,
+  `order`, `tmp`) is refused in a LOCATION-derived key, so no origin-less
+  repository's store sits inside another origin-less repository's data. It
+  does not stop an `origin` key from nesting inside a location key's
+  directory: an origin-less `~/src/github.com/acme` beside a clone of
+  `github.com/acme/repo` puts the clone's store at
+  `github.com/acme/repo/...` inside the first's. The two stay apart,
+  because the store reads only regular files in `items/` and skips
+  directories there, but they share a directory tree.
+
+The key is a label that says which list a repository reads, not an
+authenticated identity: an `origin` is whatever the repository's own
+configuration says, and anything able to write that configuration can point
+it at any key. What the location rule adds is that a location-derived key
+names the directory canga was pointed at, never one the repository's
+configuration chose.
+
+The sandbox build never defaults the base, because its `$HOME` is not the
+host's: repositories are mounted at their HOST paths. Its environment sets
+`CANGA_SRC_DIR` to the host's base, an absolute host path, exactly as it
+sets `CANGA_REMINDERS_DIR`. Unset, an origin-less repository is refused there
+and the message names the variable.
+
 `CANGA_REMINDERS_DIR` is read by both builds. It exists because `$HOME` is not
 the same on both sides of a sandbox boundary: a sandbox is handed the host's
 path rather than left to derive a different one. On the host it is normally
@@ -618,6 +699,16 @@ take it.
 Each item is a plain file. Editing one by hand is a supported way to use this —
 `canga reminders path <id>` exists to hand one to an editor — and a file
 dropped into `items/` by any other tool is listed like any other.
+
+Sandboxes can write the store, so canga reads an item or the order document
+only as a regular file, never through a symbolic link and never waiting on a
+FIFO, and only up to a size: 1 MiB for an item (more than a macOS command
+line can carry) and 4 MiB for the order document (over 100,000 ids). `list`
+skips an entry of `items/` that is not a regular file, as it skips a
+directory, and fails on an item over the limit; `add` refuses text that would
+make one. `path` only prints a path: the editor opens it later, and follows
+whatever is there by then, so open an item a sandbox could have replaced with
+the same care as any file it can write.
 
 ### Concurrency
 
@@ -644,10 +735,16 @@ crafted id cannot address anything outside it by construction rather than by
 validation. Go 1.27 is a correctness floor, not a preference: before it, a
 symlink opened with a trailing slash escaped a `Root`.
 
-The store directory itself must be a real directory. A `Root` follows its own
-path, so a symbolic link there would carry every read and write to wherever it
-points; canga refuses to open a store whose directory is a link. Links higher
-up the path, such as a symlinked `~/.local/share`, still work.
+Nothing below the store root may be a symbolic link: not the store directory,
+and not any directory between the root and it. A `Root` follows its own path,
+and one rooted at the store root would still follow a link that stays inside
+it, so a link at any of those levels would carry reads and writes to another
+directory, or to another repository's store. Everything below the root is
+shared with sandboxes, which can write it, so canga opens the root once and
+enters each directory below it relative to its parent, refusing a link at
+every step, and checks after each open that the directory it holds is still
+the one at that name. The root itself, and anything above it, such as a
+symlinked `~/.local/share`, is your own layout and may be a link.
 
 ## The sandbox build
 
@@ -685,9 +782,15 @@ The sandbox needs two things from its environment:
 1. The host's store directory for that repository, mounted into the sandbox.
 2. `CANGA_REMINDERS_DIR` set to the host's store root, which is a HOST path:
    inside the sandbox `$HOME` is not the host's home.
+3. Only for repositories with no `origin`: `CANGA_SRC_DIR` set to the
+   host's clone base, also a HOST path, with the repository mounted at its
+   host path below it. See
+   [Which key a repository gets](#which-key-a-repository-gets).
 
 ```sh
-CANGA_REMINDERS_DIR=/Users/you/.local/share/canga/reminders canga reminders list
+CANGA_REMINDERS_DIR=/Users/you/.local/share/canga/reminders \
+CANGA_SRC_DIR=/Users/you/src \
+  canga reminders list
 ```
 
 Without `CANGA_REMINDERS_DIR`, the sandbox build falls back to a store inside
@@ -879,6 +982,8 @@ commands sat at the top level. What changed, and what you do:
 | `${XDG_DATA_HOME}/devctl/reminders` | `${XDG_DATA_HOME}/canga/reminders` | Nothing, if you run any `canga reminders` command on the host before starting a sandbox that mounts the new path: that command moves the store in one rename and says so on stderr. |
 | `DEVCTL_REMINDERS_DIR` | `CANGA_REMINDERS_DIR` | Rename it in each sandbox environment file, together with the mount path. The old name is not read. |
 | `DEVCTL_BASE_DIR`, `DEVCTL_SIGNING_KEY`, `DEVCTL_ALLOWED_SIGNERS` | `CANGA_HOST_BASE_DIR`, `CANGA_HOST_SIGNING_KEY`, `CANGA_HOST_ALLOWED_SIGNERS` | Rename them wherever you set them. |
+| `canga-host_` archives for linux | none: the host build is published for darwin only | Nothing on a Mac. On Linux, which only runs the sandbox build, use `install_sandbox.sh`; `install_host.sh` and the host build's `canga upgrade` refuse there. |
+| `CANGA_HOST_BASE_DIR` | `CANGA_SRC_DIR` | Rename it wherever you set it, sandbox environment files included. While the old name is set, every command that reads the clone base refuses with exit `2` and names the new one, rather than fall back to `$HOME/src`. |
 | `canga clone`, `canga sync`, `canga setup hooks` (v0.5.0) | `canga git clone`, `canga git sync`, `canga git setup-hooks` | Use the new names wherever you call them. The old names were removed, not aliased, and fail with a usage error (exit `2`). |
 | `.devctl/hooks` | `.canga/hooks` | Move the directory and run `canga git setup-hooks`. It replaces its own earlier setup without `--force`: a `core.hooksPath` of `.devctl/hooks`, or, with `--symlink`, links into `.devctl/hooks`. |
 
@@ -915,22 +1020,33 @@ contents.
 | Code | Meaning |
 | --- | --- |
 | `0` | success |
-| `1` | a runtime failure, a clone target that already holds something, an id with nothing behind it, or a workspace whose clone or environment directory is missing |
-| `2` | a bad invocation, a directory that is not a repository or has no usable `origin`, an upgrade with no release to work from, or `workspace` with a `CANGA_HOST_ENVS_REPO` outside the base directory |
+| `1` | a runtime failure (including git failing to read a repository, such as an unreadable directory or `.git/config`), a clone target that already holds something, an id with nothing behind it, or a workspace whose clone or environment directory is missing |
+| `2` | a bad invocation, a directory that is not a repository, or has no usable `origin` and no key from its location, `CANGA_HOST_BASE_DIR` still set, an upgrade with no release to work from or on an operating system the build is not published for, or `workspace` with a `CANGA_HOST_ENVS_REPO` outside the base directory |
 
 ## Development
 
 ```sh
 make tools   # install the pinned golangci-lint and govulncheck
 make fix     # apply every automatic fix: go fix, the formatters, --fix linters
-make ci      # lint + test + govulncheck — must be green before a push
+make ci      # lint, license check, cross, test, e2e-sandbox, govulncheck: green before a push
 make race    # the multi-process store race gate, verbosely
+make test-host      # the host leg: host build, shared packages, install_host.sh
+make test-sandbox   # the sandbox leg: sandbox build, shared packages, release tooling
+make e2e-sandbox    # build the sandbox binary and drive it as an agent would
 make release-preflight             # checks to run on a signed tag before pushing it
 make release-kit-bump TAG=vX.Y.Z   # pin the sbx kit to a release the workflow published
 ```
 
 Every gate is a `make` target, and CI invokes the target rather than restating
 it, so what CI runs is what a push was checked against locally.
+
+Gates test exactly the expected usage: the host build's tests run on macOS,
+arm64 and Intel (`macos-26`, `macos-26-intel`), including a test of the
+reminders key on a real case-insensitive APFS volume; the sandbox build's
+tests and its E2E run on Linux, arm64 and x64 (`ubuntu-26.04-arm`,
+`ubuntu-26.04`). Runner labels are pinned, never `*-latest`, and the Ubuntu
+version tracks the sbx sandbox image. `make cross` compiles exactly the
+published set, and `make lint` lints for both operating systems.
 `make race RACE_PROCS=12` runs the store's concurrency gate at full size; the
 default is sized for CI. `make race RACE_STORE_DIR=/path` runs it against a
 filesystem of your choosing, which is how the store's invariants were checked
@@ -995,8 +1111,9 @@ To publish a version:
       `release --clean`: it builds everything and creates the GitHub
       release as a **draft** (`release.draft` in `.goreleaser.yml`),
       with GitHub's own generated notes (`changelog.use: github-native`),
-      and attaches four `canga-host_` archives (darwin and linux, amd64 and
-      arm64), two `canga-sandbox_` archives (linux), and `checksums.txt`.
+      and attaches two `canga-host_` archives (darwin, amd64 and arm64),
+      two `canga-sandbox_` archives (linux, amd64 and arm64), and
+      `checksums.txt`.
    2. `actions/attest-build-provenance` signs a build provenance
       attestation for every archive and `checksums.txt`, naming this
       repository, `release.yml`, the tag, and the runner.

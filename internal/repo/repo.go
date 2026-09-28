@@ -21,6 +21,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -72,18 +74,66 @@ func IsSafeSegment(segment string) bool {
 }
 
 // Origin returns the fetch URL of dir's `origin` remote.
+//
+// Only git ANSWERING about dir is ErrNoOrigin (exit 2): no such remote, not a
+// repository, a repository git will not read (dubious ownership), or a
+// directory that is not there. git failing to read what is there, an
+// unreadable directory or configuration, is ErrGitRefused, a runtime failure
+// (exit 1): answering it with "no origin remote" sends the user looking for a
+// remote that is not the problem, and, where a location-derived key applies,
+// the store the location names is never the question.
 func Origin(ctx context.Context, dir string) (string, error) {
-	url, err := git(ctx, dir, ErrNoOrigin, "remote", "get-url", "origin")
+	cmd := gitCommand(ctx, dir, nil, []string{"remote", "get-url", "origin"})
+	// git's messages untranslated, since originRefusal reads them. The last
+	// value of a variable wins in an exec environment.
+	cmd.Env = append(cmd.Env, "LC_ALL=C")
+
+	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		refused := ErrGitRefused
+		if originRefusal(dir, err) {
+			refused = ErrNoOrigin
+		}
+
+		return "", classify(ctx, dir, refused, err)
 	}
 
+	url := strings.TrimSpace(string(out))
 	if url == "" {
 		return "", fmt.Errorf("%w in %s", ErrNoOrigin, dir)
 	}
 
 	return url, nil
 }
+
+// originRefusal reports whether a failed `git remote get-url origin` is git
+// answering about dir rather than failing to read it; see Origin.
+//
+// Exit status 2 is the documented "no such remote" (git-remote(1)); the rest
+// are git's own fatal messages, read in the C locale.
+func originRefusal(dir string, err error) bool {
+	exit, ran := errors.AsType[*exec.ExitError](err)
+	if !ran {
+		return false
+	}
+
+	if exit.ExitCode() == exitNoSuchRemote {
+		return true
+	}
+
+	said := string(exit.Stderr)
+	if strings.HasPrefix(said, "fatal: not a git repository") || strings.Contains(said, "detected dubious ownership") {
+		return true
+	}
+
+	_, statErr := os.Stat(dir)
+
+	return errors.Is(statErr, fs.ErrNotExist)
+}
+
+// exitNoSuchRemote is the status `git remote get-url` exits with for a remote
+// that does not exist.
+const exitNoSuchRemote = 2
 
 // Root returns the top level of the working tree dir belongs to. dir may be any
 // subdirectory of it.

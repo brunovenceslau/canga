@@ -160,7 +160,8 @@ func TestSbxKit_Pin(t *testing.T) {
 }
 
 // TestSbxKit_Shellcheck runs shellcheck over the install script the kit
-// embeds and over the script that rewrites its pin. Without shellcheck it
+// embeds, over the script that rewrites its pin, and over the two scripts the
+// Test workflow runs: the sandbox E2E and the pinned-tool installer. Without shellcheck it
 // skips locally and fails under CI, where its absence would be a gate that
 // quietly stopped checking.
 func TestSbxKit_Shellcheck(t *testing.T) {
@@ -178,7 +179,9 @@ func TestSbxKit_Shellcheck(t *testing.T) {
 	embedded := filepath.Join(t.TempDir(), "install.sh")
 	require.NoError(t, os.WriteFile(embedded, []byte(kitInstallScript(t, _kitSpec)), 0o600))
 
-	for _, path := range []string{embedded, _pinScript} {
+	for _, path := range []string{
+		embedded, _pinScript, filepath.Join("scripts", "e2e-sandbox.sh"), filepath.Join("scripts", "ci-tools.sh"),
+	} {
 		cmd := exec.CommandContext(t.Context(), shellcheck, "--shell=sh", path)
 		cmd.Env = childEnv(os.Environ()).asEnv()
 		out, err := cmd.CombinedOutput()

@@ -24,6 +24,12 @@ const remindersCmd = "reminders"
 // gitCmd is the group that holds clone, sync and setup-hooks, spelled once.
 const gitCmd = "git"
 
+// cloneCmd is the git subcommand most spelled out below.
+const cloneCmd = "clone"
+
+// pathCmd is `reminders path`, which prints the store directory a key resolves.
+const pathCmd = "path"
+
 // execute runs one canga invocation against a FRESH command tree — cobra
 // accumulates flag state across Execute calls, so reusing one would leak the
 // previous test's flags into this one.
@@ -74,7 +80,7 @@ func TestRoot_UsageErrors(t *testing.T) {
 		{name: "unknown flag", args: []string{remindersCmd, "list", "--nope"}},
 		{name: "add with no text", args: []string{remindersCmd, "add"}},
 		{name: "rm with no id", args: []string{remindersCmd, "rm"}},
-		{name: "path with too many ids", args: []string{remindersCmd, "path", "a", "b"}},
+		{name: "path with too many ids", args: []string{remindersCmd, pathCmd, "a", "b"}},
 		{name: "unknown git subcommand", args: []string{gitCmd, "bogus"}},
 	}
 
@@ -116,7 +122,7 @@ func TestRoot_RegistersEveryRemindersVerb(t *testing.T) {
 
 	reminders, _, err := newRootCmd().Find([]string{remindersCmd})
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"add", "list", "rm", "path", "reorder"}, commandNames(reminders))
+	assert.ElementsMatch(t, []string{"add", "list", "rm", pathCmd, "reorder"}, commandNames(reminders))
 }
 
 // TestRoot_OldGitNamesAreGone: the names the git commands had before the
@@ -128,7 +134,7 @@ func TestRoot_RegistersEveryRemindersVerb(t *testing.T) {
 //nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
 func TestRoot_OldGitNamesAreGone(t *testing.T) {
 	hermeticGit(t)
-	t.Setenv("CANGA_HOST_BASE_DIR", t.TempDir())
+	t.Setenv("CANGA_SRC_DIR", t.TempDir())
 
 	missing := filepath.Join(t.TempDir(), "missing")
 	target := filepath.Join(t.TempDir(), "target")
@@ -137,7 +143,7 @@ func TestRoot_OldGitNamesAreGone(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "clone", args: []string{"clone", missing, target}},
+		{name: cloneCmd, args: []string{cloneCmd, missing, target}},
 		{name: "sync", args: []string{"sync", "-C", t.TempDir()}},
 		{name: "setup", args: []string{"setup", "hooks", "-C", t.TempDir()}},
 	}
@@ -165,7 +171,7 @@ func TestRoot_CommandTree(t *testing.T) {
 
 	git, _, err := root.Find([]string{gitCmd})
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"clone", "setup-hooks", "sync"}, commandNames(git))
+	assert.ElementsMatch(t, []string{cloneCmd, "setup-hooks", "sync"}, commandNames(git))
 }
 
 // commandNames lists a command's direct subcommands by name.
@@ -212,4 +218,76 @@ func TestCompletionScript(t *testing.T) {
 			require.NoErrorf(t, err, "%s -n: %s", tt.shell, parsed)
 		})
 	}
+}
+
+// TestRoot_OriginLessIsKeyedByItsPathUnderTheBase: the host build takes the
+// base from the same place `canga git clone` does, $HOME/src unless
+// CANGA_SRC_DIR says otherwise, so ~/src/local/OS keys as local/OS.
+func TestRoot_OriginLessIsKeyedByItsPathUnderTheBase(t *testing.T) {
+	testrepo.Hermetic(t)
+
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	t.Setenv("HOME", home)
+
+	dir := filepath.Join(home, "src", "local", "OS")
+	testrepo.Init(t, dir, "")
+
+	out, err := execute(t, remindersCmd, pathCmd, "-C", dir)
+	require.NoError(t, err)
+	assert.Equal(t,
+		filepath.Join(os.Getenv(cli.ReminderDirVar), "local", "!o!s", cli.ScopeRepo)+"\n", out)
+
+	// And outside the base, today's usage error, now saying why.
+	outside := filepath.Join(t.TempDir(), "repo")
+	testrepo.Init(t, outside, "")
+
+	_, err = execute(t, remindersCmd, "list", "-C", outside)
+	require.Error(t, err)
+	assert.Equal(t, cli.ExitUsage, exitCode(err))
+	assert.Contains(t, err.Error(), "not below")
+}
+
+// TestRoot_RenamedBaseVariableIsAUsageError: the old name is a configuration
+// the caller has to fix, so it exits 2 wherever the base is read.
+func TestRoot_RenamedBaseVariableIsAUsageError(t *testing.T) {
+	testrepo.Hermetic(t)
+	t.Setenv("CANGA_HOST_BASE_DIR", t.TempDir())
+
+	dir := filepath.Join(t.TempDir(), "repo")
+	testrepo.Init(t, dir, "")
+
+	for _, args := range [][]string{
+		{gitCmd, cloneCmd, workspaceURL},
+		{workspaceCmd, workspaceURL},
+		{remindersCmd, "list", "-C", dir},
+	} {
+		_, err := execute(t, args...)
+		require.Error(t, err, "%v", args)
+		assert.Equal(t, cli.ExitUsage, exitCode(err), "%v: %v", args, err)
+		assert.Contains(t, err.Error(), "CANGA_SRC_DIR", "%v", args)
+	}
+}
+
+// TestRoot_RefusesALinkPlantedInTheSharedStore is the auditor's PoC 11 through
+// the host command: a sandbox, which shares the store root, replaces an
+// intermediate key directory with a link to a host path. The host's `add`
+// must refuse, and write nothing there.
+//
+//nolint:paralleltest // t.Setenv, which the hermetic environment needs, forbids it
+func TestRoot_RefusesALinkPlantedInTheSharedStore(t *testing.T) {
+	dir := testrepo.New(t, "git@github.com:acme/widget.git")
+	store := os.Getenv(cli.ReminderDirVar)
+	hostPath := t.TempDir()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(store, "github.com"), 0o700))
+	require.NoError(t, os.Symlink(hostPath, filepath.Join(store, "github.com", "acme")))
+
+	_, err := execute(t, remindersCmd, "add", "-C", dir, "escaped")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symbolic link")
+
+	entries, err := os.ReadDir(hostPath)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the refused add wrote through the planted link")
 }

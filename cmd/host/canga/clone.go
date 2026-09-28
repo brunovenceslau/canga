@@ -15,7 +15,7 @@ func newCloneCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clone <url> [dir]",
 		Short: "Clone a repository into the deterministic layout",
-		Long: "clone puts a repository at ${CANGA_HOST_BASE_DIR:-$HOME/src} followed by the\n" +
+		Long: "clone puts a repository at ${CANGA_SRC_DIR:-$HOME/src} followed by the\n" +
 			"<host>/<owner>/<repo> derived from its URL, so a repository lands at the\n" +
 			"same path whatever protocol it was cloned with, on every machine. Name a\n" +
 			"directory to override that; a relative one is resolved against the\n" +

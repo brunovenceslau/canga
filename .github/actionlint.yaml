@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# actionlint configuration. The labels below are GitHub-hosted runners, not
+# self-hosted ones: ubuntu-26.04 and ubuntu-26.04-arm went GA on 2026-09-17,
+# after actionlint v1.7.12 (its newest release on 2026-09-28) built its list
+# of known labels, so it reports them as unknown. Declaring them here is
+# actionlint's documented way to accept a label it does not know. Remove
+# these once an actionlint release lists them itself.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

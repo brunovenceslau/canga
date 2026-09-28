@@ -1589,3 +1589,434 @@ PR on, in the orchestrator's briefs.
   to check; a one-line shape guard inside the block would make the
   check mechanical. Not a security-model surface; left for a later docs
   pass.
+
+## Reminders: an origin-less repository is keyed by its path below the clone base
+
+canga has no ADR log; this entry is the decision record. Before it, v0.10.5
+keyed a store only by the `origin` remote, so a repository with none failed
+with `no origin remote ... No such remote 'origin'` (exit 2). The operator
+keeps origin-less trees under `~/src/local/<name>` and clones under
+`~/src/<host>/<owner>/<repo>`.
+
+### Operator decision
+
+Operator rule (verbatim, pt-BR, 2026-09-27): "As chaves deveriam funcionar
+sem o `src` sempre. `local/OS` aponta parar `~/src/local/OS` e
+`github.com/brunovenceslau/foo` deveria apontar para
+`~/src/github.com/brunovenceslau/foo`."
+
+Read as: a reminders key IS the repository's path relative to the clone
+base. Implemented as: an `origin`, when present, stays the key unchanged
+(for a `canga git clone` it already equals that path); a repository with NO
+`origin` remote is keyed by its working tree's path below the base.
+
+### Design
+
+- **One definition of the base.** The root is `repo.BaseDir`, the one
+  `canga git clone` already uses (`${CANGA_SRC_DIR:-$HOME/src}`), and the
+  variable name is the exported `repo.BaseDirVar`. No second variable: two
+  names for one directory could disagree silently and split a list.
+- **Per build.** `cli.App.BaseDir` is set by each build. The host build uses
+  `repo.BaseDir`. The sandbox build uses `repo.HandedBaseDir`, which reads
+  `CANGA_SRC_DIR` only, requires it absolute, and never defaults: the
+  sandbox's `$HOME` is `/home/agent` while repositories are mounted at their
+  host paths, so `$HOME/src` would name a directory nothing lives under,
+  and a relative value would be resolved against a working directory the
+  host never had. This follows the `CANGA_REMINDERS_DIR` precedent (a
+  literal host path handed over in the environment file). A nil `BaseDir`
+  keeps the origin-only rule.
+- **The rename to `CANGA_SRC_DIR`.** The variable was `CANGA_HOST_BASE_DIR`.
+  Both builds now read it, and the scheme from `951ec14` reserves
+  `CANGA_HOST_` for what only the host build reads, so the operator chose
+  `CANGA_SRC_DIR` (operator approval of this scope, 2026-09-28: "pode
+  seguir"). Precedent checked: `951ec14` and the removed-name test in
+  `internal/cli/app_test.go` ("the pre-canga variables are not read") did
+  neither refuse nor warn; the old names were silently not read. That is
+  exactly the failure the operator asked to avoid here, since ignoring
+  the old name falls back to `$HOME/src`. So this rename REFUSES instead:
+  while `CANGA_HOST_BASE_DIR` is set, `repo.BaseDir` and
+  `repo.HandedBaseDir` fail with `repo.ErrRenamedVariable` (exit 2, naming
+  the new variable), even if `CANGA_SRC_DIR` is set too. It only fires
+  where the base is read (`git clone` into the layout, `workspace`, and the
+  reminders fallback); a repository with an origin never reads it. README's
+  rename table has the row.
+- **Filesystem, not repository content.** The working tree is the nearest
+  directory holding a `.git` entry, walked up from the canonical `-C`
+  directory, and git's `rev-parse --show-toplevel` must be the same
+  directory by file identity (`os.SameFile`), not by string.
+  A `core.worktree` in `.git/config`, or `GIT_WORK_TREE`, that relocates the
+  working tree fails with `repo.ErrWorktreeElsewhere` instead of choosing a
+  key. Both base and toplevel are made canonical (below) before
+  `filepath.Rel`; the result is refused when it is `.`, `..`, starts with
+  `../`, or is absolute (`repo.ErrNotUnderBase`), and each segment is held
+  to `repo.IsSafeSegment`, the rule URL segments already meet
+  (`repo.ErrBadPath`). The directory then goes through `repo.EscapePath`
+  like an origin key's, so `local/OS` is stored under `local/!o!s`.
+- **Only a truly absent origin falls back.** The fallback runs only when
+  `git remote get-url origin` fails AND `git remote` does not list `origin`.
+  Measured on git 2.53: an `origin` with only a `pushurl` or `fetch`, or an
+  empty `url`, makes `get-url` print the remote's name, which fails as
+  `ErrBadURL` and never reaches the fallback.
+- **Errors keep their exit code.** A fallback refusal that means "this
+  location gives no key" (the sentinels in `cli.keySentinels`: outside the
+  base, no such base, a bad or reserved segment, a relocated or unverified
+  worktree, an unreadable spelling, base unset in the sandbox, the renamed
+  variable) wraps `repo.ErrNoOrigin`, so it is still exit 2, and names why.
+  Anything else, an I/O failure such as EACCES or EIO, a cancellation, or a
+  missing git, passes through as a runtime failure, exit 1 (ship-gate
+  round 1, code-reviewer).
+
+### macOS case: measured, then fixed
+
+The first version compared the `.git` walk's toplevel with git's answer as
+strings, and took the key from `filepath.EvalSymlinks`. The operator
+measured on a Mac (APFS, case-insensitive), for one directory created as
+`$T/src/local/OS` and reached as `$T/SRC/LOCAL/os`:
+
+```
+pwd    = $T/SRC/LOCAL/os          pwd -P = $T/src/local/OS
+git rev-parse --show-toplevel (cd or -C) = $T/src/local/OS
+filepath.EvalSymlinks($T/SRC/LOCAL/os)  = $T/SRC/LOCAL/os   (typed case kept)
+Rel($T/src, that)                        = ../SRC/LOCAL/os
+os.Getwd                                 = $T/SRC/LOCAL/os
+```
+
+So a wrong-case `-C` or working directory was refused with a misleading
+`ErrWorktreeElsewhere`, and a wrong-case `CANGA_SRC_DIR` put every tree
+"outside" the base. The fix:
+
+- **Identity, not strings.** `toplevel` compares the walked directory and
+  git's with `os.SameFile`. `core.worktree` and `GIT_WORK_TREE` pointing
+  elsewhere are still a different file, so still refused.
+- **Canonical spelling.** `canonical` resolves symbolic links, then walks
+  each component. An ASCII component whose case-flipped spelling is not
+  the same file sits in a directory that tells case apart, and the typed
+  spelling is kept without reading the directory, so Linux and
+  case-sensitive volumes never read one (a directory with execute but no
+  read permission still resolves). Otherwise the parent is read and the
+  entry that is the same file is taken. No cgo. Base and toplevel both go
+  through it, so `$T/SRC` and `$T/src/LOCAL/os` key as `local/OS`.
+- **Fail closed.** When the spelling cannot be established (an unreadable
+  parent, a failing Lstat, no matching entry), `canonical` fails with
+  `repo.ErrUnreadableSpelling` instead of keeping the typed spelling: on
+  APFS the typed spelling is exactly the one that opens a second store
+  (ship-gate round 1, code-reviewer).
+- **Unicode normalization** is covered by the same mechanism, since the
+  match is by file identity: a name typed NFC and stored NFD resolves to
+  the stored bytes. It has no effect on keys in practice, because
+  `IsSafeSegment` admits ASCII only, so a non-ASCII segment is refused
+  either way.
+- **Tests.** Linux CI cannot reproduce a folding volume, so the derivation
+  reads the filesystem through a small seam (`fileSystem`), and
+  `key_case_test.go` supplies `foldingFS`, which matches components
+  case-insensitively over a real directory and keeps the typed case from
+  `EvalSymlinks`, as measured above. Two mutations were checked: dropping
+  the respelling fails `TestCanonical`, `TestPathUnder_CaseInsensitive` and
+  `TestToplevel_CaseInsensitive`; going back to string comparison fails
+  `TestToplevel_CaseInsensitive`.
+- **Re-check on a Mac.** Not run on a Mac by this change; darwin/arm64 and
+  darwin/amd64 host binaries were built for the operator to repeat the
+  measurement.
+
+### Key collisions
+
+- **Path key equal to an origin key.** Intended, not merely tolerated: an
+  origin-less tree at `<base>/github.com/acme/widget` is, by the layout's
+  own definition, `github.com/acme/widget`, so it reads that repository's
+  list. Pinned by `TestConfig_OriginLessAtTheCloneLayoutSharesTheOriginKey`.
+- **A key that is a prefix of another** (a path key `local/OS` and a
+  repository nested at `local/OS/repo/x`): refused for location-derived
+  keys. A segment the store uses inside a key's directory (`repo`, `items`,
+  `order`, `tmp`; `repo.IsReservedSegment`, pinned against `cli.ScopeRepo`
+  and `store.DataDirs` by `TestReservedSegmentsCoverTheStore`) is not a key
+  segment, so no path key can nest inside another store's scope data
+  (ship-gate round 1, code-reviewer). Between ORIGIN keys of different
+  depth (GitLab subgroups) the nesting was already reachable and stays
+  inert: the store only reads regular files in `items/` and skips
+  directories there (`Store.items`).
+- **Linked worktrees** share the main tree's key; see below.
+- **Trust.** A key is a LABEL, not an authenticated identity: an origin is
+  whatever the repository's configuration says. The sandbox build can only
+  `list` and `add`, and could already address any origin-derived key with
+  `git remote add origin <url>`; the fallback adds no reach an agent did
+  not have. What it guarantees is that a key from the fallback names a
+  directory the process was actually pointed at, not one chosen by
+  repository configuration.
+
+### Round 3: ship-gate findings, worktrees, store links, platforms (2026-09-28)
+
+Operator decisions (verbatim, pt-BR, 2026-09-28):
+
+- Worktrees: "2) (a)" - key a linked worktree by its main working tree.
+- Store symlink: "Corrija symlink neste PR mesmo."
+- Platforms: "precisaremos de builds do canga no release tanto para darwin
+  (hosts) quanto para linux (sandboxes)"; earlier: "precisamos publicar
+  darwin/amd64 [sempre host, como darwin/arm64] e linux amd64 [sempre
+  sandbox, como linux/arm64] também"; "O host é MacOnly então deveria ter
+  um gate de build em mac. Tecnicamente só a versão de sandbox roda no
+  Linux. Deveríamos testar exatamente o uso esperado nos gates."; "Veja
+  qual é o ubuntu que o sbx rodaria no intel e use a mesma versão. LATEST
+  != 24.04."; and, confirming the removal of the linux host build: "Sim!
+  Por não termos host linux como já conversamos, pode remover."
+
+What changed:
+
+- **Linked worktrees (code-reviewer, Required).** `repo.KeyTree` keys a
+  linked worktree by its main working tree, the parent of the resolved
+  `git rev-parse --git-common-dir`, and only when the link checks out both
+  ways by `os.SameFile`: the worktree's git directory sits in
+  `<common>/worktrees/`, its `gitdir` file names this tree's `.git`, and
+  `<common>` is the `.git` of the directory taken as the main tree.
+  Otherwise `repo.ErrWorktreeUnverified`, never the worktree's own path.
+  The main tree's path goes through `canonical`. A submodule, whose git
+  directory is its common directory, is keyed by where it is. Tests: a
+  worktree under `<main>/.claude/worktrees/x`, a sibling `local/OS-wt`, a
+  forged `gitdir`, a forged `commondir`, a submodule, and the case
+  canonicalization of the main tree.
+- **Store links below the root (security-auditor, Medium, pre-existing).**
+  Only the leaf store directory was refused as a link; `os.MkdirAll` and
+  `os.OpenRoot` followed a link in an intermediate key directory, so a
+  sandbox replacing `$REM/local/!o!s/sub` with a link to a host path made
+  the host's `reminders add` write there (auditor PoC 11, rc=0). Now
+  `store.Config.Base` is the reminders root, which every production caller
+  sets: the store opens it once with `os.OpenRoot` and enters each
+  directory below it relative to its open parent (`descend`/`enter`),
+  refusing a link before the open and re-checking after it that the handle
+  is the directory at that name (a link swapped in and out is caught). A
+  link pointing INSIDE the root is refused too, since `os.Root` alone
+  would follow it into another repository's store. The root itself may be
+  a link (a symlinked `~/.local/share`). Tests plant the link at the first,
+  an intermediate and the leaf component, pointing outside and inside the
+  root, for both openers, and assert nothing was written; a host command
+  test and the sandbox E2E repeat the PoC.
+- **The rest of round 1** (code-reviewer Optional/Nit, security-auditor
+  Low/Info, test-engineer): an unresolvable base is `repo.ErrNoSuchBase`
+  (not `ErrNotUnderBase`), an unresolvable tree is its own runtime error,
+  and `CANGA_SRC_DIR` is named in a message only when it is set; the
+  exit-code split above; reserved segments; fail-closed spelling; the key
+  documented as a label; tests for `GIT_WORK_TREE`, NFC/NFD
+  (`normalizingFS`), `ErrRenamedVariable` in `TestExitCode`, the sandbox
+  build's renamed-variable exit 2, a trailing-slash base, the `toplevel`
+  Stat failures, and both `dotGitAbove` failure branches.
+
+### Rule: gates test exactly the expected usage
+
+Gates test exactly the expected usage: host on macOS, sandbox on Linux, both
+architectures each (operator rule, 2026-09-28, quoted above).
+
+- **Published set.** The host build is published for darwin/arm64 and
+  darwin/amd64 only, the sandbox build for linux/arm64 and linux/amd64
+  only: `.goreleaser.yml`, the Makefile's `HOST_PLATFORMS` and
+  `SANDBOX_PLATFORMS` (`make cross`), and `upgrade.PlatformFor` agree, and
+  `platforms_test.go` pins all three. `install_host.sh` refuses Linux and
+  points to `install_sandbox.sh`; `canga upgrade` refuses a build off its
+  operating system with `upgrade.ErrUnsupportedPlatform`, exit 2, after
+  the tag check and before any request.
+- **Test workflow.** `host` runs `make test-host` and a host build on
+  `macos-26` (arm64) and `macos-26-intel` (x64), including
+  `TestHost_APFSWrongCaseKeysAsStored`, which runs only on darwin, on a
+  real volume, and skips only when that volume is case-sensitive. `sandbox`
+  runs `make test-sandbox` and `make e2e-sandbox` (`scripts/e2e-sandbox.sh`)
+  on `ubuntu-26.04-arm` and `ubuntu-26.04`. `cross` runs on `ubuntu-26.04`.
+  shellcheck v0.11.0 and jq 1.8.1 are installed by `scripts/ci-tools.sh`,
+  pinned by sha256 for each of the four platforms (GitHub's asset digests;
+  jq's own `sha256sum.txt` agrees), and zsh from apt where it is absent.
+- **Pinned labels.** No workflow uses `*-latest`: lint, security and
+  release moved to `ubuntu-26.04` too. The Ubuntu version tracks the sbx
+  sandbox image (`docker/sandbox-templates:claude-code`, multi-arch,
+  measured Ubuntu 26.04.1 in the operator's arm64 sandbox) and moves with
+  it. Both `ubuntu-26.04` labels have been GA since 2026-09-17.
+  actionlint v1.7.12 does not list them yet, so `.github/actionlint.yaml`
+  declares them.
+- **Lint for both systems.** `make lint` runs `go vet` and golangci-lint
+  once more with `GOOS=darwin`, so a darwin-only file is linted on any
+  machine.
+
+### Round 4: ship-gate round 2 findings (2026-09-28)
+
+One consolidated fix pass over the 18 findings of the second ship-gate
+round (round 2 of 3), with the orchestrator's decisions applied. Each fix
+has a test written first and seen failing, unless noted as coverage of
+behavior that already held.
+
+- **macOS legs (code-reviewer, Required).** Two `TestCanonical` subtests ran
+  `osFS{}` on the real filesystem assuming it tells case apart; APFS folds.
+  `foldsCase` probes the temporary volume (a lower-case file named in upper
+  case, compared by `os.SameFile`): on a folding volume the wrong-case
+  subtest now asserts the stored spelling comes back (a real-APFS check of
+  `canonical`), and the two-entries subtest skips. Sweep of `./internal/...`
+  and `./cmd/...` for the same assumption: case-pair and symlink-sensitive
+  path assertions were read (`grep` for mixed-case pairs, `EqualFold`,
+  `ToLower`, `/proc`, `runtime.GOOS`, `Root`/`CommonDir`/`Toplevel` result
+  comparisons); every other path comparison already resolves the temporary
+  directory (`mkdirs`, `resolve`), and the escaped-key tests compare strings,
+  never on-disk entries. No other case-sensitive assumption found; a Linux
+  sandbox cannot mount a folding volume (the kernel lacks `CONFIG_UNICODE`
+  and has no vfat), so only the macOS legs prove it.
+- **The worktree `gitdir` record (security-auditor, Medium).** It was read
+  with `os.ReadFile`: a link to any host file printed that file on stderr,
+  a FIFO hung the host build, `/dev/zero` exhausted memory. New package
+  `internal/boundedread`: open with `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`, judge
+  the OPEN handle by `fstat` (regular files only), re-`Lstat` the name and
+  require the same file (catches an opener that follows links, and a swap),
+  read through `io.LimitReader` with a cap. The seam's `ReadFile` became
+  `ReadRegular`. The record is capped at 4096 bytes (Linux `PATH_MAX`; the
+  record is one path and a newline). Repository-supplied strings in the
+  refusal are `strconv.Quote`d and truncated to 128 bytes, and a
+  `*fs.PathError` is reduced to its operation and errno (`why`), so an
+  escape sequence never reaches the terminal. Tests:
+  `TestKeyTree_GitdirRecord` (link to a secret, link to a valid copy, FIFO,
+  oversized, escape sequence), `TestRegular`.
+- **`.git` links (security-auditor, Low).** A `.git` that is a symbolic link
+  is refused, `repo.ErrDotGitLink` (a key sentinel, exit 2). Every identity
+  comparison is by `Lstat` (`sameEntry` replaced `sameFile`); a linked
+  worktree's `.git` must be a regular file, and the main tree's `.git` a real
+  directory that is the common directory. Tests: `TestKeyTree_DotGitLinks`,
+  and "a .git that is a link" in `TestConfig_OriginLessRefusals`.
+- **Third check coverage (test-engineer, High):** `TestKeyTree_ThirdCheck`,
+  a planted common directory that passes checks 1 and 2, and a main tree
+  whose `.git` only links to it (passes under `Stat`, refused under `Lstat`).
+- **Bare and `--separate-git-dir` worktrees (code-reviewer, Optional):** the
+  refusal now says there is no main working tree and to give the repository
+  an `origin`. `TestKeyTree_NoMainTree`, one subtest per layout.
+- **`ErrWorktreeUnverified` end to end (test-engineer, Medium):** "a forged
+  worktree" in `TestConfig_OriginLessRefusals`, exit 2 (coverage).
+- **`repoName`'s `case has` (test-engineer, Medium): live, not dead.**
+  Configs tried on git 2.53: `remote.origin.fetch` only and an empty `url`
+  (both print the name: `ErrBadURL`), a `remotes/origin` or
+  `branches/origin` file (`get-url` answers, `git remote` does not list it:
+  the reverse case), `url..insteadOf`, two urls, `skipDefaultUpdate`,
+  `vcs`, `remote.Origin.url` (exit 2, and `git remote` lists `Origin`, not
+  `origin`). A url of only whitespace (`remote.origin.url " "`) reaches it:
+  `get-url` prints a blank line, `Origin` reads no origin, `git remote`
+  lists `origin`. Test: "an origin git lists but gives no url for";
+  removing the branch fails it.
+- **Fail closed on real APFS (test-engineer, Medium):**
+  `TestHost_APFSUnreadableSpellingFailsClosed` (darwin only) makes the
+  parent execute-only (mode 000 would fail the typed lookup itself, a plain
+  permission error that never reaches the spelling) and asserts
+  `ErrUnreadableSpelling`, exit 2. Not runnable here.
+- **Store I/O branches (test-engineer, Low):** `TestOpen_ReportsIOFailures`
+  (read-only base, unsearchable and unopenable directories, a name over
+  NAME_MAX, the parent and the directory locked after the open through the
+  hook); `enter` and `checkRoot` are at 100% statement coverage.
+- **Relative `CANGA_SRC_DIR` at the CLI (test-engineer, Low):**
+  `TestSandbox_RelativeBaseIsAUsageError`; accepting a relative base fails
+  it.
+- **Nested keys (code-reviewer, Optional): narrowed, not restructured**
+  (coordinator's decision, taken in ship-gate round 3: no layout change).
+  README and the
+  `reservedSegments` comment now say what is prevented (a location key
+  inside another location key's scope data) and what is not (an origin key
+  inside a location key's directory). The structural fix is an open item
+  below.
+- **`make ci` runs `e2e-sandbox` (code-reviewer, Optional).**
+- **Store reads (security-auditor, Low, pre-existing):** items, `Get` and
+  the order document go through `boundedread` via `Store.read`
+  (`os.Root.OpenFile`, whose link following the re-`Lstat` refuses, and
+  `os.Root` refusing a link out of the root is also reported as a link).
+  Caps: 1 MiB per item (a reminder is a line or a few paragraphs; more than
+  a macOS command line carries, so no `add` comes near it), 4 MiB per order
+  document (about 34 bytes per id: over 100,000 ids). `List` skips an entry
+  that is not a regular file, as it skips a directory, and fails on an
+  oversized item; `Get` and the order read fail on both; `Add` refuses text
+  whose item would exceed the cap (`store.ErrTextTooLarge`), so what it
+  writes always reads back. Tests: `TestStore_ReadsOnlySmallRegularItems`,
+  `TestStore_ReadsOnlySmallRegularOrder` (FIFO, link out of the store, link
+  to another item, oversized, at the limit), and an E2E step planting a FIFO
+  item, with a watchdog that sends KILL: canga turns TERM and INT into a
+  cancellation, which a read blocked in the kernel never sees (measured:
+  with the old read the step hung until KILL; TERM did nothing).
+- **`reminders path` (security-auditor, Info):** its help and README say it
+  only prints a path, and whatever opens it later follows what is there by
+  then.
+- **git failures classified (security-auditor, Info, pre-existing).**
+  `repo.Origin` runs `git remote get-url origin` with `LC_ALL=C` and maps to
+  `ErrNoOrigin` (exit 2) only git answering about the directory: exit 2
+  (git-remote(1)'s "no such remote"), `fatal: not a git repository`,
+  dubious ownership, or a directory that does not exist. Anything else,
+  such as an unreadable directory or `.git/config`, is `ErrGitRefused`,
+  exit 1, and never reaches the fallback. Contained in `repo.Origin`.
+  Tests: four new `TestOrigin` subtests (dubious ownership via
+  `GIT_TEST_ASSUME_DIFFERENT_OWNER`, missing directory, mode-000 parent,
+  mode-000 config) and "a directory git cannot enter" in
+  `TestConfig_RuntimeFailuresAreNotUsageErrors`.
+- **Nits:** the `race` comment moved back above `race`; the Makefile's long
+  comment line rewrapped; `install_test.go`'s fixture no longer builds
+  `canga-host_*_linux_*` archives.
+
+### Ship-gate round 3: GO, with capped-round pending items (2026-09-28)
+
+The ship gate reached GO on its third round. The round budget for
+Optional/Nit/Low/Info findings (3 rounds) is exhausted, so these are
+recorded here rather than fixed in this PR:
+
+- **`-C` on a regular file (code-reviewer, Optional).** `-C <regular
+  file>` exits 1 (`git refused ... Not a directory`) instead of the usual
+  exit 2. Fix: in `internal/repo/repo.go`'s `originRefusal`, treat
+  `statErr == nil && !info.IsDir()` the same as a missing directory
+  (`ErrNoOrigin`), and add a test.
+- **`item.encode()` recomputed in the retry loop (code-reviewer, Nit).**
+  `internal/store/store.go:387-390` calls `len(item.encode())` on every
+  pass of the id-retry loop. Fix: compute it once, before the loop.
+- **`maxOrderBytes` has no at-the-limit test (test-engineer, Low).** Add a
+  test for a document exactly at `maxOrderBytes` (`internal/store/order.go`).
+- **Relative gitdir branch uncovered (test-engineer, Low).** The relative
+  gitdir-pointer branch at `internal/repo/key.go:451` has 0% coverage. Add
+  a test with a relative pointer.
+- **Oversized or unreadable order document fails `list` and `reorder`
+  (security-auditor, Info N1).** A planted oversized item, or an unreadable
+  order document, fails the whole host `list` (and `reorder`) instead of
+  degrading. Fix: skip oversized items in `internal/store/store.go`'s
+  `items()` the way non-regular ones are already skipped, and fall back to
+  an older order version or no order when the order document cannot be
+  read. No new capability follows from this, since the sandbox can already
+  delete the store.
+- **A racy `os.Root` escape error reaches `list` raw (security-auditor,
+  Info N2).** Under a race, an `os.Root` escape error at
+  `internal/boundedread/boundedread.go:55` reaches `items()` unmapped and
+  fails `list` (measured 42 of 600 runs; transient, no leak). Fix: map it
+  to `ErrNotRegular` in `Store.read` (`internal/store/store.go`).
+- **HANDOFF wording (code-reviewer, Nit): fixed in this same PR, not
+  deferred.** The two "Nested keys" references above (around the round 4
+  section and in "Open") called that deferral an "orchestrator decision"
+  taken "in round 4". It was the coordinator's decision, taken in
+  ship-gate round 3. Corrected above.
+
+Also recorded, not fixed (security-auditor, optional hardening, not a
+finding): `originRefusal` in `internal/repo/repo.go` matches "dubious
+ownership" against the whole of `exit.Stderr`; it could instead match only
+the first stderr line with the `fatal: ` prefix, narrowing what counts as
+git's own refusal.
+
+### Open
+
+- `sbx env run --clone` may add an `origin` to the clone of an origin-less
+  host repository. The sandbox's copy then keys by that origin while the
+  host keys by path, and the two read different lists. Not measured;
+  docker-sbx follow-up.
+- The docker-sbx per-repository mount of the store must cover the
+  location-derived key, for example `local/!o!s/repo`, not only
+  `<host>/<owner>/<repo>` ones. docker-sbx follow-up.
+- The GitHub-hosted matrix (both macOS legs, both Ubuntu 26.04 legs, the
+  pinned labels in lint, security and release) has not run: it runs when
+  the PR does. Until then those legs are unverified, including whether the
+  shared packages' tests, which ran only on Linux before, pass on macOS.
+- The docker-sbx environment files need `CANGA_SRC_DIR` set to the
+  host's base (for example `/Users/bvenceslau/src`) for the sandbox build to
+  key origin-less repositories, and any `CANGA_HOST_BASE_DIR` they set
+  must be renamed, or every base-reading command refuses. That change
+  belongs to docker-sbx.
+- The kit's `agentInstructions` now describe the fallback, but the kit
+  still pins v0.10.5, which does not have it. They become true when the pin
+  moves to the first release carrying this change.
+- An origin key can nest inside a location key's directory (ship-gate
+  round 3, "Nested keys"). The structural fix renames the scope directory
+  to a name no key segment can take (for example `@repo`, which
+  `IsSafeSegment` refuses), which changes the store layout and needs a
+  migration of every existing store, host and sandbox side. Deferred by
+  the coordinator's decision, taken in ship-gate round 3; inert meanwhile.
+- Round 4's darwin-only and folding-volume assertions
+  (`TestHost_APFSUnreadableSpellingFailsClosed`, the folding branch of
+  `TestCanonical`, and every new test's behavior on APFS and macOS's git)
+  run only on the macOS legs.

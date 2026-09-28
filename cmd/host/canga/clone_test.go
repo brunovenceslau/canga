@@ -123,7 +123,7 @@ func TestCloneCmd_ExitCodes(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitFailure, exitCode(err))
 
-	t.Setenv("CANGA_HOST_BASE_DIR", t.TempDir())
+	t.Setenv("CANGA_SRC_DIR", t.TempDir())
 
 	_, err = execute(t, gitCmd, "clone", "not-a-url")
 	require.Error(t, err)
@@ -171,6 +171,6 @@ func TestCloneCmd_IsRegistered(t *testing.T) {
 
 	out, err := execute(t, "help", gitCmd, "clone")
 	require.NoError(t, err)
-	assert.Contains(t, out, "CANGA_HOST_BASE_DIR")
+	assert.Contains(t, out, "CANGA_SRC_DIR")
 	assert.Contains(t, out, "clone <url> [dir]")
 }

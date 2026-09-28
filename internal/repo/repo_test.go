@@ -284,6 +284,51 @@ func TestOrigin(t *testing.T) {
 		require.ErrorIs(t, err, ErrNoOrigin)
 	})
 
+	// Only git answering about the directory is a refusal, exit 2: no such
+	// remote, not a repository, a repository git will not read, or a
+	// directory that is not there. git failing to READ what is there is a
+	// runtime failure, exit 1, and must not send the user looking for a
+	// remote (ship-gate round 2, security-auditor Info: a chmod 000 parent
+	// used to read as "no origin").
+	t.Run("a repository git will not read is still a refusal", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "repo")
+		runGit(t, "init", "-q", "-b", "main", dir)
+		t.Setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+
+		_, err := Origin(t.Context(), dir)
+		require.ErrorIs(t, err, ErrNoOrigin)
+		assert.Contains(t, err.Error(), "dubious ownership")
+	})
+
+	t.Run("a directory that does not exist is still a refusal", func(t *testing.T) {
+		_, err := Origin(t.Context(), filepath.Join(t.TempDir(), "missing"))
+		require.ErrorIs(t, err, ErrNoOrigin)
+	})
+
+	for name, lock := range map[string]func(dir string) string{
+		"a directory git cannot enter": filepath.Dir,
+		"a config git cannot read":     func(dir string) string { return filepath.Join(dir, ".git", "config") },
+	} {
+		t.Run(name+" is a runtime failure", func(t *testing.T) {
+			if os.Geteuid() == 0 {
+				t.Skip("root reads a mode-000 path")
+			}
+
+			dir := filepath.Join(t.TempDir(), "parent", "repo")
+			runGit(t, "init", "-q", "-b", "main", dir)
+
+			locked := lock(dir)
+			require.NoError(t, os.Chmod(locked, 0))
+			t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+			_, err := Origin(t.Context(), dir)
+			require.Error(t, err)
+			require.NotErrorIs(t, err, ErrNoOrigin)
+			require.ErrorIs(t, err, ErrGitRefused)
+			assert.Contains(t, err.Error(), "Permission denied", "git's own words travel")
+		})
+	}
+
 	// A Ctrl-C and a missing git binary are NOT "no origin remote": answering
 	// either with that would send the user looking for a remote that is not the
 	// problem, and would exit 2 for what is a runtime failure.

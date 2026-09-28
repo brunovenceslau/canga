@@ -30,25 +30,46 @@ import (
 func New(t *testing.T, origin string) string {
 	t.Helper()
 
+	Hermetic(t)
+
+	dir := filepath.Join(t.TempDir(), "repo")
+	Init(t, dir, origin)
+
+	return dir
+}
+
+// Hermetic is the environment New sets, for a test that places its
+// repositories itself: git's system and global config emptied, the reminders
+// store in a directory of the test's own, and the clone base cleared so the
+// developer's own CANGA_SRC_DIR (or its pre-rename name) cannot reach a test.
+func Hermetic(t *testing.T) {
+	t.Helper()
+
 	global := filepath.Join(t.TempDir(), "gitconfig")
 	require.NoError(t, os.WriteFile(global, nil, 0o600))
 
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	t.Setenv("GIT_CONFIG_GLOBAL", global)
 	t.Setenv("CANGA_REMINDERS_DIR", filepath.Join(t.TempDir(), "reminders"))
+	t.Setenv("CANGA_SRC_DIR", "")
+	t.Setenv("CANGA_HOST_BASE_DIR", "")
+}
 
-	dir := filepath.Join(t.TempDir(), "repo")
+// Init makes a git repository at dir, with origin as its origin remote, or
+// with no remote at all when origin is empty. Call Hermetic (or New) first.
+func Init(t *testing.T, dir, origin string) {
+	t.Helper()
 
-	for _, args := range [][]string{
-		{"init", "-q", "-b", "main", dir},
-		{"-C", dir, "remote", "add", "origin", origin},
-	} {
+	commands := [][]string{{"init", "-q", "-b", "main", dir}}
+	if origin != "" {
+		commands = append(commands, []string{"-C", dir, "remote", "add", "origin", origin})
+	}
+
+	for _, args := range commands {
 		//nolint:gosec // the program name is a constant and every argument is passed
 		// separately, so no shell parses the fixture. gosec is off for _test.go
 		// files, and this is test code that cannot live in one.
 		out, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput()
 		require.NoErrorf(t, err, "git %v: %s", args, out)
 	}
-
-	return dir
 }

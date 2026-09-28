@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/repo"
 	"github.com/spf13/cobra"
 )
 
@@ -29,7 +30,7 @@ var hostOnly = map[string][]string{
 }
 
 func newRootCmd() *cobra.Command {
-	a := &cli.App{}
+	a := &cli.App{BaseDir: repo.HandedBaseDir}
 
 	root := &cobra.Command{
 		Use:   "canga",
