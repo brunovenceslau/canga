@@ -63,17 +63,24 @@ const (
 	_amd64   = "amd64"
 	_aarch64 = "aarch64"
 
-	// The two checksum tools, and the two ways mangleChecksums breaks
-	// checksums.txt.
+	// The two checksum tools, a third bin directory whose sha256sum accepts
+	// empty input (see _lenientSha256sum), and the three ways mangleChecksums
+	// breaks checksums.txt.
 	_sha256sum = "sha256sum"
 	_shasum    = "shasum"
+	_lenient   = "lenient sha256sum"
 	_wrong     = "wrong"
 	_absent    = "absent"
+	_twice     = "twice"
 
 	// The release floor's two refusal messages (install_host.sh,
 	// install_sandbox.sh): below it, or not canonical vX.Y.Z at all.
 	_wantBelowFloor   = "is older than v0.10.5"
 	_wantNotCanonical = "is not vX.Y.Z"
+
+	// Both installers' refusal of an asset checksums.txt lists zero times
+	// or more than once.
+	_wantNotOnce = "not exactly once"
 )
 
 // _fakeCurl serves $FAKE_RELEASES/<tag>/<file> for
@@ -130,6 +137,21 @@ const _fakeID = `#!/bin/sh
 [ "$1" = -u ] && echo "$FAKE_UID"
 `
 
+// _lenientSha256sum is a sha256sum that exits 0 when handed no checksum
+// lines at all, as the one on the macos-26 CI runners does (PR #42's first
+// macOS run), and otherwise hands its input to the real sha256sum, whose
+// path replaces REAL. GNU and uutils sha256sum, and shasum, refuse empty
+// input, so without this stand-in only a Mac could show an installer that
+// leaves the refusal of a missing checksum line to the checker. It uses
+// shell builtins only: PATH holds the bin directory alone.
+const _lenientSha256sum = `#!/bin/sh
+input=
+while IFS= read -r line; do input="$input$line
+"; done
+[ -n "$input" ] || exit 0
+printf '%s' "$input" | 'REAL' "$@"
+`
+
 // _tools are the real programs the scripts (and the fake curl) run, linked
 // into the bin directory. A checksum tool is linked separately, per case.
 var _tools = []string{"tar", "gzip", "awk", "mktemp", "mkdir", "rm", "cp", "install"}
@@ -180,6 +202,41 @@ func newBins(t *testing.T) map[string]string {
 		}
 
 		bins[sha] = bin
+	}
+
+	// The lenient checker: the sha256sum bin's tools, its sha256sum swapped
+	// for _lenientSha256sum around the real one.
+	if strict, ok := bins[_sha256sum]; ok {
+		shaPath, err := exec.LookPath(_sha256sum)
+		require.NoError(t, err)
+
+		bin := t.TempDir()
+
+		entries, err := os.ReadDir(strict)
+		require.NoError(t, err)
+
+		for _, entry := range entries {
+			if entry.Name() == _sha256sum {
+				continue
+			}
+
+			target, err := os.Readlink(filepath.Join(strict, entry.Name()))
+			if err != nil { // a fake: a regular file, copied
+				body, err := os.ReadFile(filepath.Join(strict, entry.Name()))
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(filepath.Join(bin, entry.Name()), body, 0o755))
+
+				continue
+			}
+
+			require.NoError(t, os.Symlink(target, filepath.Join(bin, entry.Name())))
+		}
+
+		require.NotContains(t, shaPath, "'", "the real sha256sum's path is quoted into the lenient one")
+		lenient := strings.Replace(_lenientSha256sum, "REAL", shaPath, 1)
+		require.NoError(t, os.WriteFile(filepath.Join(bin, _sha256sum), []byte(lenient), 0o755))
+
+		bins[_lenient] = bin
 	}
 
 	return bins
@@ -260,7 +317,8 @@ func buildArchive(t *testing.T, role string) []byte {
 }
 
 // mangleChecksums makes checksums.txt refuse the archives: "wrong" swaps every
-// hash for another, "absent" leaves no line for any archive.
+// hash for another, "absent" leaves no line for any archive, and "twice"
+// lists every archive twice, each time with its real hash.
 func (e env) mangleChecksums(t *testing.T, how string) {
 	t.Helper()
 
@@ -283,6 +341,10 @@ func (e env) mangleChecksums(t *testing.T, how string) {
 		require.NoError(t, os.WriteFile(path, []byte(out.String()), 0o644))
 	case _absent:
 		require.NoError(t, os.WriteFile(path, []byte(strings.Repeat("0", 64)+"  other.tar.gz\n"), 0o644))
+	case _twice:
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, slices.Concat(data, data), 0o644))
 	default:
 		t.Fatalf("unknown checksums mangling %q", how)
 	}
@@ -435,6 +497,15 @@ func TestInstallHost(t *testing.T) {
 		{name: "no checksum line", args: []string{_tag}, os: _darwin, arch: _amd64, sha: sha, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
 		{name: "checksum mismatch, shasum", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _shasum, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
 		{name: "no checksum line, shasum", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _shasum, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		// The installer itself refuses an asset checksums.txt does not list
+		// exactly once, whatever the checker does with what it is handed:
+		// macOS's own sha256sum accepts empty input, and a checker handed two
+		// matching lines passes both.
+		{name: "no checksum line, lenient sha256sum", args: []string{_tag}, os: _darwin, arch: _aarch64, sha: _lenient, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("darwin_arm64")), wantStderr: _wantNotOnce},
+		{name: "checksum line twice", args: []string{_tag}, os: _darwin, arch: _amd64, sha: sha, checksums: _twice, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64")), wantStderr: _wantNotOnce},
+		{name: "checksum line twice, shasum", args: []string{_tag}, os: _darwin, arch: _aarch64, sha: _shasum, checksums: _twice, wantExit: 1, wantRequests: downloads(_tag, host("darwin_arm64")), wantStderr: _wantNotOnce},
+		{name: "lenient sha256sum still installs a listed asset", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _lenient, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "lenient sha256sum still refuses a mismatch", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _lenient, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
 		{name: "release that does not exist", args: []string{"v9.9.9"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v9.9.9/canga-host_9.9.9_darwin_amd64.tar.gz")}, wantStderr: "404"},
 		{name: "not a release tag", args: []string{"latest"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: `"latest" is not a release tag`},
 		// A version above the release floor is accepted: it reaches the
@@ -496,6 +567,12 @@ func TestInstallSandbox(t *testing.T) {
 	tests := []installCase{
 		{name: "pinned tag as root", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", wantRequests: downloads(_tag, sandbox)},
 		{name: "checksum mismatch", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, sandbox)},
+		// The same refusals as install_host.sh's: the installer, not the
+		// checker, refuses an asset checksums.txt does not list exactly once.
+		{name: "no checksum line", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, sandbox), wantStderr: _wantNotOnce},
+		{name: "no checksum line, lenient sha256sum", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", sha: _lenient, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, sandbox), wantStderr: _wantNotOnce},
+		{name: "checksum line twice", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", checksums: _twice, wantExit: 1, wantRequests: downloads(_tag, sandbox), wantStderr: _wantNotOnce},
+		{name: "lenient sha256sum still installs a listed asset", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", sha: _lenient, wantRequests: downloads(_tag, sandbox)},
 		{name: "no tag", os: _linux, arch: _aarch64, uid: "0", wantExit: 2, wantStderr: "usage: install_sandbox.sh"},
 		{name: "two arguments", args: []string{_tag, "extra"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 2, wantStderr: "usage: install_sandbox.sh"},
 		{name: "not a release tag", args: []string{"0.9"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 2, wantStderr: `"0.9" is not a release tag`},
@@ -518,7 +595,9 @@ func TestInstallSandbox(t *testing.T) {
 		{name: "a leading zero", args: []string{"v00.10.5"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: _wantNotCanonical},
 	}
 	for i := range tests {
-		tests[i].sha = _sha256sum
+		if tests[i].sha == "" {
+			tests[i].sha = _sha256sum
+		}
 	}
 
 	runCases(t, "sandbox", tests, func(t *testing.T, e env) (string, string) {

@@ -151,9 +151,20 @@ main() {
 	# The checksum is the gate, so it is a step of its own: under set -e a
 	# failing `check && extract` would only skip the extraction and let the
 	# script carry on. awk compares the filename field for equality (grep would
-	# read the dots as wildcards); an asset missing from checksums.txt yields no
-	# line, and the checker refuses empty input.
-	(cd "$work" && awk -v a="$asset" '$2 == a' checksums.txt | $sha256 -c -)
+	# read the dots as wildcards).
+	#
+	# The script, not the checker, refuses an asset checksums.txt does not
+	# list exactly once. A checker handed no line may pass: the sha256sum on
+	# the macOS CI runners exits 0 on empty input (GNU's and shasum refuse
+	# it), which would install an unverified archive. And one handed the same line twice
+	# checks it twice, so exactly one line is what reaches the checker.
+	line=$(awk -v a="$asset" '$2 == a' "$work/checksums.txt")
+	count=$(printf '%s\n' "$line" | awk 'NF { n++ } END { print n + 0 }')
+	if [ "$count" -ne 1 ]; then
+		echo "canga: checksums.txt lists $asset $count times, not exactly once; refusing to install it" >&2
+		exit 1
+	fi
+	(cd "$work" && printf '%s\n' "$line" | $sha256 -c -)
 
 	mkdir -p "$dir"
 	# The archive also carries LICENSE and README.md; naming canga extracts the

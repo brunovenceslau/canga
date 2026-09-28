@@ -1989,6 +1989,41 @@ ownership" against the whole of `exit.Stderr`; it could instead match only
 the first stderr line with the `fatal: ` prefix, narrowing what counts as
 git's own refusal.
 
+### Round 5: the first macOS run found an installer checksum bypass (2026-09-28)
+
+The first run of `TestInstallHost` on the macOS legs (run 36441444235,
+both `macos-26` and `macos-26-intel`) failed `{bash,sh}/no_checksum_line`:
+exit 0 where 1 was expected, with the archive installed. The fixture was
+right (the "absent" checksums.txt lists no platform at all); the installer
+was not. `install_host.sh` handed the checker whatever
+`awk '$2 == a'` found and relied on it refusing empty input. GNU's and
+uutils' `sha256sum` and `shasum` do; the `sha256sum` on the macOS runners
+(the image lists no GNU coreutils) exits 0, and `install_host.sh` prefers
+`sha256sum` over `shasum` when both exist. The same case with `shasum`,
+and a mismatched hash with `sha256sum`, were refused on the same runners.
+`main` carries the same code; the published v0.10.5 checksums.txt lists
+both darwin assets, so a normal install there is still verified. The gap
+is an asset checksums.txt does not list.
+
+- **Fix:** both installers now count the asset's lines in checksums.txt
+  and refuse (`lists <asset> N times, not exactly once`) unless there is
+  exactly one, then hand that one line to the checker. Zero lines and
+  duplicated lines both refuse, whatever the checker does with them.
+  `install_sandbox.sh` made the same assumption and gets the same check.
+  The sha256sum-then-shasum preference is unchanged: with the count in
+  the script, the checker's empty-input behavior no longer matters.
+- **Tests:** a third bin directory whose `sha256sum` exits 0 on empty
+  input and otherwise delegates to the real one (`_lenientSha256sum`),
+  so the macOS behavior runs on Linux; new cases for an absent line under
+  it and for a line listed twice, in both `TestInstallHost` and
+  `TestInstallSandbox`, plus a listed asset and a mismatch under the
+  lenient checker. The absent-line and twice cases installed (exit 0) on
+  the unfixed scripts. The existing `no_checksum_line` cases are
+  unchanged.
+- **Approval:** the installers are the ask-first publish surface. The
+  operator chose to fix them inside this PR (2026-09-28), verbatim, pt-BR:
+  "vamos de 1 mesmo;".
+
 ### Open
 
 - `sbx env run --clone` may add an `origin` to the clone of an origin-less
