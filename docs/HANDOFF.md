@@ -2023,6 +2023,19 @@ is an asset checksums.txt does not list.
 - **Approval:** the installers are the ask-first publish surface. The
   operator chose to fix them inside this PR (2026-09-28), verbatim, pt-BR:
   "vamos de 1 mesmo;".
+- **Security re-audit follow-up (Low, closed here):** the count alone
+  still left the line's shape to the checker, and a checker that skips
+  lines it cannot parse and exits 0 would pass a malformed one (non-hex or
+  short hash, tab or single-space separator, leading space). Both
+  installers no longer use check mode (`-c`) at all: they require the one
+  line to be exactly goreleaser's shape (64 lowercase hex digits, two
+  spaces, the name), compute the archive's sha256 themselves
+  (`sha256sum` or `shasum -a 256` on the file) and compare the two
+  strings. An uppercase hash is refused rather than normalized: goreleaser
+  writes lowercase, so any other shape is not what the release pipeline
+  wrote. The lenient test checker now also skips lines it cannot parse;
+  new cases cover each malformed shape (under it and under `shasum`), and
+  a sandbox `linux_amd64` install. Under the same approval as above.
 
 ### Open
 

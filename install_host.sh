@@ -13,6 +13,17 @@
 #
 # Run it once. From then on `canga upgrade` replaces the binary.
 
+# is_sha256 succeeds when $1 is exactly 64 lowercase hex digits: the shape
+# of a sha256 in goreleaser's checksums.txt and in sha256sum's and
+# `shasum -a 256`'s output. POSIX case patterns have no {64}, so the length
+# is checked apart.
+is_sha256() {
+	case $1 in
+	*[!0-9a-f]*) return 1 ;;
+	esac
+	[ ${#1} -eq 64 ]
+}
+
 # Everything runs from main, called on the last line: a download cut off
 # halfway defines a function and runs nothing, instead of running half a script.
 main() {
@@ -21,7 +32,8 @@ main() {
 	releases=https://github.com/brunovenceslau/canga/releases
 	dir="$HOME/.local/bin"
 
-	# macOS ships shasum and no sha256sum; a Mac with coreutils has both.
+	# Either tool computes the sha256 below; recent macOS ships both, an older
+	# one only shasum.
 	if command -v sha256sum >/dev/null 2>&1; then
 		sha256="sha256sum"
 	elif command -v shasum >/dev/null 2>&1; then
@@ -150,21 +162,37 @@ main() {
 
 	# The checksum is the gate, so it is a step of its own: under set -e a
 	# failing `check && extract` would only skip the extraction and let the
-	# script carry on. awk compares the filename field for equality (grep would
-	# read the dots as wildcards).
+	# script carry on.
 	#
-	# The script, not the checker, refuses an asset checksums.txt does not
-	# list exactly once. A checker handed no line may pass: the sha256sum on
-	# the macOS CI runners exits 0 on empty input (GNU's and shasum refuse
-	# it), which would install an unverified archive. And one handed the same line twice
-	# checks it twice, so exactly one line is what reaches the checker.
+	# The script does the whole check itself and leaves nothing to a
+	# checker's check mode (-c): the sha256sum on the macOS CI runners exits
+	# 0 when handed no line, and a checker that skips lines it cannot parse
+	# would pass a malformed one the same way, installing an unverified
+	# archive. So the asset must be listed exactly once (awk compares the
+	# filename field for equality; grep would read the dots as wildcards),
+	# that line must be exactly what goreleaser writes (64 lowercase hex
+	# digits, two spaces, the name), and the archive's own sha256, computed
+	# here, must equal it.
 	line=$(awk -v a="$asset" '$2 == a' "$work/checksums.txt")
 	count=$(printf '%s\n' "$line" | awk 'NF { n++ } END { print n + 0 }')
 	if [ "$count" -ne 1 ]; then
 		echo "canga: checksums.txt lists $asset $count times, not exactly once; refusing to install it" >&2
 		exit 1
 	fi
-	(cd "$work" && printf '%s\n' "$line" | $sha256 -c -)
+	want=${line%%" "*}
+	if ! is_sha256 "$want" || [ "$line" != "$want  $asset" ]; then
+		echo "canga: the checksums.txt line for $asset is not a lowercase sha256, two spaces and the name; refusing to install it" >&2
+		exit 1
+	fi
+	got=$($sha256 <"$work/$asset" | awk '{ print $1 }')
+	if ! is_sha256 "$got"; then
+		echo "canga: could not compute the sha256 of $asset; refusing to install it" >&2
+		exit 1
+	fi
+	if [ "$got" != "$want" ]; then
+		echo "canga: $asset has sha256 $got, but checksums.txt lists $want; refusing to install it" >&2
+		exit 1
+	fi
 
 	mkdir -p "$dir"
 	# The archive also carries LICENSE and README.md; naming canga extracts the
