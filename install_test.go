@@ -31,10 +31,20 @@ import (
 )
 
 const (
-	// The release every fixture is. Its archives carry the version without
-	// the "v", as .goreleaser.yml names them.
-	_tag     = "v0.9.0"
-	_version = "0.9.0"
+	// The release every fixture is, shared with sbxkit_test.go's own
+	// TestSbxKit_Install (same newEnv, same fake release). Its archives
+	// carry the version without the "v", as .goreleaser.yml names them.
+	// Exactly the release floor (install_host.sh and install_sandbox.sh
+	// refuse any tag below it), so a fixture below it would be refused by
+	// that check alone, before any case here got to exercise anything else -
+	// "pinned tag" and "newest release" below double as the "at the floor"
+	// case.
+	//
+	// sbxkitpin_test.go, a different script entirely, has its own
+	// unrelated fixture tags below v0.10.5 (_decoyTag among them) and does
+	// not call newEnv, so it is unaffected by this value.
+	_tag     = "v0.10.5"
+	_version = "0.10.5"
 
 	// The one URL prefix the fake curl serves. A script asking for anything
 	// else fails the run, so a typo in a script's URL fails a test too.
@@ -396,7 +406,8 @@ type installCase struct {
 	wantExit  int
 	// Every request, in order, or nil for a run refused before any.
 	wantRequests []string
-	wantStderr   string // a line stderr must contain, when set
+	wantStderr   string   // a line stderr must contain, when set
+	vars         []string // extra environment, appended after the case's own
 }
 
 // script is where a case's script lives and where it installs canga.
@@ -421,6 +432,34 @@ func TestInstallHost(t *testing.T) {
 		{name: "no checksum line, shasum", args: []string{_tag}, os: _linux, arch: _amd64, sha: _shasum, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
 		{name: "release that does not exist", args: []string{"v9.9.9"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v9.9.9/canga-host_9.9.9_linux_amd64.tar.gz")}, wantStderr: "404"},
 		{name: "not a release tag", args: []string{"latest"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: `"latest" is not a release tag`},
+		// A version above the release floor is accepted: it reaches the
+		// network, exactly like "release that does not exist" above, since
+		// neither has a fixture on disk. Reaching (and failing) the download
+		// is how "accepted" is told apart from "refused before any request".
+		{name: "a version above the release floor", args: []string{"v0.10.6"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v0.10.6/canga-host_0.10.6_linux_amd64.tar.gz")}, wantStderr: "404"},
+		{name: "a version well above the release floor", args: []string{"v1.0.0"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v1.0.0/canga-host_1.0.0_linux_amd64.tar.gz")}, wantStderr: "404"},
+		// Below the release floor is refused before any request: the release
+		// could have been recreated with unverified bytes (docs/HANDOFF.md,
+		// "Immutability is not retroactive").
+		{name: "a version below the release floor", args: []string{"v0.10.4"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: "is older than v0.10.5"},
+		{name: "a version well below the release floor", args: []string{"v0.1.0"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: "is older than v0.10.5"},
+		// Defense in depth: the newest-release path (no tag on the command
+		// line) applies the floor too, to whichever tag /releases/latest
+		// resolves to. The redirect itself still has to be followed to learn
+		// that tag, so exactly one request is made before the refusal.
+		{
+			name: "the newest release resolves below the release floor", os: _linux, arch: _amd64, sha: sha,
+			wantExit: 1, wantStderr: "is older than v0.10.5", wantRequests: []string{requested("latest")},
+			vars: []string{"FAKE_LATEST=v0.10.4"},
+		},
+		// Round-1 ship-gate finding 1 (docs/HANDOFF.md, "Release floor for
+		// installers and canga upgrade (PR #41)"): awk's numeric coercion
+		// truncated a dash-suffixed field, so a pre-release of the floor
+		// itself compared equal to it and was wrongly accepted; a leading
+		// zero was likewise read as if it were not there. Both are refused
+		// before any request, the same way a version below the floor is.
+		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: "is not vX.Y.Z"},
+		{name: "a leading zero", args: []string{"v00.10.5"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: "is not vX.Y.Z"},
 		{name: "unsupported architecture", os: _linux, arch: "riscv64", sha: sha, wantExit: 1, wantStderr: "unsupported architecture riscv64"},
 		{name: "unsupported system", os: "FreeBSD", arch: _amd64, sha: sha, wantExit: 1, wantStderr: "unsupported system FreeBSD"},
 	}
@@ -452,6 +491,21 @@ func TestInstallSandbox(t *testing.T) {
 		{name: "not a release tag", args: []string{"0.9"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 2, wantStderr: `"0.9" is not a release tag`},
 		{name: "not root", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "1000", wantExit: 1, wantStderr: "run this as root"},
 		{name: "not linux", args: []string{_tag}, os: "Darwin", arch: "arm64", uid: "0", wantExit: 1, wantStderr: "linux only, not Darwin"},
+		// A version above the release floor is accepted: it reaches the
+		// network and fails there, for lack of a fixture, rather than being
+		// refused up front.
+		{name: "a version above the release floor", args: []string{"v0.10.6"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 22, wantRequests: []string{requested("download/v0.10.6/canga-sandbox_0.10.6_linux_arm64.tar.gz")}, wantStderr: "404"},
+		{name: "a version well above the release floor", args: []string{"v1.0.0"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 22, wantRequests: []string{requested("download/v1.0.0/canga-sandbox_1.0.0_linux_arm64.tar.gz")}, wantStderr: "404"},
+		// Below the release floor is refused before any request, root or
+		// not: the release could have been recreated with unverified bytes
+		// (docs/HANDOFF.md, "Immutability is not retroactive").
+		{name: "a version below the release floor", args: []string{"v0.10.4"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: "is older than v0.10.5"},
+		{name: "a version well below the release floor", args: []string{"v0.1.0"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: "is older than v0.10.5"},
+		// Round-1 ship-gate finding 1 (docs/HANDOFF.md, "Release floor for
+		// installers and canga upgrade (PR #41)"): the same two shapes as
+		// install_host.sh's own cases above, refused before any request.
+		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: "is not vX.Y.Z"},
+		{name: "a leading zero", args: []string{"v00.10.5"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: "is not vX.Y.Z"},
 	}
 	for i := range tests {
 		tests[i].sha = _sha256sum
@@ -499,7 +553,7 @@ func runCases(t *testing.T, role string, tests []installCase, locate script) {
 				seed(t, installed)
 
 				res := e.run(t, shell, path, tt.args,
-					"HOME="+e.root, "FAKE_OS="+tt.os, "FAKE_ARCH="+tt.arch, "FAKE_UID="+tt.uid)
+					append([]string{"HOME=" + e.root, "FAKE_OS=" + tt.os, "FAKE_ARCH=" + tt.arch, "FAKE_UID=" + tt.uid}, tt.vars...)...)
 
 				require.Equal(t, tt.wantExit, res.exit, "stderr:\n%s", res.stderr)
 				assert.Equal(t, tt.wantRequests, res.requests)

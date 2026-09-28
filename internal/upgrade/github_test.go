@@ -168,11 +168,11 @@ func TestClientLatestSendsWhatGitHubExpects(t *testing.T) {
 
 	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Clone(r.Context())
-		_, _ = w.Write([]byte(`{"tag_name":"v0.2.0","assets":[{"id":7,"name":"checksums.txt","size":9}]}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v0.10.7","assets":[{"id":7,"name":"checksums.txt","size":9}]}`))
 	}))
 	server.Start()
 
-	found, err := newClient("s3cret", server.URL, "0.1.0").latest(t.Context())
+	found, err := newClient("s3cret", server.URL, "0.10.6").latest(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, newerVersion, found.Tag)
 	assert.Equal(t, []asset{{ID: 7, Name: checksumsName, Size: 9}}, found.Assets)
@@ -182,7 +182,7 @@ func TestClientLatestSendsWhatGitHubExpects(t *testing.T) {
 	assert.Equal(t, "Bearer s3cret", got.Header.Get("Authorization"))
 	assert.Equal(t, "application/vnd.github+json", got.Header.Get("Accept"))
 	assert.Equal(t, apiVersion, got.Header.Get("X-GitHub-Api-Version"))
-	assert.Equal(t, "canga/v0.1.0", got.Header.Get("User-Agent"))
+	assert.Equal(t, "canga/v0.10.6", got.Header.Get("User-Agent"))
 }
 
 // A token is optional, so one GitHub rejects must not refuse an upgrade that
@@ -209,7 +209,7 @@ func TestClientRetriesAnonymouslyWhenTheTokenIsRejected(t *testing.T) {
 			return
 		}
 
-		_, _ = w.Write([]byte(`{"tag_name":"v0.2.0","assets":[]}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v0.10.7","assets":[]}`))
 	}))
 	server.Start()
 

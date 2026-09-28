@@ -135,15 +135,16 @@ func TestReplace(t *testing.T) {
 		assert.Equal(t, os.FileMode(0o744), info.Mode().Perm())
 	})
 
-	// The published v0.1.0 reports itself as "0.1.0" while its tag is installedVersion.
-	// Normalizing both sides is what keeps that release installable at all.
+	// The published v0.10.6 reports itself as "0.10.6" while its tag is
+	// installedVersion. Normalizing both sides is what keeps that release
+	// installable at all.
 	t.Run("accepts the goreleaser spelling of the same release", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
 		path := installedBinary(t, dir, "v0.0.1")
 
-		require.NoError(t, replace(t.Context(), path, fakeBinary("0.1.0"), installedVersion, RoleHost))
+		require.NoError(t, replace(t.Context(), path, fakeBinary("0.10.6"), installedVersion, RoleHost))
 	})
 
 	t.Run("a binary reporting another version never lands", func(t *testing.T) {

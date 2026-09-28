@@ -55,6 +55,15 @@ const (
 
 	// A release on an older line than _prevTag.
 	_olderLineTag = "v0.9.1"
+
+	// A published tag older than every other fixture tag in this file,
+	// used only to pad out a tag list and to exercise numeric (not string)
+	// ordering ("versions compare as numbers, not strings" below). Its own
+	// name, rather than install_test.go's _decoyTag: that one is the release
+	// newEnv builds a fixture for, pinned at the release floor
+	// (install_host.sh/install_sandbox.sh refuse anything below it), which
+	// this file's fixtures have no reason to sit above.
+	_decoyTag = "v0.9.0"
 )
 
 var (
@@ -1083,22 +1092,22 @@ func TestSbxKitPin_CheckPrevious(t *testing.T) {
 		noTags    bool
 		exit      int
 	}{
-		{name: "kit pins the previous release", kit: _prevVersion, tags: []string{_prevTag, _olderTag, _tag}, tag: _nextTag, want: "pins " + _prevTag},
-		{name: "the tag's own release is already published", kit: _prevVersion, tags: []string{_nextTag, _prevTag, _tag}, tag: _nextTag, want: "pins " + _prevTag},
-		{name: "versions compare as numbers, not strings", kit: "0.10.0", tags: []string{_tag, _olderTag, "v0.8.9"}, tag: _prevTag, assetsTag: _olderTag, want: "pins v0.10.0"},
-		{name: "a non-release tag is ignored", kit: _prevVersion, tags: []string{_prevTag, "v1.0", "nightly", "v0.09.9", _tag}, tag: _nextTag, want: "pins " + _prevTag},
+		{name: "kit pins the previous release", kit: _prevVersion, tags: []string{_prevTag, _olderTag, _decoyTag}, tag: _nextTag, want: "pins " + _prevTag},
+		{name: "the tag's own release is already published", kit: _prevVersion, tags: []string{_nextTag, _prevTag, _decoyTag}, tag: _nextTag, want: "pins " + _prevTag},
+		{name: "versions compare as numbers, not strings", kit: "0.10.0", tags: []string{_decoyTag, _olderTag, "v0.8.9"}, tag: _prevTag, assetsTag: _olderTag, want: "pins v0.10.0"},
+		{name: "a non-release tag is ignored", kit: _prevVersion, tags: []string{_prevTag, "v1.0", "nightly", "v0.09.9", _decoyTag}, tag: _nextTag, want: "pins " + _prevTag},
 		{
-			name: "a release on an older line, allowed for it", kit: "0.9.0", tags: []string{_prevTag, _tag}, tag: _olderLineTag, assetsTag: _tag, olderLine: _olderLineTag,
+			name: "a release on an older line, allowed for it", kit: "0.9.0", tags: []string{_prevTag, _decoyTag}, tag: _olderLineTag, assetsTag: _decoyTag, olderLine: _olderLineTag,
 			want: "WARNING: " + _olderLineTag + " is below",
 		},
-		{name: "a release on an older line, not allowed", kit: "0.9.0", tags: []string{_prevTag, _tag}, tag: _olderLineTag, assetsTag: _tag, exit: 1, want: "set SBX_KIT_OLDER_LINE=" + _olderLineTag},
+		{name: "a release on an older line, not allowed", kit: "0.9.0", tags: []string{_prevTag, _decoyTag}, tag: _olderLineTag, assetsTag: _decoyTag, exit: 1, want: "set SBX_KIT_OLDER_LINE=" + _olderLineTag},
 		{
-			name: "a release on an older line, allowed for another tag", kit: "0.9.0", tags: []string{_prevTag, _tag}, tag: _olderLineTag, assetsTag: _tag, olderLine: "v0.9.2", exit: 1,
+			name: "a release on an older line, allowed for another tag", kit: "0.9.0", tags: []string{_prevTag, _decoyTag}, tag: _olderLineTag, assetsTag: _decoyTag, olderLine: "v0.9.2", exit: 1,
 			want: "set SBX_KIT_OLDER_LINE=" + _olderLineTag,
 		},
 		{name: "the previous bump never merged", kit: "0.10.0", tags: []string{_prevTag, _olderTag}, tag: _nextTag, exit: 1, want: "chore/sbx-kit-" + _prevTag},
 		{name: "the kit already names this tag", kit: _nextVersion, tags: []string{_prevTag}, tag: _nextTag, exit: 1, want: "newest published\nrelease below v0.10.2 is v0.10.1"},
-		{name: "an older line pinning an unpublished release", kit: "0.9.5", tags: []string{_prevTag, _tag}, tag: "v0.9.6", olderLine: "v0.9.6", exit: 1, want: "not a published release"},
+		{name: "an older line pinning an unpublished release", kit: "0.9.5", tags: []string{_prevTag, _decoyTag}, tag: "v0.9.6", olderLine: "v0.9.6", exit: 1, want: "not a published release"},
 		{name: "a pinned sum GitHub serves otherwise", kit: _prevVersion, tags: []string{_prevTag}, tag: _nextTag, arm64: "sha256:" + strings.Repeat("c3", 32), exit: 1, want: _wantDigestMismatch},
 		{name: "a pinned sum GitHub reports no digest for", kit: _prevVersion, tags: []string{_prevTag}, tag: _nextTag, amd64: " ", exit: 1, want: "reports no digest"},
 		{name: "no release below this one", kit: _prevVersion, tags: []string{_nextTag}, tag: _nextTag, exit: 1, want: "no published release below"},
@@ -2398,7 +2407,7 @@ func TestSbxKitPin_CheckPrevious_SignalCleanup(t *testing.T) {
 			t.Parallel()
 
 			w := newPinWorld(t, bin, realKit(t, _prevVersion, _sumAMD64, _sumARM64), false)
-			w.setTags(t, _prevTag, _olderTag, _tag)
+			w.setTags(t, _prevTag, _olderTag, _decoyTag)
 			w.setAssets(t, _prevTag, _prevVersion, "sha256:"+_sumAMD64, "sha256:"+_sumARM64, _botUploader)
 			w.env = append(w.env, "FAKE_GH_SLEEP=5")
 

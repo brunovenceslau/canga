@@ -897,7 +897,9 @@ included by default.
   with `contents: write` - the same access this bullet's opening
   sentence already names as the threat - is ever observed to slip past
   both comparisons undetected.
-- [narrowed; follow-up planned] **Immutability is not retroactive.** Enabling it left
+- [closed: Path B for `install_host.sh`, `install_sandbox.sh` and `canga
+  upgrade` by PR #41's release floor, Path A by deleting the old Release
+  runs] **Immutability is not retroactive.** Enabling it left
   v0.10.4 and earlier mutable, and only v0.10.5 on carries attestation
   (`grep -c attest-build-provenance` over each tag's own
   `.github/workflows/release.yml` reads 0 for v0.1.0 through v0.10.4 and
@@ -935,6 +937,10 @@ included by default.
   different severity.
 
   Path A - re-running one of these tags' own original Actions run.
+  Closed on 2026-09-27 by deleting those runs (see "Path A closed:
+  the old Release runs are deleted" under "Release floor for
+  installers and canga upgrade (PR #41)" below); what follows is the
+  measurement that led there.
   Measured (2026-09-27): `gh run list --workflow release.yml --limit 50
   --json databaseId,headBranch,createdAt` returns exactly 17 runs total
   (below the 50-row limit, so this is every Release run the repository
@@ -1015,6 +1021,39 @@ included by default.
   `canga upgrade --tag` refuse any tag below v0.10.5 outright, closing
   Path B without waiting on Path A's 30-day windows. Reopen condition:
   this stays open until that follow-up ships.
+
+  **Shipped (PR #41), tightened after a round-1 ship-gate re-audit.**
+  The planned fix above is built: `install_host.sh` and
+  `install_sandbox.sh` (POSIX `sh` awk) and `internal/upgrade.Run`/
+  `wantedTag` (Go, `semver.Compare`) all require a release tag to be
+  BOTH canonical `vX.Y.Z` (no pre-release, no build metadata, no
+  leading zero, no missing "v") AND at or above v0.10.5, before
+  downloading anything - applied to an explicit `--tag` and to
+  whichever tag GitHub's own `/releases/latest` resolves to. The
+  canonical-shape requirement is what a round-1 finding added: without
+  it, a release published under a bare-digit tag ("1.0.0", not
+  "v1.0.0" - outside the repository's `refs/tags/v*` ruleset, so no
+  admin approval needed to create it) would have cleared the floor
+  once normalized.
+
+  Precisely what this closes, and what it does not: Path B (a
+  `contents: write` actor recreating one of the OLD, deleted-release
+  tags below v0.10.5, or reaching an equivalent tag by any spelling
+  the check treats as the same release) is closed for these three
+  install paths - refused before any archive or checksum is fetched.
+  It does NOT stop a `contents: write` actor from publishing a BRAND
+  NEW canonical tag at or above v0.10.5 (say, "v0.10.11") with
+  whatever bytes they choose: that tag clears the floor exactly as a
+  legitimate release would, because the floor's job is telling an old
+  or unprotected tag apart from a covered one, not vouching for a new
+  tag's contents. The only control on a new `v*` tag is the
+  repository's own ruleset, which requires admin approval to create
+  or move one - a separate, existing protection this PR does not
+  change. Path A (the re-run window on v0.1.0 through v0.10.2's own
+  original Actions runs) is a workflow-level re-run, not an
+  install-time check, so the floor does not touch it; it was closed
+  separately, on 2026-09-27, by deleting those runs. See "Release floor for installers and canga
+  upgrade (PR #41)" below for the full account.
 
   Attribution: this entry's check-previous/check-clobber-per-tag
   measurement and its original deletion-resolved rewrite were written by
@@ -1377,9 +1416,16 @@ attested. Mais prático. Ninguém usa ainda, só eu."
    versões que não são attested. Mais prático. Ninguém usa ainda, só
    eu."). A round-4 ship-gate Medium finding showed the deletion does
    not stop a `contents: write` actor from recreating an old release
-   directly, so that entry is now marked `[narrowed; follow-up planned]`
-   (operator quote "a1 b1"), not `[resolved]`; see that entry for the
-   measurements, the deletion list and the residual left after it.
+   directly, so that entry was marked `[narrowed; follow-up planned]`
+   (operator quote "a1 b1"), not `[resolved]`. That follow-up shipped in
+   PR #41: `install_host.sh`, `install_sandbox.sh` and `canga upgrade
+   --tag` (and its newest-release path) now refuse any release tag
+   below v0.10.5 before downloading anything, which closes Path B for
+   these three install paths. Path A (the re-run window) was closed
+   separately by deleting the old Release runs; see that entry for the
+   measurements, the deletion
+   list and "Release floor for installers and canga upgrade (PR #41)"
+   below for the fix itself.
 
 ### Rework debrief: an unvetted write under a frozen ship gate
 
@@ -1403,3 +1449,126 @@ the builder. Static-tool question: the gate could record the worktree's
 `git diff` hash when it freezes the tree and compare it before reporting,
 which turns an unvetted write into a mechanical refusal instead of relying
 on the node noticing. Not built here.
+
+## Release floor for installers and canga upgrade (PR #41)
+
+Closes Path B of "Immutability is not retroactive" (above) for the three
+install paths that entry named: `install_host.sh`, `install_sandbox.sh`
+and `canga upgrade --tag` (Go, `internal/upgrade` and `internal/cli`,
+shared by both the host and sandbox builds) now refuse a release tag
+before downloading anything unless it is BOTH canonical `vX.Y.Z` (no
+pre-release, no build metadata, no leading zero, no missing "v") AND at
+or above v0.10.5, the first release `release.yml` attests with build
+provenance. Operator decision (2026-09-27, verbatim): "a1 b1" - A1 = this
+follow-up.
+
+**Round-1 ship-gate findings, both closed in the same pass.** Finding 1:
+the first version of this fix compared the three numeric fields in awk
+without checking their shape first, so a pre-release of the floor itself
+("v0.10.5-rc1") or a leading zero ("v00.10.5") coerced to the same
+number as the floor and was wrongly accepted, while Go's
+`semver.Compare` correctly refused both - the two implementations
+disagreed. `checkFloor` (`internal/upgrade/floor.go`) and both scripts'
+awk now require the ONE canonical shape above before comparing anything
+numerically, and `TestReleaseFloorShapeAgreesAcrossInstallersAndGo`
+(`release_floor_test.go`) runs an eighteen-entry table of tag shapes
+through both scripts and `upgrade.CheckReleaseFloor` and requires all
+three to agree, tag for tag. One deliberate side effect: `checkFloor`'s
+canonical-shape requirement is stricter than `isReleaseTag`, which stays
+exactly as lenient as it always was everywhere else in the package (a
+bare-major tag or a pre-release still names a real release as far as
+`isNewer`/`sameTag` are concerned) - so `canga upgrade --tag` now refuses
+a pre-release or a 2-component tag even when its numeric core sits above
+the floor, which it did not before this PR.
+
+Finding 2: `internal/upgrade.Run`'s newest-release path checked the
+floor against `found.Tag` after implicitly trusting `normalizeTag` to
+prepend a missing "v", so a release published under a tag with no "v" at
+all (say, "1.0.0") - a tag the repository's `refs/tags/v*` ruleset never
+protects, reachable by any `contents: write` actor with no admin
+approval - would clear the floor once normalized to "v1.0.0".
+`checkFloor` no longer normalizes; it refuses `found.Tag` outright if it
+is not already canonical. `Run` additionally refuses outright if an
+explicit `--tag` resolves to a release document naming a different tag
+(`ErrTagMismatch`) - defense in depth, since a `byTag` lookup already
+404s on a mismatched tag rather than serve a different release's
+document, so this path is not known to be reachable through the real
+GitHub API today.
+
+`install_host.sh`'s and `internal/upgrade.Run`'s newest-release paths
+(no tag given, following `/releases/latest`) apply the same floor to
+whichever tag they resolve to, not only to an explicit `--tag`: defense
+in depth against Path B recreating an old tag's release with today's
+publish date, which would make it the newest one by GitHub's own
+reckoning. `install_sandbox.sh` has no such path; its tag is always
+explicit.
+
+Compared as three dot-separated numbers (`X.Y.Z`, no leading `v`), never
+as text - v0.9.10 sorts above v0.9.9 - the same way `version_at_least` in
+`scripts/sbx-kit-pin.sh` and `semver.Compare` in `internal/upgrade`
+already do.
+
+One value, kept in four places rather than one, because none of the four
+can read it from the others at the point they need it: a POSIX `sh`
+installer piped straight from `curl` into `sh` has no working tree to
+read a shared file from, and `scripts/sbx-kit-pin.sh`'s own
+`attested_from` predates this PR by two releases (PR #37) and is read by
+a different program entirely (`gh`-based release tooling, not `curl`
+and `sh`). `install_host.sh` and `install_sandbox.sh` each set
+`min_version=0.10.5`; `internal/upgrade` (`floor.go`) sets
+`MinReleaseTag = "v0.10.5"`; `scripts/sbx-kit-pin.sh` already set
+`attested_from="0.10.5"`. `TestReleaseFloorMatchesAcrossInstallersAndCanga`
+(`release_floor_test.go`, repository root) reads all four back and fails
+if any one drifts from the others - the one source-of-truth gate the
+four hand-written copies otherwise have no way to enforce among
+themselves.
+
+**Precisely what the floor does not cover.** It tells an old or
+otherwise unprotected tag apart from a covered one; it does not vouch
+for a NEW tag's contents. A `contents: write` actor can still publish a
+brand new tag at or above v0.10.5, in the one shape this check accepts,
+with whatever bytes they choose - that clears the floor exactly as a
+legitimate release would, because nothing in this PR checks who
+published a release or what is inside it. The only control on a new
+`v*` tag is the repository's own ruleset, which requires admin approval
+to create or move one; this PR neither replaces nor changes that
+control.
+
+### Path A closed: the old Release runs are deleted
+
+Path A (re-running v0.1.0 through v0.10.2's own original Actions runs,
+"Immutability is not retroactive" above) is a workflow-level re-run,
+which no install-time check can reach. GitHub's documentation is silent
+on whether disabling a workflow blocks re-running its past runs, so
+disabling `release.yml` was not a measured control (and would also have
+blocked new releases). Deleting the runs is: a deleted run cannot be
+re-run. Operator decision (2026-09-27, verbatim): "1".
+
+Measured (2026-09-27): `gh run list --workflow release.yml --limit 100`
+listed 17 runs; the 16 other than v0.10.5's (36345101054) were deleted
+with `gh api -X DELETE repos/brunovenceslau/canga/actions/runs/<id>`,
+failed ones included, since "Re-run failed jobs" also applies to them:
+36232145634 (v0.10.4), 36226282318 (v0.10.3), 36217176585 (v0.10.2),
+36208337412 (v0.10.1), 36206853553 (v0.10.0), 35648494082 (v0.9.0),
+35316294090 (v0.8.0), 35310355978 (v0.7.0), 35308883501 (v0.6.0),
+35298710956 (v0.5.0), 35187656571 (v0.4.0), 35179335378 (v0.3.0),
+35029357639, 35028878420 and 35026407125 (v0.2.0), 34977708345
+(v0.1.0). Afterwards the list shows only 36345101054, and `gh api -X
+POST repos/brunovenceslau/canga/actions/runs/36217176585/rerun`
+answers 404 Not Found.
+
+Cost: those runs' logs are gone. Earlier entries in this file cite some
+of them as evidence (for example the v0.10.2 build-time sums in the
+"PR #31: the v0.10.2 pin, rebuilt after the fact" entry); the values
+that mattered were already copied into this file, and the run links in
+those entries no longer resolve.
+
+### Pending
+
+- [pending, post-cap Info from the round-3 ship gate] README's by-hand
+  host install block (under "Install a release binary") computes the
+  newest tag and downloads it in one paste, with no pause to check the
+  tag's shape and floor first. The prose above it now tells the reader
+  to check; a one-line shape guard inside the block would make the
+  check mechanical. Not a security-model surface; left for a later docs
+  pass.

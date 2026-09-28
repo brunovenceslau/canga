@@ -72,6 +72,68 @@ main() {
 		;;
 	esac
 
+	# The oldest release this script installs, whether $tag came from the
+	# command line or from following /releases/latest above: every release
+	# below it was deleted for carrying no build provenance attestation, tags
+	# kept, and could be recreated by anyone with write access, with bytes
+	# and a checksums.txt of their own choosing (docs/HANDOFF.md,
+	# "Immutability is not retroactive"). install_sandbox.sh and
+	# internal/upgrade carry the same value (min_version, MinReleaseTag);
+	# TestReleaseFloorMatchesAcrossInstallersAndCanga (release_floor_test.go)
+	# keeps the three from drifting apart.
+	min_version=0.10.5
+
+	# Two checks in one awk, because both are about $tag's SHAPE before
+	# comparing it to the floor at all: exactly three dot-separated fields,
+	# none with a leading zero (rejects "v00.10.5"), and nothing else after
+	# them (rejects a pre-release like "v0.10.5-rc1" or build metadata like
+	# "v0.10.5+build" - the "v[0-9]*" case above lets both through, and
+	# "v0.10.5-rc1" in particular would otherwise compare EQUAL to the floor
+	# below: awk's `+ 0` reads only the digits up to the first non-digit, so
+	# "5-rc1" and "5" coerce to the same number). Only once the shape is
+	# confirmed are the three fields compared as numbers, never as text:
+	# v0.9.10 is above v0.9.9.
+	#
+	# set +e/-e around the call: awk's exit status has to be inspected (2 for
+	# a bad shape, 1 for below the floor, 0 for accepted), and under `set -e`
+	# a bare command failing aborts the script before that inspection ever
+	# runs; an `if` statement's own condition is the one context set -e
+	# already exempts, but that only gets the pass/fail, not which of the two
+	# refusals it was.
+	set +e
+	awk -v got="${tag#v}" -v want="$min_version" 'BEGIN {
+		n = split(got, g, ".")
+		shape = (n == 3)
+		if (shape) {
+			for (i = 1; i <= 3; i++) if (g[i] !~ /^(0|[1-9][0-9]*)$/) shape = 0
+		}
+		if (!shape) exit 2
+		split(want, w, ".")
+		for (i = 1; i <= 3; i++) {
+			gi = g[i] + 0
+			wi = w[i] + 0
+			if (gi != wi) exit (gi < wi)
+		}
+		exit 0
+	}'
+	floor_status=$?
+	set -e
+
+	case "$floor_status" in
+	0) ;;
+	2)
+		echo "canga: \"$tag\" is not vX.Y.Z (no pre-release, no build metadata, no" >&2
+		echo "canga: leading zeros); refusing to compare it against v$min_version" >&2
+		exit 1
+		;;
+	*)
+		echo "canga: \"$tag\" is older than v$min_version, the first release with a build" >&2
+		echo "canga: provenance attestation; refusing to install a release that could have" >&2
+		echo "canga: been recreated with unverified bytes" >&2
+		exit 1
+		;;
+	esac
+
 	asset="canga-host_${tag#v}_${os}_${arch}.tar.gz"
 	echo "canga: installing $tag ($asset) into $dir" >&2
 
