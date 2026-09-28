@@ -206,10 +206,10 @@ func TestRunIsANoOpWhenNothingIsNewer(t *testing.T) {
 	}{
 		{name: "the newest release is installed", current: newerVersion},
 		{name: "something newer than any release is installed", current: "v9.0.0"},
-		// The published v0.1.0 reports itself without the leading v. Read
+		// The published v0.10.7 reports itself without the leading v. Read
 		// literally it is not the tag, and the run would reinstall the release
 		// it is already on, every time.
-		{name: "the goreleaser spelling of the newest release", current: "0.2.0"},
+		{name: "the goreleaser spelling of the newest release", current: "0.10.7"},
 	}
 
 	for _, tt := range tests {
@@ -293,6 +293,127 @@ func TestRunWithATag(t *testing.T) {
 		_, err := Run(t.Context(), opts)
 		require.ErrorIs(t, err, ErrBadTag)
 	})
+
+	// A tag below MinReleaseTag names a release that could have been
+	// recreated with arbitrary bytes by anyone with contents: write
+	// (docs/HANDOFF.md, "Immutability is not retroactive", Path B), and this
+	// package's own checksum check cannot tell that apart from the real
+	// thing, so it is refused before the network is ever asked, the same
+	// way an unknown role is (TestRunRefusesAnUnknownRole).
+	t.Run("a tag below the release floor", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tag := range []string{"v0.10.4", "v0.1.0"} {
+			t.Run(tag, func(t *testing.T) {
+				t.Parallel()
+
+				opts := runOptions(t, installedVersion, releaseFixture(t, newerVersion))
+				opts.Tag = tag
+
+				server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+					t.Error("a tag below the release floor must be refused before any request")
+				}))
+				server.Start()
+
+				opts.baseURL = server.URL
+
+				_, err := Run(t.Context(), opts)
+				require.ErrorIs(t, err, ErrBelowFloor)
+				assert.ErrorContains(t, err, MinReleaseTag)
+			})
+		}
+	})
+
+	// The floor's complement: MinReleaseTag itself, and releases above it,
+	// all install normally.
+	t.Run("a tag at or above the release floor", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tag := range []string{MinReleaseTag, "v0.10.6", "v0.11.0", "v1.0.0"} {
+			t.Run(tag, func(t *testing.T) {
+				t.Parallel()
+
+				opts := runOptions(t, goInstallVersion, releaseFixture(t, tag))
+				opts.Tag = tag
+
+				result, err := Run(t.Context(), opts)
+				require.NoError(t, err)
+				assert.True(t, result.Installed)
+				assert.Equal(t, tag, result.Release)
+			})
+		}
+	})
+}
+
+// TestRunAppliesTheReleaseFloorToTheNewestRelease is the floor's defense in
+// depth for the path with no --tag at all: Path B (docs/HANDOFF.md,
+// "Immutability is not retroactive") can recreate an OLD tag's release with
+// today's publish date, which is what GitHub's own /releases/latest would
+// then resolve to, so the floor is checked against whatever tag is
+// resolved, not only against an explicit --tag.
+func TestRunAppliesTheReleaseFloorToTheNewestRelease(t *testing.T) {
+	t.Parallel()
+
+	opts := runOptions(t, installedVersion, releaseFixture(t, "v0.10.4"))
+
+	_, err := Run(t.Context(), opts)
+	require.ErrorIs(t, err, ErrBelowFloor)
+}
+
+// TestRunRefusesANewestReleaseTagThatIsNotCanonical closes round-1 ship-gate
+// finding 2 (docs/HANDOFF.md, "Release floor for installers and canga
+// upgrade (PR #41)"): the repository's ruleset only protects tags matching
+// refs/tags/v*, so a release published under the tag "1.0.0" (no "v") is
+// reachable by any contents: write actor, no admin rights needed. Before
+// this fix, normalizeTag silently read that as "v1.0.0" and let it clear
+// the floor; checkFloor no longer normalizes found.Tag, so it is refused
+// for not being canonical vX.Y.Z, before any archive is downloaded.
+func TestRunRefusesANewestReleaseTagThatIsNotCanonical(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/assets/1") {
+			t.Error("a non-canonical release tag must be refused before any asset is downloaded")
+
+			return
+		}
+
+		_, _ = w.Write([]byte(`{"tag_name":"1.0.0","assets":[{"id":1,"name":"checksums.txt","size":9}]}`))
+	}))
+	server.Start()
+
+	opts := runOptions(t, installedVersion)
+	opts.baseURL = server.URL
+
+	_, err := Run(t.Context(), opts)
+	require.ErrorIs(t, err, ErrBelowFloor)
+	assert.ErrorContains(t, err, "1.0.0")
+}
+
+// TestRunRefusesWhenGitHubsReleaseDocumentNamesAnotherTag is defense in
+// depth for round-1 ship-gate finding 2's second half: an explicit --tag is
+// looked up by that exact string (byTag, github.go), so a release document
+// naming any other tag means something upstream of Run disagrees with
+// itself about which release this is. Not reachable through the real
+// GitHub API today - a mismatched /releases/tags/<tag> lookup 404s rather
+// than serve another release's document - so this drives the client
+// against a server that deliberately breaks that assumption.
+func TestRunRefusesWhenGitHubsReleaseDocumentNamesAnotherTag(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v0.10.9","assets":[]}`))
+	}))
+	server.Start()
+
+	opts := runOptions(t, installedVersion)
+	opts.baseURL = server.URL
+	opts.Tag = "v0.10.6"
+
+	_, err := Run(t.Context(), opts)
+	require.ErrorIs(t, err, ErrTagMismatch)
+	require.ErrorContains(t, err, "v0.10.6")
+	assert.ErrorContains(t, err, "v0.10.9")
 }
 
 func TestRunRefusesABuildItCannotPlace(t *testing.T) {

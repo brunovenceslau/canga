@@ -38,7 +38,14 @@ func NewUpgradeCmd(role, version string) *cobra.Command {
 			"working binary untouched.\n\n" +
 			"A GitHub token is optional. GH_TOKEN, GITHUB_TOKEN or whatever `gh\n" +
 			"auth token` answers is used when one is there, which raises GitHub's\n" +
-			"rate limit; without one the release is read anonymously.",
+			"rate limit; without one the release is read anonymously.\n\n" +
+			"--tag has to be canonical vX.Y.Z (no pre-release, no build metadata, no\n" +
+			"leading zero) and at or above " + upgrade.MinReleaseTag + ", the first release with a build\n" +
+			"provenance attestation; the newest release is held to the same two\n" +
+			"rules. Below the floor, or spelled any other way, a release could have\n" +
+			"been recreated by anyone with write access, with bytes and a\n" +
+			"checksums.txt of their own choosing, and this command has no way to\n" +
+			"tell that apart from the real thing.",
 		Args: UsageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			options.Token = upgrade.Token(cmd.Context())

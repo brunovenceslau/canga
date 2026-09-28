@@ -41,6 +41,16 @@ var (
 
 	// ErrBadTag reports a --tag that is not a version.
 	ErrBadTag = errors.New("not a release tag")
+
+	// ErrTagMismatch reports a release document whose own tag is not the one
+	// that was asked for. Not a path known to be reachable through the real
+	// GitHub API today: a byTag lookup 404s on a tag it holds no release
+	// for, rather than substitute another release's document (round-1
+	// ship-gate finding 2, docs/HANDOFF.md, "Release floor for installers
+	// and canga upgrade (PR #41)"). This is defense in depth for that
+	// assumption holding, not evidence that it has ever been observed to
+	// fail.
+	ErrTagMismatch = errors.New("github's release document names a different tag than was asked for")
 )
 
 // The two builds of canga, as a release names them: in its archives
@@ -121,6 +131,10 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
+	if err := checkResolvedRelease(wanted, found); err != nil {
+		return Result{}, err
+	}
+
 	result.Release = found.Tag
 	result.Newer = isNewer(result.Current, found.Tag)
 
@@ -144,6 +158,30 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	return result, nil
 }
 
+// checkResolvedRelease refuses found if it does not name the release that
+// was actually asked for, or if it is below the release floor.
+//
+// Round-1 ship-gate finding 2 (docs/HANDOFF.md, "Release floor for
+// installers and canga upgrade (PR #41)"): an explicit --tag is looked up
+// by that exact string, so found.Tag naming anything else would mean
+// GitHub served the wrong release document. checkFloor below already
+// refuses found.Tag if IT is not canonical, but that says nothing about
+// whether found.Tag is the release that was actually asked for.
+func checkResolvedRelease(wanted string, found release) error {
+	if wanted != "" && found.Tag != wanted {
+		return fmt.Errorf("%w: asked github for %s, its release document names %s",
+			ErrTagMismatch, wanted, found.Tag)
+	}
+
+	// Belt and suspenders for the newest-release path (no --tag): an explicit
+	// --tag below MinReleaseTag is already refused in wantedTag, before this
+	// request ever ran, but the release GitHub's "latest" resolves to is
+	// checked too, since Path B (docs/HANDOFF.md, "Immutability is not
+	// retroactive") could recreate an old tag's release with today's publish
+	// date and make it the newest one.
+	return checkFloor(found.Tag)
+}
+
 // wantedTag decides which release this run is about, and refuses the runs that
 // cannot be decided at all.
 func wantedTag(opts Options) (string, error) {
@@ -151,6 +189,16 @@ func wantedTag(opts Options) (string, error) {
 		tag := normalizeTag(opts.Tag)
 		if !isReleaseTag(tag) {
 			return "", fmt.Errorf("%w: %q", ErrBadTag, opts.Tag)
+		}
+
+		// Checked here, before resolveRelease ever asks the network for it: a
+		// release below MinReleaseTag could have been recreated by anyone
+		// with contents: write, with arbitrary bytes and a checksums.txt to
+		// match (docs/HANDOFF.md, "Immutability is not retroactive", Path
+		// B), and nothing downstream of this point could tell that apart
+		// from the real thing.
+		if err := checkFloor(tag); err != nil {
+			return "", err
 		}
 
 		return tag, nil

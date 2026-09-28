@@ -67,8 +67,16 @@ The script stops before extracting anything when the checksum does not match,
 or when `checksums.txt` has no line for the archive. It prints the installed
 version last, and says so when `~/.local/bin` is not on your PATH.
 
+A tag that is not canonical `vX.Y.Z` (no pre-release, no build metadata, no
+leading zero), or is older than v0.10.5, is refused before anything is
+downloaded: every release before v0.10.5 was deleted for carrying no build
+provenance attestation, tags kept, and could be recreated by anyone with
+write access, with bytes and a `checksums.txt` of their own choosing
+(`docs/HANDOFF.md`, "Immutability is not retroactive").
+
 To do the same by hand, download, verify against the published checksums, then
-extract:
+extract. The steps below do not apply the release floor the scripts apply:
+check yourself that the tag is canonical `vX.Y.Z` and at least v0.10.5.
 
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
@@ -481,6 +489,17 @@ The two share a verb and nothing else.
 
 ### What it verifies
 
+Before any of that, `--tag` (and the release the newest-release path
+resolves to) is refused unless it is both canonical `vX.Y.Z` (no
+pre-release, no build metadata, no leading zero) and at or above v0.10.5:
+every release before v0.10.5 was deleted for carrying no build provenance
+attestation, tags kept, and could be recreated by anyone with write access,
+with bytes and a `checksums.txt` of their own choosing (`docs/HANDOFF.md`,
+"Immutability is not retroactive"). This tells an old or otherwise
+unprotected tag apart from a covered one; it does not vouch for a brand new
+tag's contents, which is what the repository's own tag-protection ruleset is
+for.
+
 The archive is checked against the SHA-256 the release publishes in
 `checksums.txt`, and an archive with no line of its own there is refused rather
 than waved through.
@@ -689,9 +708,13 @@ curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_s
 Root ownership keeps a process without root from replacing the binary. It is
 no boundary against an agent with sudo, which a Docker Sandbox grants its agent
 user. The script verifies the archive against `checksums.txt` the same way the
-host script does.
+host script does, and, like the host script, refuses a tag that is not
+canonical `vX.Y.Z` or is older than v0.10.5, before downloading anything
+(see [Install a release binary](#install-a-release-binary) for why).
 
-By hand, verify the archive against `checksums.txt` before extracting it:
+By hand, verify the archive against `checksums.txt` before extracting it, and
+check yourself that the tag is canonical `vX.Y.Z` and at least v0.10.5, since
+these steps do not apply the release floor:
 
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
@@ -839,11 +862,11 @@ pin, or by running `install_sandbox.sh` again.
 Only v0.10.5 onward is currently a published release (`docs/HANDOFF.md`,
 "Immutability is not retroactive": every release before it that was not
 attested has since been deleted), so `--tag` can currently only name v0.10.5
-or a later one. This is not a permanent guarantee: the old tags themselves
-still exist, and a follow-up is planned that makes `install_host.sh`,
-`install_sandbox.sh` and `canga upgrade --tag` refuse a tag below v0.10.5
-outright, rather than relying on there being nothing published there to
-find.
+or a later one. The old tags themselves still exist, so this was not a
+permanent guarantee on its own - `install_host.sh`, `install_sandbox.sh` and
+`canga upgrade --tag` now refuse a tag below v0.10.5, or any tag that is not
+canonical `vX.Y.Z`, outright, rather than relying on there being nothing
+published there to find.
 
 ## Moving from devctl and agtctl
 
