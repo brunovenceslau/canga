@@ -289,9 +289,7 @@ first.
 ## What upgrade verifies
 
 `canga upgrade` downloads a release artifact and swaps one executable file
-for another. It is not `dotfiles-upgrade`, which fetches git and updates a
-checkout: the two share a verb and nothing else (`canga upgrade --help` says
-the same).
+for another.
 
 **The tag.** `--tag` (and the release the newest-release path resolves to)
 is refused unless it passes [the release floor](#the-release-floor).
@@ -320,16 +318,17 @@ problem than the backup solves.
 ### Which file it replaces
 
 The path is resolved through symlinks, and the resolved file is the one
-replaced. `~/.local/bin` holds symlinks from the dotfiles link engine, and
-replacing the *name* rather than the file behind it would quietly turn one
-of those links into a regular file.
+replaced. `~/.local/bin` is often a directory of symlinks placed by a
+dotfiles manager, and replacing the *name* rather than the file behind it
+would quietly turn one of those links into a regular file.
 
-Either way the command prints the path it is about to write, and `--check`
-prints the same one without touching it. Whether it also reports having
-followed a symlink is up to the operating system rather than to how you
-invoked it: on Linux the kernel hands back an already-resolved path, so
-there is no symlink left to mention, while on macOS it does not. The file
-replaced is the right one on both.
+An install names the file it replaced, a run that stopped partway names the
+file it was working on, and `--check` names the file it would replace
+without touching it. Whether it also reports having followed a symlink is
+up to the operating system rather than to how you invoked it: on Linux the
+kernel hands back an already-resolved path, so there is no symlink left to
+mention, while on macOS it does not. The file replaced is the right one on
+both.
 
 The mode of the file being replaced is kept, so a canga deliberately
 installed `0700` does not come back world-executable. Only the owner's
@@ -371,17 +370,17 @@ you meant.
 ## The release floor
 
 `install_host.sh`, `install_sandbox.sh` and `canga upgrade` (for `--tag` and
-for the newest release alike) refuse a tag before downloading anything
+for the newest release alike) refuse a tag before downloading its archive
 unless it is both canonical `vX.Y.Z` (no pre-release, no build metadata, no
 leading zero) and at or above v0.10.5.
 
 Every release before v0.10.5 was deleted for carrying no build provenance
 attestation, tags kept, and could be recreated by anyone with write access,
-with bytes and a `checksums.txt` of their own choosing (`docs/HANDOFF.md`,
-"Immutability is not retroactive"). Only v0.10.5 onward is published, but
-the old tags still exist, so an empty release list was not a guarantee on
-its own: the tools refuse those tags outright rather than rely on there
-being nothing published there to find.
+with bytes and a `checksums.txt` of their own choosing (see "Immutability
+is not retroactive" in [the handoff notes](HANDOFF.md#left-open-1)). Only
+v0.10.5 onward is published, but the old tags still exist, so an empty
+release list was not a guarantee on its own: the tools refuse those tags
+outright rather than rely on there being nothing published there to find.
 
 The floor tells an old or otherwise unprotected tag apart from a covered
 one. It does not vouch for a brand new tag's contents, which is what the
@@ -416,9 +415,8 @@ They are written the way they are for these reasons:
 - This mirrors `install_host.sh`'s own check rather than piping to a
   checker's `-c`/check mode: on the macOS runners' `sha256sum`, check mode
   exits 0 on empty input instead of refusing it, which would have silently
-  "verified" an asset `checksums.txt` never listed at all
-  (`docs/HANDOFF.md`, "Round 5: the first macOS run found an installer
-  checksum bypass").
+  "verified" an asset `checksums.txt` never listed at all (see
+  [the handoff notes](HANDOFF.md#round-5-the-first-macos-run-found-an-installer-checksum-bypass-2026-09-28)).
 - Everything after the variables is one subshell, `( ... )`, so a refusal
   (`exit 1`) leaves only that subshell: the reason is printed to stderr,
   your own shell stays open, and the `tar` line, the last one inside it,

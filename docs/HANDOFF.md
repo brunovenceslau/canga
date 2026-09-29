@@ -5,6 +5,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Handoff notes
 
+This is the maintainer's working log, kept in the repository so it outlives
+any one working session. It is not user documentation: to use canga, start
+at the [README](../README.md); for how it works and why, read
+[How canga works](design.md). Entries are dated and describe the code as it
+was when they were written, so where an old entry and the README or
+`docs/design.md` disagree, those two describe the current behavior. Open
+items sit under a section's "Left open", "Pending" or "Open" heading, and
+are marked done or closed in place when a later change resolves them.
+
 This file is the durable record for decisions that must survive past a single
 sandbox session: findings the operator explicitly declined (with the
 agreement quoted), and process debriefs from rework that a better process
@@ -2087,20 +2096,22 @@ is an asset checksums.txt does not list.
   SKIP` lines (or a `go test -json` pass that counts skips), and fail or
   warn on an unexpected skip of an APFS-only test on a runner that is
   supposed to be real APFS.
-- **README by-hand blocks: `trap 'exit 1' INT TERM` is untested** (README.md:96
-  and :861; ship-gate round 3, F1, raised by test-engineer, code-reviewer
-  Optional and security-auditor Low). Deleting it leaves
-  `TestReadmeInstallBlocks` green, yet without it dash (TERM) and zsh (INT,
-  TERM) leave the tempdir with the downloaded archive behind after a Ctrl-C.
+- **README by-hand blocks: `trap 'exit 1' INT TERM` is untested** (both
+  "Install by hand, without the script" blocks, under "Install a release
+  binary" and "Install it in a sandbox"; ship-gate round 3, F1, raised by
+  test-engineer, code-reviewer Optional and security-auditor Low). Deleting
+  it leaves `TestReadmeInstallBlocks` green, yet without it dash (TERM) and
+  zsh (INT, TERM) leave the tempdir with the downloaded archive behind after
+  a Ctrl-C.
   Fix: statically assert both blocks carry the trap, or better a case where
   the fake curl sleeps and the test sends INT and TERM, asserting a non-zero
   rc, a surviving caller and no `tmp.*` left behind.
 - **HUP leaves the tempdir under dash** (F2, security-auditor Info): closing
   the terminal ends the block with rc=129 and the tempdir stays. Fix:
-  `trap 'exit 1' HUP INT TERM` (README.md:96 and :861).
+  `trap 'exit 1' HUP INT TERM` in both README by-hand blocks.
 - **curl calls lack `--proto '=https' --proto-redir '=https'`** (F3,
-  security-auditor Info): README.md:90, :97, :98, :862, :863 and
-  `install_host.sh:81,160,161`, `install_sandbox.sh:142`. Change the scripts
+  security-auditor Info): every `curl` in both README by-hand blocks, and
+  `install_host.sh:81,160,161`, `install_sandbox.sh:142,143`. Change the scripts
   and the README together, in a separate PR.
 - **The host (macOS) README block is not verified on real macOS in this
   PR's local gates** (F4, security-auditor Info): only Linux with
@@ -2124,7 +2135,7 @@ is an asset checksums.txt does not list.
   cases ("match with a mktemp that ignores TMPDIR", "match with the scratch
   tree behind a symlink"), so the local Linux gate covers the class.
 - **The `zsh-interactive` subtest skips when zsh is absent**
-  (`readme_install_test.go:318`, `:339-346`; F5, test-engineer optional), so
+  (`readme_install_test.go:391-392`, `:413-419`; F5, test-engineer optional), so
   on the Ubuntu legs the interactive-paste guard may never run. Accept, or
   install zsh on the Ubuntu leg.
 - **`runFence` needs a comment on why `perl` is linked** (F8, code-reviewer
