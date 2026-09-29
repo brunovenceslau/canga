@@ -93,6 +93,7 @@ asset=canga-host_${tag#v}_darwin_arm64.tar.gz
 (
   dir=$(mktemp -d) && cd "$dir" || exit 1
   trap 'rm -rf "$dir"' EXIT
+  trap 'exit 1' INT TERM
   curl -fsSLO "$releases/download/$tag/$asset" || exit 1
   curl -fsSLO "$releases/download/$tag/checksums.txt" || exit 1
 
@@ -100,7 +101,7 @@ asset=canga-host_${tag#v}_darwin_arm64.tar.gz
   count=$(printf '%s\n' "$line" | awk 'NF { n++ } END { print n + 0 }')
   [ "$count" = 1 ] || { echo "checksums.txt lists $asset $count times, not exactly once" >&2; exit 1; }
   want=${line%%" "*}
-  printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$' && [ "$line" = "$want  $asset" ] || {
+  [ "${#want}" -eq 64 ] && printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$' && [ "$line" = "$want  $asset" ] || {
     echo "the checksums.txt line for $asset is not a lowercase sha256, two spaces and the name" >&2; exit 1; }
   got=$(shasum -a 256 "$asset" | awk '{ print $1 }')
   printf '%s' "$got" | grep -Eq '^[0-9a-f]{64}$' || { echo "could not compute the sha256 of $asset" >&2; exit 1; }
@@ -857,6 +858,7 @@ asset=canga-sandbox_${tag#v}_linux_arm64.tar.gz
 (
   dir=$(mktemp -d) && cd "$dir" || exit 1
   trap 'rm -rf "$dir"' EXIT
+  trap 'exit 1' INT TERM
   curl -fsSLO "$releases/download/$tag/$asset" || exit 1
   curl -fsSLO "$releases/download/$tag/checksums.txt" || exit 1
 
@@ -864,7 +866,7 @@ asset=canga-sandbox_${tag#v}_linux_arm64.tar.gz
   count=$(printf '%s\n' "$line" | awk 'NF { n++ } END { print n + 0 }')
   [ "$count" = 1 ] || { echo "checksums.txt lists $asset $count times, not exactly once" >&2; exit 1; }
   want=${line%%" "*}
-  printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$' && [ "$line" = "$want  $asset" ] || {
+  [ "${#want}" -eq 64 ] && printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$' && [ "$line" = "$want  $asset" ] || {
     echo "the checksums.txt line for $asset is not a lowercase sha256, two spaces and the name" >&2; exit 1; }
   got=$(sha256sum "$asset" | awk '{ print $1 }')
   printf '%s' "$got" | grep -Eq '^[0-9a-f]{64}$' || { echo "could not compute the sha256 of $asset" >&2; exit 1; }
