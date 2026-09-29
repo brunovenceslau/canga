@@ -90,8 +90,26 @@ asset=canga-host_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64
 curl -fsSLO "$releases/download/$tag/$asset"
 curl -fsSLO "$releases/download/$tag/checksums.txt"
 mkdir -p "$HOME/.local/bin"
-awk -v a="$asset" '$2 == a' checksums.txt | shasum -a 256 -c - \
-  && tar -xzf "$asset" -C "$HOME/.local/bin" canga
+
+line=$(awk -v a="$asset" '$2 == a' checksums.txt)
+count=$(printf '%s\n' "$line" | awk 'NF { n++ } END { print n + 0 }')
+if [ "$count" -ne 1 ]; then
+  echo "checksums.txt lists $asset $count times, not exactly once" >&2
+  exit 1
+fi
+want=${line%%" "*}
+case $want in *[!0-9a-f]*) want= ;; esac
+if [ "${#want}" -ne 64 ] || [ "$line" != "$want  $asset" ]; then
+  echo "the checksums.txt line for $asset is not a lowercase sha256, two spaces and the name" >&2
+  exit 1
+fi
+got=$(shasum -a 256 "$asset" | awk '{ print $1 }')
+if [ "$got" != "$want" ]; then
+  echo "$asset has sha256 $got, but checksums.txt lists $want" >&2
+  exit 1
+fi
+
+tar -xzf "$asset" -C "$HOME/.local/bin" canga
 ```
 
 `$releases/latest` redirects to the newest release, so `%{url_effective}` names
@@ -99,14 +117,20 @@ its tag without parsing any JSON. `-L` makes curl follow that redirect; without
 it, the effective URL is `$releases/latest` itself and the tag comes out as
 `latest`.
 
-Read the last two lines as one command. `&&` is what makes the checksum a gate:
-without it a pasted block runs every line in turn, and a `FAILED` verification is
-followed by the extraction it was supposed to stop.
-
 `awk` selects the one line of `checksums.txt` naming this asset, matching the
-filename field for equality. `grep` would read the dots in the filename as
-wildcards. An asset absent from `checksums.txt` yields no line, and `shasum`
-rejects empty input rather than reporting success.
+filename field for equality; `grep` would read the dots in the filename as
+wildcards. The asset must be listed exactly once: an absent asset yields no
+line, and a release whose `checksums.txt` somehow names it twice is refused
+rather than letting either line win by accident. The line is then required to
+be exactly what goreleaser writes (64 lowercase hex digits, two spaces, the
+name) before its digest is trusted at all, and only then is it compared,
+string for string, against the archive's own sha256, computed here with
+`shasum -a 256`. This mirrors `install_host.sh`'s own check rather than piping
+to a checker's `-c`/check mode: on the macOS runners' `sha256sum`, check mode
+exits 0 on empty input instead of refusing it, which would have silently
+"verified" an asset `checksums.txt` never listed at all
+(`docs/HANDOFF.md`, "Round 5: the first macOS run found an installer checksum
+bypass").
 
 Running the block again in a directory that already holds an earlier download
 overwrites it: `curl -O` replaces a file rather than refusing.
@@ -827,9 +851,36 @@ asset=canga-sandbox_${tag#v}_linux_arm64.tar.gz     # or linux_amd64
 curl -fsSLO "$releases/download/$tag/$asset"
 curl -fsSLO "$releases/download/$tag/checksums.txt"
 mkdir -p "$HOME/.local/bin"
-awk -v a="$asset" '$2 == a' checksums.txt | sha256sum -c - \
-  && tar -xzf "$asset" -C "$HOME/.local/bin" canga
+
+line=$(awk -v a="$asset" '$2 == a' checksums.txt)
+count=$(printf '%s\n' "$line" | awk 'NF { n++ } END { print n + 0 }')
+if [ "$count" -ne 1 ]; then
+  echo "checksums.txt lists $asset $count times, not exactly once" >&2
+  exit 1
+fi
+want=${line%%" "*}
+case $want in *[!0-9a-f]*) want= ;; esac
+if [ "${#want}" -ne 64 ] || [ "$line" != "$want  $asset" ]; then
+  echo "the checksums.txt line for $asset is not a lowercase sha256, two spaces and the name" >&2
+  exit 1
+fi
+got=$(sha256sum "$asset" | awk '{ print $1 }')
+if [ "$got" != "$want" ]; then
+  echo "$asset has sha256 $got, but checksums.txt lists $want" >&2
+  exit 1
+fi
+
+tar -xzf "$asset" -C "$HOME/.local/bin" canga
 ```
+
+This mirrors `install_host.sh`'s own check (see [Install a release
+binary](#install-a-release-binary) above): the asset must be listed exactly
+once in `checksums.txt`, that one line must be exactly goreleaser's shape (64
+lowercase hex digits, two spaces, the name), and only then is it compared,
+string for string, against the archive's own sha256, computed here with
+`sha256sum`, rather than trusted to a checker's `-c`/check mode
+(`docs/HANDOFF.md`, "Round 5: the first macOS run found an installer checksum
+bypass").
 
 Pin the tag rather than following `latest`, so every sandbox built from one
 definition runs the same binary. `canga --version` prints the version, the role
