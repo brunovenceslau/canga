@@ -5,51 +5,116 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # canga
 
-One binary, `canga`, built in two roles for the repositories and sandboxes of a
-working day:
+**A small, careful CLI for the repositories and agent sandboxes of a working
+day.** It puts every clone at a predictable path, syncs them without ever
+losing work, opens a repository beside its sandbox, and keeps a per-repository
+TODO list that you on your Mac and the agents in your sandboxes share.
 
-| Build | Runs on | What it does |
+It is built for one setup: a Mac running coding agents in
+[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`), with
+[cmux](https://github.com/manaflow-ai/cmux) as the terminal. The git commands
+and reminders work without either; `canga workspace` needs both.
+
+A day with canga, once it is [installed](#install) and your sandbox
+environments are set up:
+
+```sh
+cd "$(canga git clone git@github.com:acme/widget.git)"   # ~/src/github.com/acme/widget
+canga git sync                                           # fetch, fast-forward, never force
+canga workspace https://github.com/acme/widget           # the repo beside its sandbox, in cmux
+canga reminders add drop the debug flag from the parser  # a TODO that outlives the session
+canga reminders list                                     # the same list, from any sandbox
+canga upgrade                                            # replace itself with a verified release
+```
+
+canga is one binary built in two roles: a **host build** for your Mac and a
+**sandbox build** for the Linux sandboxes your agents run in. Both read and
+write the same reminders.
+
+**Try it** on a Mac in under a minute: install, confirm, clone.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_host.sh | sh
+canga --version
+cd "$(canga git clone https://github.com/brunovenceslau/canga)"
+```
+
+If the installer says `~/.local/bin` is not on your PATH, add it before
+running the next line. The clone lands in
+`~/src/github.com/brunovenceslau/canga`. When no signing key is set and no
+git configuration outside the clone turns signing on, the clone also prints
+a `canga: signing OFF` line on stderr naming what to set; that is expected.
+
+## Contents
+
+- [How it fits together](#how-it-fits-together)
+- [Install](#install)
+  - [The release floor](#the-release-floor)
+  - [Install a release binary](#install-a-release-binary)
+  - [Build from source](#build-from-source)
+  - [Install it in a sandbox](#install-it-in-a-sandbox)
+  - [Use the sbx kit](#use-the-sbx-kit)
+  - [How a sandbox shares the host's list](#how-a-sandbox-shares-the-hosts-list)
+  - [Verify a release](#verify-a-release)
+  - [macOS reports "Apple could not verify canga is free of malware"](#macos-reports-apple-could-not-verify-canga-is-free-of-malware)
+- [Commands](#commands)
+  - [`canga git clone`](#canga-git-clone)
+  - [`canga git sync`](#canga-git-sync)
+  - [`canga git setup-hooks`](#canga-git-setup-hooks)
+  - [`canga workspace`](#canga-workspace)
+  - [`canga reminders`](#canga-reminders)
+  - [`canga upgrade`](#canga-upgrade)
+  - [Shell completion](#shell-completion)
+- [Configuration](#configuration)
+- [Exit codes](#exit-codes)
+- [Contributing](#contributing)
+  - [Commit hook](#commit-hook)
+  - [Releasing](#releasing)
+  - [Immutable releases](#immutable-releases)
+  - [Move the sbx kit's pin](#move-the-sbx-kits-pin)
+- [Further reading](#further-reading)
+- [License](#license)
+
+## How it fits together
+
+| Build | Runs on | Commands |
 | --- | --- | --- |
-| host | your Mac (darwin/arm64 and darwin/amd64; published for macOS only) | `git` (clone, sync, hook setup), `workspace` (a repository beside its sandbox environment in cmux), reminders, its own upgrade |
-| sandbox | inside an agent sandbox (linux/arm64 and linux/amd64; published for Linux only) | reminders `list` and `add`, its own upgrade |
+| host | your Mac (darwin/arm64 and darwin/amd64; published for macOS only) | `git` (clone, sync, hook setup), `workspace`, `reminders`, `upgrade`, `completion` |
+| sandbox | inside an agent sandbox (linux/arm64 and linux/amd64; published for Linux only) | `reminders list` and `add`, `upgrade` |
 
-Both builds are named `canga` and share one reminders list. The role is fixed
-when the binary is built: the sandbox build does not contain the host's
-commands, so nothing an agent sets at runtime can reach them. `canga --version`
-names the role.
+The role is fixed when the binary is built, not chosen at runtime: the
+sandbox build does not contain the host's commands, so nothing an agent sets
+can reach them. `canga --version` names the role.
+
+Every command is keyed by the repository you are standing in, derived from
+its `origin` remote. `git@github.com:acme/widget.git`,
+`https://github.com/acme/widget.git` and `ssh://git@github.com:22/acme/widget`
+all name `github.com/acme/widget`, so the same repository gets the same clone
+path and the same reminders whichever URL you used. A repository with no
+`origin` is keyed by its path below the clone base. The full rules are in
+[Which key a repository gets](docs/design.md#which-key-a-repository-gets).
 
 In Brazilian barracks slang, your *canga* is your partner in a pair: the one
 you do not leave and who does not leave you. Each build covers one side, the
 Mac and the sandbox, and neither makes sense without the other.
 
-Every subcommand is keyed by the repository the current directory belongs to,
-derived from its `origin` remote. The derivation is deterministic, so
-`git@github.com:acme/widget.git`, `https://github.com/acme/widget.git` and
-`ssh://git@github.com:22/acme/widget` all name the same repository —
-`github.com/acme/widget` — no matter which one you happened to clone with.
-
 ## Install
 
-These install the host build, on your machine. For a sandbox, see
-[Install it in a sandbox](#install-it-in-a-sandbox). Neither path needs a
-GitHub account or a credential.
+Neither the host nor the sandbox install needs a GitHub account or a
+credential.
 
-### Build from source
+### The release floor
 
-```sh
-GOBIN="$HOME/.local/bin" go install github.com/brunovenceslau/canga/cmd/host/canga@latest
-```
-
-`GOBIN` puts the binary in a directory on your PATH, because the default,
-`$(go env GOPATH)/bin`, is not on it.
-
-`go install` on a module path applies no ldflags, so a binary built this way
-reports its version as `dev`. To stamp the git description in, build from a
-checkout with `make install` instead.
+The install scripts and `canga upgrade` install only a tag that is canonical
+`vX.Y.Z` (no pre-release, no build metadata, no leading zero) and at least
+v0.10.5. Releases before v0.10.5 carry no build provenance and were deleted,
+but their tags remain and could be recreated with other bytes, so the tools
+refuse them outright. Why, in full:
+[The release floor](docs/design.md#the-release-floor).
 
 ### Install a release binary
 
-Run the install script. It downloads the newest release for your system,
+On your Mac, run the install script. It downloads the newest release,
 verifies it against the release's `checksums.txt`, and puts `canga` in
 `~/.local/bin`:
 
@@ -63,27 +128,41 @@ To install one release instead of the newest, pass its tag:
 curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_host.sh | sh -s -- v0.10.5
 ```
 
-The host build is published for macOS only. On Linux, where only the sandbox
-build runs, the script refuses before downloading anything and points to
-[Install it in a sandbox](#install-it-in-a-sandbox).
+Then confirm it. The output is the version, the role (`host`), the commit
+and the Go version:
 
-The script stops before extracting anything when the checksum does not match,
-or when `checksums.txt` has no line for the archive. It prints the installed
-version last, and says so when `~/.local/bin` is not on your PATH.
+```sh
+canga --version
+```
 
-A tag that is not canonical `vX.Y.Z` (no pre-release, no build metadata, no
-leading zero), or is older than v0.10.5, is refused before anything is
-downloaded: every release before v0.10.5 was deleted for carrying no build
-provenance attestation, tags kept, and could be recreated by anyone with
-write access, with bytes and a `checksums.txt` of their own choosing
-(`docs/HANDOFF.md`, "Immutability is not retroactive").
+You run the installer once. From then on, [`canga upgrade`](#canga-upgrade)
+replaces the binary for you.
 
-To do the same by hand, download, verify against the published checksums, then
-extract. The steps below do not apply the release floor the scripts apply:
-check yourself that the tag is canonical `vX.Y.Z` and at least v0.10.5. On an
-Intel Mac, write `darwin_amd64` in place of `darwin_arm64`. The steps prove
-the archive is the one `checksums.txt` lists, which is integrity, not
-provenance: for who built it, see [Verify a release](#verify-a-release).
+What the script refuses:
+
+- **Linux**, before downloading anything. The host build is published for
+  macOS only; the script points you to
+  [Install it in a sandbox](#install-it-in-a-sandbox).
+- **A tag below [the release floor](#the-release-floor)**, before
+  downloading the archive.
+- **A checksum that does not match**, or a `checksums.txt` with no line for
+  the archive, before extracting anything.
+
+On success it prints the installed version, then warns if `~/.local/bin` is
+not on your PATH.
+
+<details>
+<summary>Install by hand, without the script</summary>
+
+The block downloads the newest release into a temporary directory, checks
+the archive against `checksums.txt`, and extracts only `canga` into
+`~/.local/bin`. On an Intel Mac, write `darwin_amd64` in place of
+`darwin_arm64`.
+
+These steps do not apply [the release floor](#the-release-floor): check the
+tag yourself. They prove integrity (the archive is
+the one `checksums.txt` lists), not provenance; for who built it, see
+[Verify a release](#verify-a-release).
 
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
@@ -111,744 +190,54 @@ asset=canga-host_${tag#v}_darwin_arm64.tar.gz
 )
 ```
 
-`$releases/latest` redirects to the newest release, so `%{url_effective}` names
-its tag without parsing any JSON. `-L` makes curl follow that redirect; without
-it, the effective URL is `$releases/latest` itself and the tag comes out as
-`latest`.
+A refusal or a failed download prints the reason and leaves your shell open;
+`tar` runs only when every check passed. Why each line is written the way it
+is: [The by-hand install check](docs/design.md#the-by-hand-install-check).
 
-`awk` selects the one line of `checksums.txt` naming this asset, matching the
-filename field for equality; `grep` would read the dots in the filename as
-wildcards. The asset must be listed exactly once: an absent asset yields no
-line, and a release whose `checksums.txt` somehow names it twice is refused
-rather than letting either line win by accident. The line is then required to
-be exactly what goreleaser writes (64 lowercase hex digits, two spaces, the
-name) before its digest is trusted at all, and only then is it compared,
-string for string, against the archive's own sha256, computed here with
-`shasum -a 256`. This mirrors `install_host.sh`'s own check rather than piping
-to a checker's `-c`/check mode: on the macOS runners' `sha256sum`, check mode
-exits 0 on empty input instead of refusing it, which would have silently
-"verified" an asset `checksums.txt` never listed at all
-(`docs/HANDOFF.md`, "Round 5: the first macOS run found an installer checksum
-bypass").
+</details>
 
-The whole block after the variables is one subshell, `( ... )`, so a refusal
-(`exit 1`) leaves only that subshell: the reason is printed to stderr, your
-own shell stays open, and the `tar` line, the last one inside it, never runs.
-A failed download stops it the same way. It works in a fresh temporary
-directory that it removes on the way out, so an archive or `checksums.txt`
-already lying in your current directory is never the one verified, and the
-archive is not kept: only `canga` is installed.
-
-The archive also carries `LICENSE` and `README.md`. Naming `canga` in the `tar`
-command extracts the binary alone.
-
-Confirm the result. It prints the version, the role (`host`), the commit it was
-built from, and the Go version:
+### Build from source
 
 ```sh
-canga --version
+GOBIN="$HOME/.local/bin" go install github.com/brunovenceslau/canga/cmd/host/canga@latest
 ```
 
-Do this once. From here on `canga upgrade` replaces the binary for you.
-
-### macOS reports "Apple could not verify canga is free of malware"
-
-macOS prints that when Gatekeeper evaluates a binary Apple has not notarized.
-canga is not notarized. Notarization requires a paid Apple Developer Program
-membership, which this tool does not have.
-
-Gatekeeper only evaluates a file carrying the `com.apple.quarantine` extended
-attribute, and that attribute is not part of the download. The program that
-fetched the file decides whether to attach it. Safari, Chrome and Firefox attach
-it. `gh`, `curl`, `wget`, and `go install` do not, so the commands above produce
-a binary that runs without a prompt.
-
-Ask a specific file whether it carries the attribute:
-
-```sh
-xattr -p com.apple.quarantine <path-to-canga>
-```
-
-It prints the attribute, or `No such xattr` when there is none. Use it rather
-than `xattr -l`, which lists every extended attribute: a file can carry
-`com.apple.metadata:kMDItemWhereFroms` and nothing else, and Gatekeeper leaves
-that file alone.
-
-To repair a binary that does carry it, strip the attribute:
-
-```sh
-xattr -d com.apple.quarantine <path-to-canga>
-```
-
-Double-clicking a quarantined archive in Finder copies the attribute onto every
-file it extracts, so the `canga` it leaves next to the archive is quarantined
-and stays so when you move it. Extracting the same archive with `tar` on the
-command line does not.
-
-## `canga git clone`
-
-Clones a repository into the deterministic layout, so the same repository lands
-at the same path on every machine, whichever protocol you cloned it with.
-
-```sh
-canga git clone git@github.com:acme/widget.git
-# → ~/src/github.com/acme/widget
-
-cd "$(canga git clone https://github.com/acme/widget)"
-canga git clone https://github.com/acme/widget /tmp/scratch   # an explicit target
-```
-
-The resolved path is the only thing printed on stdout. git's progress and every
-diagnostic go to stderr, which is what makes the command substitution above
-safe.
-
-### Where a clone lands
-
-```
-${CANGA_SRC_DIR:-$HOME/src}/<host>/<owner>/<repo>
-```
-
-The three segments come from the URL, with the scheme, any userinfo, any port
-and any `.git` suffix removed. Nested owners are kept, so a GitLab subgroup
-lands at `gitlab.com/group/sub/proj`. The spelling is the repository's own: only
-the reminder store, which is shared between a case-folding and a case-sensitive
-filesystem, encodes case.
-
-| Variable | Default | What it sets |
-| --- | --- | --- |
-| `CANGA_SRC_DIR` | `$HOME/src` | Root of the layout. Also what an origin-less repository's reminders key is relative to. |
-| `CANGA_HOST_SIGNING_KEY` | `git config --global user.signingkey` | Key stamped into the clone. |
-| `CANGA_HOST_ALLOWED_SIGNERS` | `git config --global gpg.ssh.allowedSignersFile` | Allowed-signers file wired into the clone, so `git log --show-signature` works there. |
-| `CI` | unset | When set to anything, drops git's `\r` progress meter. |
-
-### What it refuses
-
-A target that already holds anything is refused, and exits 1. An existing empty
-directory is fine. Nothing here ever merges into, or writes over, a tree that is
-already there.
-
-A URL no path can be derived from is refused before anything is created, and
-exits 2. Any credential in it is stripped from the message first.
-
-### Transport hardening
-
-Every clone runs with four git options on the command line, where no repository
-or user configuration can override them:
-
-```
--c protocol.ext.allow=never -c protocol.fd.allow=never
--c transfer.fsckObjects=true -c fetch.fsckObjects=true
-```
-
-The `ext` and `fd` remote helpers run the rest of the URL as a command, so a URL
-such as `ext::sh -c …` is a command execution dressed as a repository. Turning
-them off on the command line means a machine whose git config sets
-`protocol.ext.allow=always` still refuses one.
-
-One setting outranks a `-c` option: the `GIT_ALLOW_PROTOCOL` environment
-variable, which replaces git's protocol policy when it is set. canga removes
-`ext` and `fd` from it before running git and keeps every other entry, so an
-allow-list such as `https:ssh` still restricts what it restricted. A list that
-named only `ext` is left empty, which allows nothing. `file` is left at git's default,
-allowed, so local-path clones keep working. The two `fsckObjects` options make
-the fetch reject a malformed object graph rather than write it to disk first.
-
-### Signing
-
-After the clone, SSH signing is written into the new repository's **local**
-config: the allowed-signers file when one resolves, and `gpg.format=ssh`,
-`user.signingkey`, `commit.gpgsign` and `tag.gpgsign` when a key resolves.
-
-`gpg.format` is written rather than inherited. git's default format is openpgp,
-so on a machine that does not set `gpg.format=ssh` globally, a stamped SSH key
-would fail every commit with `gpg: skipped "…": No secret key`. The consequence
-is deliberate: a clone made by `canga git clone` signs with SSH, so do not hand a
-GPG key to `CANGA_HOST_SIGNING_KEY` or leave one in the global `user.signingkey` and
-expect it to be used here.
-
-The key fallback reads the **global** git config rather than the effective one,
-so the key is the machine's identity and never the local key of whatever
-repository you ran the command in. Nothing global is written.
-
-When neither a key nor an allowed-signers file resolves, the clone is left
-alone rather than pointed at a file that does not exist. `canga` then reports
-on stderr whether the clone signs anyway, because git configuration outside it
-turns `commit.gpgsign` on. A sandbox is that case: its `/etc/gitconfig` carries
-the format, the flag and a key command, and no `user.signingkey`. Otherwise it
-reports `signing OFF` and names what to set.
-
-## `canga git sync`
-
-Fetches every remote with `--prune` and `--tags`, then fast-forwards each local
-branch that tracks an upstream.
-
-```sh
-canga git sync                                  # the repository you are standing in
-canga git sync -C ~/src/github.com/acme/widget  # or any other
-
-# a sweep across every clone in the layout
-find ~/src -name .git -maxdepth 4 -type d -exec dirname {} \; | while read -r r; do
-  canga git sync -C "$r"
-done
-```
-
-A branch that MOVED is printed on stdout as `<branch><TAB><upstream>`, one per
-line, so a sweep pipes and the output is a change log rather than an inventory.
-A branch with nothing to bring in prints nothing at all. Refusals and the
-dirty-tree notice go to stderr.
-
-### What it never does
-
-It never resets, forces, merges non-linearly or deletes anything. Every outcome
-is therefore recoverable, which is what makes it safe to run across every
-repository on a machine without reading them first.
-
-| Situation | What happens |
-| --- | --- |
-| Modified tracked files | The run stops before any branch is touched, and says so. Exit 0. |
-| Untracked files only | The tree does not count as dirty, and the sync proceeds. |
-| Branch already level with, or ahead of, its upstream | Nothing to bring in, and nothing printed. |
-| Branch diverged from its upstream | Reported on stderr in git's own words, and left exactly where it is. Exit 0. |
-| Branch git refuses for another reason | Same: git's words are printed rather than a guess at them. A branch checked out in a linked worktree, a rebase in progress, or an incoming commit that would overwrite an untracked file all land here. |
-| Branch with no upstream | Left out of the report. Nothing was ever asked of it. |
-| Branch whose upstream was deleted | Reported on stderr as `upstream <remote>/<branch> is gone`, and left where it is. It may hold commits that were never pushed. Exit 0. |
-| Detached HEAD | Not an error. Every branch is updated without a checkout. |
-| Fetch failed | Exit 1. Deciding branch states against a stale view of the remote would be guessing. |
-| Interrupted with Ctrl-C | Exit 1, naming the cancellation. A branch that was never asked about is never reported as refused. |
-| Bare repository, or not a repository | Exit 2. Both arms below need a working tree. |
-
-Each branch is asked first whether its upstream is already an ancestor of it. If
-it is, there is nothing to fast-forward and nothing is run. That question is not
-an optimization: without it the two arms below disagree about the same
-repository, because `merge --ff-only` answers "Already up to date" for a branch
-that is ahead of its upstream while `fetch` refuses the same state.
-
-The checked-out branch then advances with `git merge --ff-only`, which refuses
-rather than touch a working tree it would have to change. Every other branch
-advances with `git fetch . <upstream>:<branch>`, and the missing `+` in front of
-that refspec is the safety property itself: without it git refuses a non
-fast-forward update instead of overwriting the branch.
-
-The fetch carries the same transport hardening as `canga git clone`.
-
-## `canga workspace`
-
-Opens a repository and its sandbox environment side by side, in one new
-[cmux](https://github.com/manaflow-ai/cmux) workspace:
-
-```sh
-canga workspace https://github.com/acme/widget
-```
-
-The workspace is named `acme/widget` and is focused when it opens. It has two
-panes:
-
-| Pane | Starts in | Runs |
-| --- | --- | --- |
-| Left | `~/src/github.com/acme/docker-sbx/envs/github.com/acme/widget-env`, the environment | `sbx env run --clone --auto-approve`, the repository's sandbox |
-| Right, focused | `~/src/github.com/acme/widget`, the clone, where `canga git clone` puts it | nothing |
-
-cmux types `sbx env run --clone --auto-approve` into the left pane when its
-terminal starts, the way you would. `--auto-approve` applies the environment
-plan without the confirmation prompt, since the workspace opens focused on
-the right pane and a prompt left in the left one would go unnoticed. When
-the sandbox exits, the pane keeps its shell in the environment directory, so
-you can start the sandbox again from there. If the
-left pane shows a prompt and no sandbox, cmux gave up waiting for the terminal
-(it waits a few seconds and drops the command without a message): type
-`sbx env run --clone --auto-approve` yourself.
-
-Use it when you keep each repository's sandbox environment outside the
-repository, so that an agent in the sandbox cannot edit the environment that
-runs it.
-
-### Where the environment is found
-
-The environments live in their own repository, cloned under the same base
-directory as every other clone, one directory per environment:
-
-```
-${CANGA_SRC_DIR:-$HOME/src}/<environments repository>/envs/<host>/<owner>/<repo>-env
-```
-
-The trailing `-env` is there so the environment directory's basename never
-matches the clone's: without it, both directories end in the same `<repo>`,
-which is easy to mistake for one another in a listing, a pane or a shell
-prompt. The suffix follows [Docker Sandboxes' own documented environment file
-layout](https://docs.docker.com/ai/sandboxes/configuration/environment-files/),
-which names an environment directory for `web-app` as `web-app-env/`.
-
-The environment directory is not a git repository of its own: it has no
-`.git`, and sits inside the working tree of the repository that holds the
-environments. Left alone, a `git` command run inside it would walk up past it
-and act on that enclosing repository instead, and the `-env` suffix does not
-change that; it only keeps the two directories' names apart. The left pane
-guards against this; see [Keeping git out of the envs
-repository](#keeping-git-out-of-the-envs-repository) below for what it does
-and does not cover.
-
-| Variable | Default | What it sets |
-| --- | --- | --- |
-| `CANGA_HOST_ENVS_REPO` | `<host>/<owner>/docker-sbx`, the `docker-sbx` beside the opened repository | The environments repository, as its path under the base directory, such as `github.com/acme/sandboxes`. |
-
-With the default, `github.com/acme/widget` finds its environment in
-`github.com/acme/docker-sbx`, so nothing needs configuring. For a repository in
-a nested group, the default is the `docker-sbx` in the same innermost group:
-`gitlab.com/acme/platform/widget` looks in `gitlab.com/acme/platform/docker-sbx`,
-not in `gitlab.com/acme/docker-sbx`. Set
-`CANGA_HOST_ENVS_REPO` when the environments live elsewhere, for example to open
-a repository of another owner with your own environments:
-
-```sh
-export CANGA_HOST_ENVS_REPO=github.com/brunovenceslau/docker-sbx
-canga workspace https://github.com/acme/widget
-```
-
-The value is a path, not a URL, and must stay under the base directory. Each
-segment follows the rule a URL's segments do: letters, digits and `._~+-`, and
-never `.` or `..` alone. An absolute path is refused too. The error does not
-repeat the value, so a URL pasted by mistake does not print its credential.
-The `<host>/<owner>/<repo>` segments keep their case, as the clone's do.
-
-The environments repository is the one repository whose environment cannot live
-apart from it: opening `github.com/acme/docker-sbx` itself finds its
-environment inside its own clone.
-
-**Migrating existing environment directories:** the `-env` suffix is a
-breaking change for a `docker-sbx` clone created before it. For each existing
-environment directory under `envs/<host>/<owner>/<repo>`, rename its leaf
-segment to add the suffix, then commit the rename:
-
-```sh
-git -C ~/src/github.com/acme/docker-sbx mv envs/github.com/acme/widget envs/github.com/acme/widget-env
-```
-
-### Keeping git out of the envs repository
-
-`canga workspace` sets `GIT_CEILING_DIRECTORIES` in the left pane's own
-environment, ahead of anything typed into its shell, to the environments
-repository's `envs/` directory: the directory every environment sits under. A
-`git` command run from the environment pane then answers "not a git
-repository" instead of silently acting on the environments repository's clone.
-
-This guards against an accident, not against someone working around it: `git
--C <environments clone>`, a `GIT_DIR` set explicitly, unsetting
-`GIT_CEILING_DIRECTORIES` for the command, or a shell rc that overwrites
-rather than composes with it (see below) all reach the environments
-repository just as before. It is a fence around the paths git wanders into by
-default, not an isolation boundary.
-
-That comes at a price: the pane itself cannot `git add`, `git commit` or
-otherwise work on the environment as a git repository any more. Do that from
-the environments repository's own clone, or from the pane with `git -C
-<environments clone>`.
-
-canga composes its entry with whatever `GIT_CEILING_DIRECTORIES` it inherited,
-rather than replacing it, so a value your shell already set is kept, not lost.
-Its own rc files still run after cmux sets the variable, though, so a
-dotfiles line that assigns `GIT_CEILING_DIRECTORIES` outright, instead of
-composing with it, drops canga's entry the moment the shell starts. Compose it
-there too, both to survive that and to protect a plain terminal that `cd`s
-into the environment directory without going through `canga workspace` at all,
-which gets no protection otherwise:
-
-```sh
-envs_ceiling="${CANGA_SRC_DIR:-$HOME/src}/github.com/acme/docker-sbx/envs"
-case ":${GIT_CEILING_DIRECTORIES:-}:" in
-  *":$envs_ceiling:"*) ;;
-  *) export GIT_CEILING_DIRECTORIES="$envs_ceiling${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}" ;;
-esac
-```
-
-Replace `github.com/acme/docker-sbx` with whatever `CANGA_HOST_ENVS_REPO` is
-set to, or, if it is unset, with `<host>/<owner>/docker-sbx` for the owner of
-the repository you open most, the same default `canga workspace` itself
-falls back to. The `case` guards against duplicating the entry: sourced twice,
-in the same shell or across bash and zsh's own rc files, it finds the entry
-already there and leaves `GIT_CEILING_DIRECTORIES` alone.
-
-`envs_ceiling` must resolve to an absolute path: git silently ignores a
-relative `GIT_CEILING_DIRECTORIES` entry. Set `CANGA_SRC_DIR` itself to
-an absolute path if you export it; canga's own `--layout` value never has this
-problem, since it always resolves the base directory to an absolute path
-first.
-
-### Requirements
-
-- cmux 0.64.23 or later. The workspace is created with one `cmux new-workspace
-  --layout` call, checked against 0.64.23 and 0.64.25.
-- Run it from a terminal inside cmux. cmux's default socket mode accepts
-  commands only from its own terminals, and its refusal is printed as it is.
-- The clone, the environments repository's clone, and the environment
-  directory in it already exist. `canga git clone` makes both clones.
-- `sbx` on the `PATH` of the shells cmux opens. canga does not check for it:
-  if it is missing, the left pane shows that shell's `command not found`.
-
-### What it refuses
-
-Nothing is created or cloned. Each refusal happens before cmux is called:
-
-| Situation | Exit |
-| --- | --- |
-| `CANGA_HOST_ENVS_REPO` is absolute, a URL, or has an empty, `.`, `..` or otherwise invalid segment | `2` |
-| A URL no `<host>/<owner>/<repo>` can be derived from | `2` |
-| No clone at the derived path. The message suggests `canga git clone <url>` | `1` |
-| No environment directory at the derived path. The message names the path and the fixes: clone the environments repository with `canga git clone`, update it with `canga git sync`, create the directory, or set `CANGA_HOST_ENVS_REPO` | `1` |
-| `cmux` is not on your PATH | `1` |
-| cmux fails. Its own message is shown | `1` |
-
-On success, stdout carries cmux's own reply, such as `OK workspace:3`.
-
-## `canga upgrade`
-
-Replaces the running binary with a published release, in place. Each build
-replaces itself with the same build: the host build installs a `canga-host_`
-archive, the sandbox build a `canga-sandbox_` one. See
-[Upgrade it in a sandbox](#upgrade-it-in-a-sandbox) for what differs there.
-
-```sh
-canga upgrade                # install the newest release
-canga upgrade --check        # say what is available, change nothing
-canga upgrade --tag v0.10.5  # install exactly that release
-```
-
-Each build is published for one operating system: the host build for macOS,
-the sandbox build for Linux. Off it, `canga upgrade` refuses with exit `2`
-before any request, since there is no archive to upgrade into.
-
-Only the release tag goes to stdout, one line, so `v=$(canga upgrade)` is the
-version now installed. Everything else is a diagnostic on stderr.
-
-**This is not `dotfiles-upgrade`.** That one fetches git and updates a checkout.
-This one downloads a release artifact and swaps one executable file for another.
-The two share a verb and nothing else.
-
-### What it verifies
-
-Before any of that, `--tag` (and the release the newest-release path
-resolves to) is refused unless it is both canonical `vX.Y.Z` (no
-pre-release, no build metadata, no leading zero) and at or above v0.10.5:
-every release before v0.10.5 was deleted for carrying no build provenance
-attestation, tags kept, and could be recreated by anyone with write access,
-with bytes and a `checksums.txt` of their own choosing (`docs/HANDOFF.md`,
-"Immutability is not retroactive"). This tells an old or otherwise
-unprotected tag apart from a covered one; it does not vouch for a brand new
-tag's contents, which is what the repository's own tag-protection ruleset is
-for.
-
-The archive is checked against the SHA-256 the release publishes in
-`checksums.txt`, and an archive with no line of its own there is refused rather
-than waved through.
-
-Be clear about what that proves: the bytes downloaded are the bytes the release
-names, so a corrupted or truncated download is caught. It does **not** prove the
-release is genuine — the same account publishes the asset and the checksum
-beside it. That is integrity, not authenticity.
-
-The new binary is then written beside the old one, flushed to disk, and **run
-once** to confirm it reports the version and the build (`host` or `sandbox`)
-it was downloaded as. Only then is it renamed over the target. An archive
-holding something that is not canga, a binary for the wrong platform, or the
-other build, fails at that step with the working binary
-untouched, instead of after taking its place on your PATH.
-
-Nothing is written outside the directory the binary already lives in, and no
-backup is left behind: the previous release is always one `canga upgrade --tag`
-away, and a stale `canga.bak` on PATH is a worse problem than the backup solves.
-
-### Which file it replaces
-
-The path is resolved through symlinks, and the resolved file is the one
-replaced. `~/.local/bin` holds symlinks from the dotfiles link engine, and
-replacing the *name* rather than the file behind it would quietly turn one of
-those links into a regular file.
-
-Either way the command prints the path it is about to write, and `--check`
-prints the same one without touching it. Whether it also reports having followed
-a symlink is up to the operating system rather than to how you invoked it: on
-linux the kernel hands back an already-resolved path, so there is no symlink
-left to mention, while on macOS it does not. The file replaced is the right one
-on both.
-
-The mode of the file being replaced is kept, so a canga deliberately installed
-`0700` does not come back world-executable — only the owner's execute bit is
-restored unconditionally, since an install you cannot run is not one.
-
-### The token
-
-A GitHub token is optional: with none, `canga upgrade` reads the release
-anonymously. What a token buys is GitHub's authenticated rate limit, 5000
-requests an hour against 60 for an anonymous client, which one shared outbound
-address can exhaust on its own.
-
-`GH_TOKEN` is read first, then `GITHUB_TOKEN`, and failing both, whatever `gh
-auth token` answers. That last one is why a token you never exported is still
-used on a mac: `gh` keeps it in the keychain. `gh` is optional — export
-`GH_TOKEN` and it is never consulted, install neither and the upgrade still
-runs.
-
-A token GitHub rejects, such as an expired or revoked one, does not stop the
-upgrade. canga retries that request without it and makes every later request
-anonymously. If the anonymous request fails too, the error names both failures,
-so the stale token is still reported.
-
-### When it refuses to guess
-
-A binary built by `go install`, or from a tree that has moved past its last tag,
-reports `dev` or `v0.1.0-3-gabc1234` rather than a release. Neither names a
-published artifact, and `v0.1.0-3-gabc1234` sorts *below* `v0.1.0` under semver
-— so treating it as a release would offer older code as an upgrade. Those builds
-are refused, and `--tag` is how you say which release you meant:
-
-```sh
-canga upgrade --tag v0.10.5
-```
-
-## `canga reminders`
-
-A per-repository TODO store that outlives the session that wrote it. An idea
-raised mid-task, on a topic unrelated to the work at hand, is otherwise lost
-when the session ends.
-
-```sh
-canga reminders add drop the temporary debug flag from the parser
-canga reminders list
-canga reminders reorder 20260915T142233.482913Z-9f3a1c   # bump one to the top
-canga reminders path                                     # where they live
-canga reminders rm 20260915T142233.482913Z-9f3a1c
-```
-
-`list` prints one `<id><TAB><text>` record per line, so it pipes. Diagnostics go
-to stderr; only records go to stdout.
-
-`-C, --repo` points a command at a repository other than the current directory,
-which is what a hook or a script should use rather than changing directory.
-
-### Where the reminders live
-
-```
-${CANGA_REMINDERS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/canga/reminders}/
-  <host>/<owner>/<repo>/<scope>/
-    items/<id>.md      # one file per reminder — the unit of atomicity
-    order/<N>          # versioned order documents; the highest N is current
-    tmp/               # staging, deliberately outside the items glob
-```
-
-An uppercase letter in the path is encoded as `!` plus its lowercase form, so
-`github.com/Acme/Widget` is stored under `github.com/!acme/!widget`. This is
-Go's own encoding, the one the module cache uses (`~/go/pkg/mod/github.com` has
-`!burnt!sushi` entries for the same reason). It is load-bearing here: a store is
-shared between a mac, whose APFS folds case, and a linux sandbox, whose
-filesystem does not. Unencoded, `Acme/Widget` and `acme/widget` are two
-directories on one side and one on the other, so the two sides disagree about
-whether they are looking at the same list. The readable spelling is kept in each
-item's `repo:` header.
-
-### Which key a repository gets
-
-A repository with an `origin` remote is keyed by that remote's
-`<host>/<owner>/<repo>`, whatever directory it sits in.
-
-A repository with no `origin` at all is keyed by where its working tree is:
-its path below the clone base, the same `${CANGA_SRC_DIR:-$HOME/src}`
-that `canga git clone` lays repositories out under. `~/src/local/OS` keys as
-`local/OS`. A tree at exactly the place `canga git clone` would put a
-repository gets that repository's key, so an origin-less
-`~/src/github.com/acme/widget` reads the same list as a clone of
-`github.com/acme/widget`. That shared key is the rule, not a collision: the
-layout defines that directory as that repository.
-
-The location is read from the filesystem, never from the repository's own
-configuration:
-
-- The working tree is the nearest directory holding a `.git`, from `-C` (or
-  the current directory) upwards, and git must report the same one. A
-  `core.worktree` or `GIT_WORK_TREE` that moves the working tree elsewhere is
-  refused, so nothing inside a repository can pick another repository's key.
-  "The same" is decided by file identity, not by comparing path strings.
-- Symbolic links are resolved on both sides first, so a link is another name
-  for the same key, and a link under the base that points out of it is
-  outside.
-- Each path component is taken in its on-disk spelling. On a
-  case-insensitive volume, such as APFS by default, `-C ~/SRC/LOCAL/os` or a
-  `CANGA_SRC_DIR` typed in another case still keys as `local/OS`.
-- The tree must be strictly below the base. The base itself, anywhere
-  outside it, and a path segment a URL could not carry either (a space, a
-  shell metacharacter) are refused with exit `2`, as a repository with no
-  `origin` was before.
-- An `origin` that exists but names no usable URL is refused as before; only
-  a repository with no `origin` remote falls back to its location.
-- A linked worktree (`git worktree add`) is keyed by its MAIN working tree,
-  wherever it sits, so every worktree of a repository reads one list:
-  `~/src/local/OS/.claude/worktrees/x` and `~/src/local/OS-wt` both key as
-  `local/OS`. The link is believed only when it checks out both ways: the
-  worktree's git directory sits in the main repository's `.git/worktrees/`,
-  that directory's `gitdir` names this worktree's `.git`, and the common
-  directory is the main tree's `.git`. A forged `gitdir` or `commondir` is
-  refused, never keyed by the worktree's own path instead. A submodule is
-  keyed by where it is. A worktree of a bare repository, or of one made with
-  `--separate-git-dir`, has no main working tree and is refused, exit `2`;
-  give the repository an `origin` to key it by that.
-- A `.git` that is a symbolic link is refused, exit `2`: it would let one
-  directory pass for another repository's main tree or worktree. The
-  worktree's `gitdir` record is read only as a regular file of at most 4096
-  bytes, never through a link or from a FIFO, and what it says is quoted,
-  never printed raw.
-- A segment the store uses inside a key's directory (`repo`, `items`,
-  `order`, `tmp`) is refused in a LOCATION-derived key, so no origin-less
-  repository's store sits inside another origin-less repository's data. It
-  does not stop an `origin` key from nesting inside a location key's
-  directory: an origin-less `~/src/github.com/acme` beside a clone of
-  `github.com/acme/repo` puts the clone's store at
-  `github.com/acme/repo/...` inside the first's. The two stay apart,
-  because the store reads only regular files in `items/` and skips
-  directories there, but they share a directory tree.
-
-The key is a label that says which list a repository reads, not an
-authenticated identity: an `origin` is whatever the repository's own
-configuration says, and anything able to write that configuration can point
-it at any key. What the location rule adds is that a location-derived key
-names the directory canga was pointed at, never one the repository's
-configuration chose.
-
-The sandbox build never defaults the base, because its `$HOME` is not the
-host's: repositories are mounted at their HOST paths. Its environment sets
-`CANGA_SRC_DIR` to the host's base, an absolute host path, exactly as it
-sets `CANGA_REMINDERS_DIR`. Unset, an origin-less repository is refused there
-and the message names the variable.
-
-`CANGA_REMINDERS_DIR` is read by both builds. It exists because `$HOME` is not
-the same on both sides of a sandbox boundary: a sandbox is handed the host's
-path rather than left to derive a different one. On the host it is normally
-unset. The store sits under the XDG **data** directory, not a cache or
-state directory, because a reminder is your own data and an uninstall must not
-take it.
-
-Each item is a plain file. Editing one by hand is a supported way to use this —
-`canga reminders path <id>` exists to hand one to an editor — and a file
-dropped into `items/` by any other tool is listed like any other.
-
-Sandboxes can write the store, so canga reads an item or the order document
-only as a regular file, never through a symbolic link and never waiting on a
-FIFO, and only up to a size: 1 MiB for an item (more than a macOS command
-line can carry) and 4 MiB for the order document (over 100,000 ids). `list`
-skips an entry of `items/` that is not a regular file, as it skips a
-directory, and fails on an item over the limit; `add` refuses text that would
-make one. `path` only prints a path: the editor opens it later, and follows
-whatever is there by then, so open an item a sandbox could have replaced with
-the same care as any file it can write.
-
-### Concurrency
-
-Several sessions, in several sandbox VMs, plus you on the host, operate on one
-store at the same time. The store takes **no lock**:
-
-- An item is published with `link(2)`, never by writing to its final name.
-  Linking onto a name that exists fails and leaves the existing file
-  byte-identical, so one call is both the uniqueness check and the atomic
-  publish.
-- `add` and `rm` never touch the order document. A new item is simply not in it
-  and lists at the end; a removed item's stale entry is skipped on read and
-  collected by the next `reorder`.
-- `reorder` is the one read-modify-write, and it uses the same primitive as
-  optimistic concurrency control: it publishes `order/<N+1>`, and if that name
-  is taken it re-reads the winner's result and recomputes rather than
-  overwriting it.
-
-Nothing is ever overwritten, and no killed process can leave a stale lock
-behind, because there is none to leave.
-
-Every path is resolved through an `os.Root` rooted at the store directory, so a
-crafted id cannot address anything outside it by construction rather than by
-validation. Go 1.27 is a correctness floor, not a preference: before it, a
-symlink opened with a trailing slash escaped a `Root`.
-
-Nothing below the store root may be a symbolic link: not the store directory,
-and not any directory between the root and it. A `Root` follows its own path,
-and one rooted at the store root would still follow a link that stays inside
-it, so a link at any of those levels would carry reads and writes to another
-directory, or to another repository's store. Everything below the root is
-shared with sandboxes, which can write it, so canga opens the root once and
-enters each directory below it relative to its parent, refusing a link at
-every step, and checks after each open that the directory it holds is still
-the one at that name. The root itself, and anything above it, such as a
-symlinked `~/.local/share`, is your own layout and may be a link.
-
-## The sandbox build
-
-The sandbox build is what an agent inside a sandbox runs. It reads and adds to
-the same reminders the host build manages, and upgrades itself.
-
-```sh
-canga reminders list
-canga reminders add check the retry budget before merging
-```
-
-Both verbs behave exactly as on the host: `list` prints one `<id><TAB><text>`
-record per line, `add` prints the new id, and `-C` names a repository other
-than the current directory.
-
-### What it leaves out
-
-The sandbox build has no `git`, `workspace` or `completion`, and no `reminders rm`,
-`reorder` or `path`. An agent may surface the list and record an idea, but
-the list belongs to the person on the host, so only the host build removes or
-reorders it.
-
-Those commands are not compiled into the sandbox build. Running one refuses
-with exit `2` and says where it lives, and help does not list them:
-
-```
-$ canga reminders rm 20260918T015659.641699Z-125ec4d3
-canga: reminders rm is available in the host build only, not in the sandbox build
-```
-
-### How a sandbox shares the host's list
-
-The sandbox needs two things from its environment:
-
-1. The host's store directory for that repository, mounted into the sandbox.
-2. `CANGA_REMINDERS_DIR` set to the host's store root, which is a HOST path:
-   inside the sandbox `$HOME` is not the host's home.
-3. Only for repositories with no `origin`: `CANGA_SRC_DIR` set to the
-   host's clone base, also a HOST path, with the repository mounted at its
-   host path below it. See
-   [Which key a repository gets](#which-key-a-repository-gets).
-
-```sh
-CANGA_REMINDERS_DIR=/Users/you/.local/share/canga/reminders \
-CANGA_SRC_DIR=/Users/you/src \
-  canga reminders list
-```
-
-Without `CANGA_REMINDERS_DIR`, the sandbox build falls back to a store inside
-the sandbox, which the host never sees. See
-[Where the reminders live](#where-the-reminders-live) for the layout under the
-root.
+`GOBIN` puts the binary on your PATH; the default, `$(go env GOPATH)/bin`,
+usually is not. A binary built this way reports its version as `dev`, because
+`go install` on a module path applies no ldflags, and `canga upgrade` then
+needs an explicit `--tag`. To stamp the version in, build from a checkout
+with `make install`.
 
 ### Install it in a sandbox
 
-Releases ship the sandbox build for linux only, because sandboxes are linux
-VMs. In a sandbox's provisioning step, run as root, the install script takes
-the tag to pin and installs a root-owned `canga` in `/usr/local/bin`:
+Sandboxes are Linux VMs, and releases ship the sandbox build for Linux only.
+In the sandbox's provisioning step, run as root, pin a tag:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_sandbox.sh | sh -s -- vX.Y.Z
 ```
 
-Root ownership keeps a process without root from replacing the binary. It is
-no boundary against an agent with sudo, which a Docker Sandbox grants its agent
-user. The script verifies the archive against `checksums.txt` the same way the
-host script does, and, like the host script, refuses a tag that is not
-canonical `vX.Y.Z` or is older than v0.10.5, before downloading anything
-(see [Install a release binary](#install-a-release-binary) for why).
+This installs a root-owned `canga` in `/usr/local/bin`. Root ownership keeps
+a process without root from replacing it; it is no boundary against an agent
+with sudo, which a Docker Sandbox grants its agent user. The script verifies
+the archive and applies [the release floor](#the-release-floor) exactly as
+the host script does.
 
-By hand, verify the archive against `checksums.txt` before extracting it, and
-check yourself that the tag is canonical `vX.Y.Z` and at least v0.10.5, since
-these steps do not apply the release floor. Set `tag` to the release this
-sandbox pins, and write `linux_amd64` in place of `linux_arm64` on an amd64
-sandbox. The steps prove integrity, not provenance: for who built the
-archive, see [Verify a release](#verify-a-release).
+Pin the tag rather than following `latest`, so every sandbox built from one
+definition runs the same binary. `canga --version` prints the version, the
+role (`sandbox`), the commit and the Go version.
+
+With Docker Sandboxes, the [sbx kit](#use-the-sbx-kit) does all of this for
+you.
+
+<details>
+<summary>Install by hand, without the script</summary>
+
+Set `tag` to the release this sandbox pins, and write `linux_amd64` in place
+of `linux_arm64` on an amd64 sandbox. Unlike the script, this installs into
+the current user's `~/.local/bin`, and it does not apply
+[the release floor](#the-release-floor): check the tag yourself. It proves
+integrity, not provenance; see [Verify a release](#verify-a-release).
 
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
@@ -876,38 +265,26 @@ asset=canga-sandbox_${tag#v}_linux_arm64.tar.gz
 )
 ```
 
-This mirrors `install_host.sh`'s own check (see [Install a release
-binary](#install-a-release-binary) above): the asset must be listed exactly
-once in `checksums.txt`, that one line must be exactly goreleaser's shape (64
-lowercase hex digits, two spaces, the name), and only then is it compared,
-string for string, against the archive's own sha256, computed here with
-`sha256sum`, rather than trusted to a checker's `-c`/check mode
-(`docs/HANDOFF.md`, "Round 5: the first macOS run found an installer checksum
-bypass"). As above, the block is one subshell in a temporary directory: a
-refusal or a failed download prints why and leaves your shell open, and
-`tar` runs only when every check passed.
+It makes the same checks as the host block above, with `sha256sum` in place
+of `shasum -a 256`.
 
-Pin the tag rather than following `latest`, so every sandbox built from one
-definition runs the same binary. `canga --version` prints the version, the role
-(`sandbox`), the commit, and the Go version.
+</details>
 
 ### Use the sbx kit
 
-With [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`), you
-can let a kit install the sandbox build instead of writing the provisioning
-step yourself. The kit is the [`sbx-kit/`](sbx-kit/spec.yaml) directory of this
-repository. It installs the release it pins, verified against that release's
-sha256, as a root-owned `/usr/local/bin/canga`, and allows the egress canga
-needs: `github.com`, `api.github.com` and
-`release-assets.githubusercontent.com`.
+With [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`), a kit
+installs the sandbox build for you. The kit is this repository's
+[`sbx-kit/`](sbx-kit/spec.yaml) directory. It installs the release it pins,
+verified against that release's sha256, as a root-owned
+`/usr/local/bin/canga`, and allows the egress canga needs: `github.com`,
+`api.github.com` and `release-assets.githubusercontent.com`.
 
 Before you start:
 
-- The sandbox has `curl`, from its image or from a kit listed before this one.
-  The kit stops with `canga: curl is not installed` when it is missing.
+- The sandbox has `curl`, from its image or from a kit listed before this
+  one. Without it the kit stops with `canga: curl is not installed`.
 - sbx allows kits from this repository's owner. By default sbx loads kits
-  from `docker.io/` only, and refuses this kit until `kit.allowedSources`
-  names `github.com/brunovenceslau/`. The command replaces the whole list, so
+  from `docker.io/` only. The command below replaces the whole list, so
   repeat every source you already allow:
 
   ```sh
@@ -925,14 +302,12 @@ To add the kit:
    git ls-remote https://github.com/brunovenceslau/canga.git refs/heads/main
    ```
 
-2. Check that sbx accepts the kit at that commit:
+2. Check that sbx accepts the kit at that commit. An allowlist problem shows
+   up here instead of when the sandbox starts:
 
    ```sh
    sbx kit validate "git+https://github.com/brunovenceslau/canga.git#ref=<commit>&dir=sbx-kit"
    ```
-
-   An allowlist problem shows up here instead of when the sandbox starts. See
-   [sbx says the kit's source is not in your allowlist](#sbx-says-the-kits-source-is-not-in-your-allowlist).
 
 3. List the kit in your environment file, with that commit as `ref`:
 
@@ -942,326 +317,57 @@ To add the kit:
    ```
 
 4. Start the sandbox. The kit's install step ends by printing
-   `canga --version`, such as `v0.10.1 (sandbox, <commit>, <go>)`.
+   `canga --version`, such as `v0.10.5 (sandbox, <commit>, <go>)`.
 
-Pin a commit rather than a branch or a tag. The kit's release pin moves in a
-pull request after each release (see [Releasing](#releasing)), so a tag's kit
-names the release before it, and a branch changes under you. The merge commit
-of the newest `chore(sbx-kit): pin canga vX.Y.Z` pull request is the ref that
-installs the newest release.
+Pin a commit, not a branch or a tag. The kit's release pin moves in a pull
+request after each release (see [Releasing](#releasing)), so a tag's kit
+names the release before it, and a branch changes under you. The merge
+commit of the newest `chore(sbx-kit): pin canga vX.Y.Z` pull request is the
+ref that installs the newest release.
 
-The kit installs the binary only. Sharing the host's reminders list still
-needs the mount and the variable described in
+The kit installs the binary only. Sharing the host's reminders still needs
+the mount and the variable in
 [How a sandbox shares the host's list](#how-a-sandbox-shares-the-hosts-list).
 The kit does not register a Claude Code hook: sbx manages the sandbox's
 `~/.claude/settings.json`, and a kit has no field for hooks.
 
 #### sbx says the kit's source is not in your allowlist
 
-`sbx kit validate`, and any command that loads the kit, refuses it when
-`kit.allowedSources` does not name `github.com/brunovenceslau/`:
+`sbx kit validate`, and any command that loads the kit, refuses it with
+`its source is not in your allowlist` when `kit.allowedSources` does not name
+`github.com/brunovenceslau/`, and prints your current allowlist. Add the
+entry, keeping every one already listed, with the `sbx settings set` command
+under [Use the sbx kit](#use-the-sbx-kit), then run the command again.
 
-```
-INVALID: kit "git+https://github.com/brunovenceslau/canga.git#ref=<commit>&dir=sbx-kit" cannot be installed — its source is not in your allowlist.
+### How a sandbox shares the host's list
 
-Your current kit.allowedSources:
-  - docker.io/
-...
-ERROR: artifact validation failed
-```
+For the sandbox build to read the reminders you keep on the host, the
+sandbox's environment needs:
 
-The message lists your current allowlist. Add `github.com/brunovenceslau/` to
-it, keeping every entry it already lists, then run the command again:
-
-```sh
-sbx settings set kit.allowedSources '["docker.io/","github.com/brunovenceslau/"]'
-```
-
-### Upgrade it in a sandbox
-
-`canga upgrade` moves a running sandbox to a newer release of the sandbox
-build. The pin still decides the release every sandbox starts with: recreating
-the sandbox installs the pinned release again. To change the release of every
-sandbox, change the pin.
-
-Before you run it:
-
-- The sandbox's egress policy allows `api.github.com`, where canga reads the
-  release, and `release-assets.githubusercontent.com`, where GitHub redirects
-  the download.
-- You can write to the directory that holds the binary. The upgrade stages the
-  new binary there before renaming it over the old one.
-
-Run it with `sudo` when root owns the binary, as it owns the install script's
-`/usr/local/bin/canga`:
+1. The host's store directory for that repository, mounted into the sandbox.
+2. `CANGA_REMINDERS_DIR` set to the host's store root. It is a host path:
+   inside the sandbox, `$HOME` is not the host's home.
+3. Only for repositories with no `origin`: `CANGA_SRC_DIR` set to the host's
+   clone base, also a host path, with the repository mounted at its host
+   path below it.
 
 ```sh
-sudo canga upgrade
+CANGA_REMINDERS_DIR=/Users/you/.local/share/canga/reminders \
+CANGA_SRC_DIR=/Users/you/src \
+  canga reminders list
 ```
 
-A copy in a directory you own, such as `~/.local/bin`, needs no `sudo`:
+Without `CANGA_REMINDERS_DIR`, the sandbox build uses a store inside the
+sandbox, which the host never sees. The store's layout is in
+[Where the reminders live](docs/design.md#where-the-reminders-live).
 
-```sh
-canga upgrade
-```
+### Verify a release
 
-On success, stdout holds the installed tag and stderr says
-`canga: installed <new> over <old> at <path>`. `canga --version` then reports
-the new release and the role `sandbox`.
-
-`sudo` resets the environment by default, so `GH_TOKEN` does not reach the
-upgrade and canga reads the release anonymously. The repository is public, so
-the upgrade still works, within GitHub's anonymous limit of 60 requests an hour.
-
-Sandbox builds up to v0.6.0 do not have this command. They answer
-`canga upgrade` with `upgrade is available in the host build only, not in the
-sandbox build`. Move those sandboxes to a release that has it by changing the
-pin, or by running `install_sandbox.sh` again.
-
-Only v0.10.5 onward is currently a published release (`docs/HANDOFF.md`,
-"Immutability is not retroactive": every release before it that was not
-attested has since been deleted), so `--tag` can currently only name v0.10.5
-or a later one. The old tags themselves still exist, so this was not a
-permanent guarantee on its own - `install_host.sh`, `install_sandbox.sh` and
-`canga upgrade --tag` now refuse a tag below v0.10.5, or any tag that is not
-canonical `vX.Y.Z`, outright, rather than relying on there being nothing
-published there to find.
-
-## Moving from devctl and agtctl
-
-canga was two binaries, `devctl` and `agtctl`, and up to v0.5.0 its git
-commands sat at the top level. What changed, and what you do:
-
-| Before | Now | What to do |
-| --- | --- | --- |
-| `devctl`, `agtctl` | `canga` (host build, sandbox build) | Install the host build once by hand; `devctl upgrade` does not select `canga-host_` archives. |
-| `${XDG_DATA_HOME}/devctl/reminders` | `${XDG_DATA_HOME}/canga/reminders` | Nothing, if you run any `canga reminders` command on the host before starting a sandbox that mounts the new path: that command moves the store in one rename and says so on stderr. |
-| `DEVCTL_REMINDERS_DIR` | `CANGA_REMINDERS_DIR` | Rename it in each sandbox environment file, together with the mount path. The old name is not read. |
-| `DEVCTL_BASE_DIR`, `DEVCTL_SIGNING_KEY`, `DEVCTL_ALLOWED_SIGNERS` | `CANGA_HOST_BASE_DIR`, `CANGA_HOST_SIGNING_KEY`, `CANGA_HOST_ALLOWED_SIGNERS` | Rename them wherever you set them. |
-| `canga-host_` archives for linux | none: the host build is published for darwin only | Nothing on a Mac. On Linux, which only runs the sandbox build, use `install_sandbox.sh`; `install_host.sh` and the host build's `canga upgrade` refuse there. |
-| `CANGA_HOST_BASE_DIR` | `CANGA_SRC_DIR` | Rename it wherever you set it, sandbox environment files included. While the old name is set, every command that reads the clone base refuses with exit `2` and names the new one, rather than fall back to `$HOME/src`. |
-| `canga clone`, `canga sync`, `canga setup hooks` (v0.5.0) | `canga git clone`, `canga git sync`, `canga git setup-hooks` | Use the new names wherever you call them. The old names were removed, not aliased, and fail with a usage error (exit `2`). |
-| `.devctl/hooks` | `.canga/hooks` | Move the directory and run `canga git setup-hooks`. It replaces its own earlier setup without `--force`: a `core.hooksPath` of `.devctl/hooks`, or, with `--symlink`, links into `.devctl/hooks`. |
-
-The store moves only when the old directory exists, the new one does not, and
-`CANGA_REMINDERS_DIR` is unset. If the rename fails, the command stops rather
-than start an empty store beside the old one. Shell completion never moves it.
-
-If the new directory already exists, for example because a sandbox that mounts
-it was created first, nothing is moved: renaming over a mounted directory would
-swap it out from under the running sandbox. Every `canga reminders` command then
-names both directories on stderr until you move each repository's items across
-by hand and remove the old directory.
-
-## Shell completion
-
-```sh
-canga completion zsh > "${XDG_CACHE_HOME:-$HOME/.cache}/canga/_canga"
-```
-
-This is the host build's; the sandbox build has no `completion` command. Generate
-it once, at install time, and source the cached file — never `eval` a
-generator on the shell startup path.
-
-`rm` and `reorder` complete **real stored ids**, each shown with its reminder's
-first line as the description.
-
-`-C` and `git clone`'s optional target complete directories only. The URL
-positions of `git clone` and `workspace` complete nothing: a half-typed URL is not a path, and a shell that
-fell back to file completion there would offer the current directory's
-contents.
-
-## Exit codes
-
-| Code | Meaning |
-| --- | --- |
-| `0` | success |
-| `1` | a runtime failure (including git failing to read a repository, such as an unreadable directory or `.git/config`), a clone target that already holds something, an id with nothing behind it, or a workspace whose clone or environment directory is missing |
-| `2` | a bad invocation, a directory that is not a repository, or has no usable `origin` and no key from its location, `CANGA_HOST_BASE_DIR` still set, an upgrade with no release to work from or on an operating system the build is not published for, or `workspace` with a `CANGA_HOST_ENVS_REPO` outside the base directory |
-
-## Development
-
-```sh
-make tools   # install the pinned golangci-lint and govulncheck
-make fix     # apply every automatic fix: go fix, the formatters, --fix linters
-make ci      # lint, license check, cross, test, e2e-sandbox, govulncheck: green before a push
-make race    # the multi-process store race gate, verbosely
-make test-host      # the host leg: host build, shared packages, install_host.sh
-make test-sandbox   # the sandbox leg: sandbox build, shared packages, release tooling
-make e2e-sandbox    # build the sandbox binary and drive it as an agent would
-make release-preflight             # checks to run on a signed tag before pushing it
-make release-kit-bump TAG=vX.Y.Z   # pin the sbx kit to a release the workflow published
-```
-
-Every gate is a `make` target, and CI invokes the target rather than restating
-it, so what CI runs is what a push was checked against locally.
-
-Gates test exactly the expected usage: the host build's tests run on macOS,
-arm64 and Intel (`macos-26`, `macos-26-intel`), including a test of the
-reminders key on a real case-insensitive APFS volume; the sandbox build's
-tests and its E2E run on Linux, arm64 and x64 (`ubuntu-26.04-arm`,
-`ubuntu-26.04`). Runner labels are pinned, never `*-latest`, and the Ubuntu
-version tracks the sbx sandbox image. `make cross` compiles exactly the
-published set, and `make lint` lints for both operating systems.
-`make race RACE_PROCS=12` runs the store's concurrency gate at full size; the
-default is sized for CI. `make race RACE_STORE_DIR=/path` runs it against a
-filesystem of your choosing, which is how the store's invariants were checked
-over a virtiofs mount rather than assumed to hold there.
-
-### Releasing
-
-`.github/workflows/release.yml` is the one official release path: a signed
-`v*` tag, pushed, is the whole trigger. It builds every platform with
-GoReleaser, attests what it built, and publishes the release itself, notes
-and all - nothing local builds or uploads a release artifact any more. The
-one thing left for a human to do afterwards is move the sbx kit's pin,
-which needs the finished release's `checksums.txt` and cannot happen before
-it exists.
-
-Two repository settings are prerequisites, both on before any tag is
-pushed: [immutable releases](#immutable-releases) (`make release-preflight`
-checks this one itself, `check-immutable`) and a ruleset on `refs/tags/v*`
-restricting tag creation, update and deletion to the admin role (not
-independently checked by anything here; see docs/HANDOFF.md, "Left open",
-for the exact payload). The ruleset is what actually restricts who can
-push a `v*` tag at all - and so who can trigger a release, or tag a commit
-whose `release.yml` an attestation would then vouch for (see
-[Verify a release](#verify-a-release)).
-
-Signing is the only local setup: `make release-kit-bump` commits that pin
-signed (`git commit -S`), so git must already be set up to sign commits, as
-it is for any commit to this repository.
-
-To publish a version:
-
-1. Check that the previous release's kit bump has merged: `main`'s
-   `sbx-kit/spec.yaml` must pin the newest published release. Step 2's
-   `make release-preflight` refuses otherwise; see
-   [Move the sbx kit's pin](#move-the-sbx-kits-pin).
-
-2. Tag the commit, signed, and run the preflight before pushing it.
-
-   ```sh
-   git tag -s v0.2.0 -m v0.2.0
-   make release-preflight
-   git push origin v0.2.0
-   ```
-
-   `release-preflight` repeats, locally, the two checks the workflow makes
-   for itself once the tag lands (`check-previous`, `check-clobber`), so a
-   release that would fail in CI fails here first, before it costs a run.
-   It also refuses unless the repository has immutable releases on
-   (`check-immutable`; see [Immutable releases](#immutable-releases)), the
-   one check the workflow cannot make before publishing: GitHub reports
-   that setting only to a token with admin access.
-
-3. Watch the Release run the pushed tag triggers.
-
-   ```sh
-   gh run watch --repo brunovenceslau/canga
-   ```
-
-   The run goes draft first, public last:
-
-   1. GoReleaser (pinned to an exact version in `release.yml`) runs
-      `release --clean`: it builds everything and creates the GitHub
-      release as a **draft** (`release.draft` in `.goreleaser.yml`),
-      with GitHub's own generated notes (`changelog.use: github-native`),
-      and attaches two `canga-host_` archives (darwin, amd64 and arm64),
-      two `canga-sandbox_` archives (linux, amd64 and arm64), and
-      `checksums.txt`.
-   2. `actions/attest-build-provenance` signs a build provenance
-      attestation for every archive and `checksums.txt`, naming this
-      repository, `release.yml`, the tag, and the runner.
-   3. The run checks those attestations verify, with the same policy the
-      kit pin checks use (`scripts/sbx-kit-pin.sh check-attestation`; see
-      [Verify a release](#verify-a-release)).
-   4. It checks the draft still holds exactly the files it built, by the
-      digest GitHub serves for each asset, and only then publishes it. It
-      goes red if GitHub then reports the published release as not
-      immutable.
-
-   Runs of the same tag queue behind each other instead of racing.
-
-   A failed run leaves at most a draft, which nobody can pin (the pin
-   checks refuse a draft) and which the next run of the same tag replaces
-   (`release.replace_existing_draft`).
-
-4. Once the run is green, make the kit bump.
-
-   ```sh
-   make release-kit-bump TAG=v0.2.0
-   ```
-
-   This downloads `v0.2.0`'s `checksums.txt` and both `canga-sandbox_`
-   archives from the release, checks them against each other and against the
-   digests GitHub serves, and commits the pin, signed, on branch
-   `chore/sbx-kit-v0.2.0` - from a temporary detached worktree at the tag, so
-   the checkout you ran this from is left exactly as it was.
-
-5. Push that branch and open its pull request. `release-kit-bump` prints
-   both commands; they are left to you because they publish:
-
-   ```sh
-   git push -u origin chore/sbx-kit-v0.2.0
-   gh pr create --base main --head chore/sbx-kit-v0.2.0 --fill
-   ```
-
-6. Review and merge that pull request. Its merge commit is the ref an
-   environment pins ([Use the sbx kit](#use-the-sbx-kit)).
-
-Run step 4 again, before its branch is pushed or merged, and it changes
-nothing: it verifies the existing branch pins the same hashes and stops.
-
-A published release is final. Once immutable releases are on (see
-[Immutable releases](#immutable-releases)), GitHub refuses to change its
-assets at all, so a bad release is fixed by cutting a new patch release,
-never by rebuilding the old one. Until then, `SBX_KIT_ALLOW_CLOBBER` (a
-local override for `check-clobber`, not something the workflow reads)
-exists for the case where breaking every sandbox pinned to the old archives
-is genuinely the point; see the table below.
-
-Every condition below is checked before anything slow, so a mistake costs a
-second rather than a wasted Release run or a broken sandbox pin:
-
-| It stops when | Do this |
-| --- | --- |
-| HEAD carries no tag (`release-preflight`) | tag the commit you are releasing |
-| HEAD carries more than one tag (`release-preflight`) | delete the tag you are not releasing |
-| `sbx-kit/spec.yaml` at the tag does not pin the newest published release below it, or pins hashes GitHub does not serve for it (`check-previous`, run by `release-preflight` and the workflow) | merge the previous release's `chore/sbx-kit-vX.Y.Z` pull request, then re-tag on top of it |
-| The tag already carries `canga-sandbox_` archives, and its kit bump is pushed or merged (`check-clobber`, run by `release-preflight` and the workflow) | cut a new patch release, or set `SBX_KIT_ALLOW_CLOBBER=<the tag>` |
-| `gh` answers 404 for the tag's release and either cannot see `brunovenceslau/canga` at all or sees it under another name, so the 404 proves nothing (the refusal names what `gh` saw; `check-clobber`, run by `release-preflight` and the workflow) | authenticate `gh` with a token that can read `brunovenceslau/canga`, or update the script's `repo=` if it was renamed or transferred |
-| The tag is below the newest published release (an older line; `release-preflight`, the workflow, and `release-kit-bump` each make this check, independently) | release from the newest line, or set `SBX_KIT_OLDER_LINE=<the tag>` |
-| `gh` is not installed (`release-kit-bump`) | install `gh`, which is also how canga itself is installed |
-| `release-kit-bump` was run without `TAG=`, or `TAG` is not exactly `vX.Y.Z` | pass it: `make release-kit-bump TAG=vX.Y.Z` |
-| The tag as fetched into this checkout resolves to a different commit than GitHub resolves it to (`release-kit-bump`) | something is wrong with `origin` or with GitHub's own view of the tag; do not proceed until they agree |
-| The tag predates `scripts/sbx-kit-pin.sh` (`release-kit-bump`) | nothing to do: the kit has already moved past any release this old |
-| A release at or above v0.10.5 has an archive with no build provenance attestation from `release.yml` for its own tag, or one whose downloaded bytes are not the pinned ones (`check-previous`, `release-kit-bump`) | do not pin it: cut a new patch release through the workflow |
-| `gh` is older than 2.93.0 and the release needs its attestation checked (`check-previous`, `release-kit-bump`, the workflow's pre-publish check) | upgrade `gh` |
-| The repository does not have immutable releases on, or `gh`'s token cannot tell (it needs admin access; `release-preflight`) | turn immutable releases on, or run the preflight as a repository admin |
-| The release published but did not settle to `immutable == true` within the retry budget (the workflow's "Publish the release" step). The release is already public - do not re-run the workflow for this tag | check the setting with `make release-preflight` (`check-immutable`); if it was off, turn it on and cut a new patch release; if it is on, the release may already be immutable - confirm with `gh api repos/brunovenceslau/canga/releases/tags/<tag> --jq .immutable` |
-| The job runs past its 30-minute `timeout-minutes` (`release.yml`) | recovery is the same as any other failed run at whichever step it was in: if that was before "Publish the release", the tag has at most a draft, which the next run of the same tag replaces (GoReleaser deletes and recreates the name-matched draft); if it was during or after that step, the release may already be public - check with `gh api repos/brunovenceslau/canga/releases/tags/<tag> --jq '{draft, immutable}'`. This endpoint does not return a draft release, so a 404 there means nothing is public yet and a re-run is safe; a JSON answer means the release is already published - confirm `immutable` before deciding whether to cut a new patch release instead of re-running |
-
-The tag-count check exists because a second tag on the same commit has no
-single answer to "which release is this": `release-preflight` cannot tell
-which one you mean, even though the workflow only ever sees whichever ref
-its own push triggered it from.
-
-The workflow calls GoReleaser rather than packaging with `tar` and `shasum`,
-so `.goreleaser.yml` stays the single definition of the artifact format. The
-reason is `canga upgrade`: each build finds its asset by its own prefix
-(`canga-host_` or `canga-sandbox_`) and the `_<os>_<arch>.tar.gz` suffix, and
-reads `checksums.txt` by exact filename. A second packaging implementation
-that drifted from the first would break upgrading, for whoever ran it next,
-rather than releasing, for whoever changed it.
-
-#### Verify a release
-
-From v0.10.5 on, every archive and `checksums.txt` of a release carries a
-build provenance attestation: a Sigstore-signed statement, stored on this
-repository, that those exact bytes were built by `release.yml` running for
-that release's tag on a GitHub-hosted runner. Anyone can check one with
-`gh` 2.93.0 or newer:
+The checksum checks above prove a download is the file a release names. To
+check who built it: from v0.10.5 on, every archive and `checksums.txt`
+carries a build provenance attestation, a Sigstore-signed statement that
+those exact bytes were built by this repository's `release.yml` for that
+tag on a GitHub-hosted runner. Check one with `gh` 2.93.0 or newer:
 
 ```sh
 gh release download v0.10.5 -R brunovenceslau/canga \
@@ -1273,175 +379,506 @@ gh attestation verify canga-sandbox_0.10.5_linux_amd64.tar.gz \
   --deny-self-hosted-runners
 ```
 
-These are the flags the kit pin checks use. `--cert-identity` requires the
-signing certificate's workflow identity to be exactly that URL. The
-shorter-looking `--signer-workflow` is not used on purpose: `gh` turns its
-value into a regular expression anchored only at the start, so a workflow
-file or ref that merely begins with the expected one would pass too.
+This binds the bytes to `release.yml` at whatever commit the tag named when
+the release was built, not to reviewed content; the repository's tag
+ruleset is what restricts who can push a tag. What the check does and does
+not prove, and why these flags: [Verify a release](docs/releasing.md#verify-a-release)
+in the release docs.
 
-What this proves is narrower than it sounds: it binds the bytes to
-`release.yml` **at whatever commit the tag named when the release was
-built**, not to reviewed or merged content, and the check matches that
-binding by the tag's name alone - not by which commit the tag names now.
-Anyone who can push a `v*` tag can tag a commit that carries a modified
-`release.yml`, and that run's attestation verifies the same way - the
-command above cannot tell the two apart. What actually keeps a tag from
-being moved to another commit after the fact, and so restricts who can
-push a `v*` tag at all, is the repository's tag ruleset (see
-[Releasing](#releasing)), not this attestation.
+### macOS reports "Apple could not verify canga is free of malware"
 
-Releases before v0.10.5 have no attestation, so for those the command above
-fails with a 404; they are checked by digest and uploader alone (see
-[Move the sbx kit's pin](#move-the-sbx-kits-pin)).
+canga is not notarized: notarization requires a paid Apple Developer Program
+membership, which this tool does not have. Gatekeeper only evaluates a file
+carrying the `com.apple.quarantine` extended attribute, and the program that
+fetched the file decides whether to attach it. Safari, Chrome and Firefox
+attach it. `gh`, `curl`, `wget` and `go install` do not, so every install
+path above produces a binary that runs without a prompt.
 
-#### Immutable releases
+Double-clicking a quarantined archive in Finder copies the attribute onto
+every file it extracts, and the extracted `canga` stays quarantined when you
+move it. Extracting the same archive with `tar` does not.
 
-The repository is meant to run with GitHub's immutable releases setting on.
-It is enabled once the draft-first workflow above has merged, and before
-v0.10.5 is tagged. The order matters: an immutable release refuses any
-asset change once it is published, so a workflow that published first and
-uploaded afterwards would fail on its own upload. Draft first works,
-because a draft stays editable until the workflow publishes it.
+Check a file for the attribute (prints it, or `No such xattr`):
 
-What it changes, once on:
+```sh
+xattr -p com.apple.quarantine <path-to-canga>
+```
 
-- No asset of a published release can be replaced, added or deleted, by
-  anyone, `SBX_KIT_ALLOW_CLOBBER` included. A bad release is fixed by a new
-  patch release.
-- The release's tag cannot be moved or deleted.
-- GitHub adds a release attestation of its own on publish, which
-  `gh release verify` checks. It is not what the kit pin checks rely on:
-  they check the build provenance above, which names the workflow that
-  built the bytes, not only the release that holds them.
+Use `-p` rather than `xattr -l`: a file can carry
+`com.apple.metadata:kMDItemWhereFroms` and nothing else, and Gatekeeper leaves
+that file alone. To repair a quarantined binary, strip the attribute:
 
-#### Move the sbx kit's pin
+```sh
+xattr -d com.apple.quarantine <path-to-canga>
+```
 
-`sbx-kit/spec.yaml` pins a release by its version and the sha256 of both
-`canga-sandbox_` linux archives. The hashes live in the kit, and are not
-downloaded next to the tarball at install time, because the kit is what
-other repositories pin by commit: what a reviewer read is exactly what a
-sandbox installs. A `checksums.txt` fetched from the same release as the
-tarball proves nothing against whoever can replace that release's assets,
-since they can replace both.
+## Commands
 
-The hashes exist only once a release is published, so the pin cannot move in
-the release commit. `make release-kit-bump TAG=vX.Y.Z` moves it afterwards,
-with `scripts/sbx-kit-pin.sh bump`:
+| Command | What it does | Build |
+| --- | --- | --- |
+| [`canga git clone`](#canga-git-clone) | Clone into a deterministic `~/src/<host>/<owner>/<repo>` layout, hardened and signing-ready | host |
+| [`canga git sync`](#canga-git-sync) | Fetch every remote and fast-forward every tracking branch; never force | host |
+| [`canga git setup-hooks`](#canga-git-setup-hooks) | Install the git hooks a repository keeps under `.canga/hooks` | host |
+| [`canga workspace`](#canga-workspace) | Open a repository beside its sandbox environment in cmux | host |
+| [`canga reminders`](#canga-reminders) | A per-repository TODO list that outlives the session | host: all; sandbox: `list`, `add` |
+| [`canga upgrade`](#canga-upgrade) | Replace this binary with a verified release | both |
+| [`canga completion`](#shell-completion) | Generate shell completion | host |
 
-- Before anything else, it compares the tag as fetched into your checkout
-  against the commit GitHub itself resolves it to, and refuses on any
-  disagreement: your `origin` and the canonical repository must name the
-  same commit before either is trusted.
-- It downloads `checksums.txt` and both `canga-sandbox_` archives from the
-  tag's GitHub release into a scratch directory, and stands up a temporary
-  detached worktree at the tag - so `bump`'s own requirements (a clean tree,
-  a `HEAD` that carries exactly that one tag) are met without touching the
-  checkout you ran the command from. `bump` itself then runs from that
-  worktree's own copy of `scripts/sbx-kit-pin.sh`, not the one in your
-  checkout: the tag's own, reviewed script judges the tag's own release. A
-  tag cut before the script existed is refused, not silently run with a
-  newer copy.
-- It reads that downloaded `checksums.txt`, never a local build, and refuses
-  unless it finds exactly one `canga-sandbox_` line for each arch.
-- It checks those sums twice more, and refuses on any difference: against
-  the archives downloaded alongside it, and against the `sha256:` digest
-  GitHub serves for each asset of the release (`gh api
-  .../releases/tags/<tag>`; a missing digest is a refusal too). Bytes that
-  disagree between the download and what GitHub itself now serves are never
-  trusted into a signed pin.
-- For a release at or above v0.10.5, it downloads both archives once more,
-  checks they are the pinned bytes, and refuses unless each has a build
-  provenance attestation from `release.yml` for that release's own tag
-  ([Verify a release](#verify-a-release) has the exact check, and its
-  caveat about what this does and does not prove). That closes the
-  uploader check's own gap - some workflow in this repository uploaded the
-  asset, not necessarily `release.yml` - without claiming more than the
-  attestation itself proves.
-- It rewrites `CANGA_VERSION` and both `sha256` values in the kit as
-  committed at the tag, and commits that, signed, on branch
-  `chore/sbx-kit-vX.Y.Z`, through a second, nested temporary worktree of its
-  own.
-- Run again, it changes nothing when that branch is one verified commit on
-  top of the tag, touching only the kit, with the same hashes. Any other
-  branch of that name is a refusal.
-- It pushes nothing. It prints the push and the `gh pr create` command.
+Every command takes `-C, --repo <dir>` to act on a repository other than the
+current directory. Scripts and hooks should use it rather than changing
+directory. Output meant for pipes goes to stdout; every diagnostic goes to
+stderr. `canga <command> --help` has the details.
 
-Nothing merges the bump for you. So `make release-preflight` refuses the next
-release until `sbx-kit/spec.yaml` at the tag pins the newest published
-release below it, with the digests GitHub serves for it (and, from v0.10.5
-on, a verifying attestation), which is to say until the bump merged and the
-new tag sits on top of it. The Release workflow makes the same check. Before any of this existed the pin moved by
-hand, and the kit stayed on v0.8.0 through v0.9.0, v0.10.0 and v0.10.1.
+### `canga git clone`
 
-The kit follows the newest release line and never moves backwards. A
-release below the newest published one (a fix on an older line) is refused
-unless `SBX_KIT_OLDER_LINE` names its tag, such as `SBX_KIT_OLDER_LINE=v0.9.1`
-for both `make release-preflight` and `make release-kit-bump TAG=v0.9.1`.
-With it set, the preflight only asks that the kit at the tag pins some
-published release below it, and the bump step prints a warning and commits
-no branch.
+```sh
+canga git clone git@github.com:acme/widget.git         # lands in ~/src/github.com/acme/widget
+cd "$(canga git clone https://github.com/acme/widget)"  # the path is all stdout carries
+canga git clone https://github.com/acme/widget /tmp/scratch   # an explicit target
+```
 
-If the bump branch is lost before it merges, run `make release-kit-bump
-TAG=vX.Y.Z` again. There is nothing to reconstruct by hand: the target
-always downloads the tag's `checksums.txt` and archives fresh from the
-release and re-derives the pin from them, so a lost branch and a first run
-go through the exact same path and commit the exact same pin (a new commit,
-re-signed, but pinning the identical version and hashes).
+A clone lands at `${CANGA_SRC_DIR:-$HOME/src}/<host>/<owner>/<repo>`, taken
+from the URL with the scheme, userinfo, port and `.git` suffix removed, so the
+same repository lands at the same path on every machine, whichever protocol
+you used. Nested owners are kept: a GitLab subgroup lands at
+`gitlab.com/group/sub/proj`.
 
-`scripts/sbx-kit-pin.sh rewrite X.Y.Z <checksums.txt>` is the lower-level
-primitive underneath `bump`: it rewrites `CANGA_VERSION` and both `sha256`
-values in the *working tree's* kit, with no commit and no branch. It exists
-for the one case `bump` cannot cover - a release cut before this script
-existed, so there is no tag-side copy of it to run `bump` from (the v0.10.2
-pin was moved this way). Like `bump`, it always checks the sums it is given
-against release `vX.Y.Z`'s published digests before writing anything, and
-refuses on any mismatch, a missing digest, a draft or a prerelease, an
-asset not uploaded under the `github-actions[bot]` identity, or, from
-v0.10.5 on, an archive without a verifying build provenance attestation
-from `release.yml` - there is no flag to skip any of it.
+The resolved path is the only thing printed on stdout, which is what makes
+the `cd "$(...)"` form safe. git's progress and every diagnostic go to
+stderr.
 
-The v0.10.5 cutover is a constant in `scripts/sbx-kit-pin.sh`
-(`attested_from`), with no flag or variable to move it: releases below it
-were published before the workflow attested anything, and are checked by
-digest and uploader alone, which proves some workflow in this repository
-uploaded them, not the Release workflow specifically. The constant changes
-only by a reviewed pull request.
+**It refuses** a target that already holds anything (exit `1`; an empty
+directory is fine), and a URL no path can be derived from (exit `2`, before
+anything is created, with any credential stripped from the message). It
+never merges into or writes over an existing tree.
+
+**It hardens the transport.** The `ext` and `fd` remote helpers, which run
+the URL as a command, are turned off on git's command line and removed from
+`GIT_ALLOW_PROTOCOL`, so no configuration can turn them back on; objects are
+checked on both sides of the fetch.
+
+**It sets up SSH signing** in the clone's local config, from
+`CANGA_HOST_SIGNING_KEY` and `CANGA_HOST_ALLOWED_SIGNERS`, or from your
+global git config. It writes `gpg.format=ssh`, so a clone made this way
+signs with SSH, never GPG. When no key resolves it stamps nothing and tells
+you on stderr whether git configuration outside the clone signs anyway
+(`signing OFF` when it does not).
+
+Details: [Transport hardening](docs/design.md#transport-hardening),
+[Signing](docs/design.md#signing).
+
+### `canga git sync`
+
+```sh
+canga git sync                                  # the repository you are standing in
+canga git sync -C ~/src/github.com/acme/widget  # or any other
+```
+
+Fetches every remote with `--prune` and `--tags`, then fast-forwards each
+local branch that tracks an upstream. **It never resets, forces, merges
+non-linearly or deletes anything**, so every outcome is recoverable, which
+makes it safe to run across every repository on a machine without reading
+them first:
+
+```sh
+find ~/src -maxdepth 4 -name .git -type d -exec dirname {} \; | while read -r r; do
+  canga git sync -C "$r"
+done
+```
+
+`-maxdepth 4` matches the `<host>/<owner>/<repo>` layout; raise it if you
+keep repositories in nested groups.
+
+A branch that moved is printed on stdout as `<branch><TAB><upstream>`, one
+per line, so a sweep's output is a change log rather than an inventory.
+A branch with nothing to bring in prints nothing. Refusals and the
+dirty-tree notice go to stderr.
+
+| Situation | What happens |
+| --- | --- |
+| Modified tracked files | The run stops before any branch is touched, and says so. Exit `0`. |
+| Untracked files only | The tree does not count as dirty, and the sync proceeds. |
+| Branch already level with, or ahead of, its upstream | Nothing to bring in, and nothing printed. |
+| Branch diverged from its upstream | Reported on stderr in git's own words, and left exactly where it is. Exit `0`. |
+| Branch git refuses for another reason | Same: git's words are printed rather than a guess at them. A branch checked out in a linked worktree, a rebase in progress, or an incoming commit that would overwrite an untracked file all land here. |
+| Branch with no upstream | Left out of the report. Nothing was ever asked of it. |
+| Branch whose upstream was deleted | Reported on stderr as `upstream <remote>/<branch> is gone`, and left where it is. It may hold commits that were never pushed. Exit `0`. |
+| Detached HEAD | Not an error. Every branch is updated without a checkout. |
+| Fetch failed | Exit `1`. Deciding branch states against a stale view of the remote would be guessing. |
+| Interrupted with Ctrl-C | Exit `1`, naming the cancellation. A branch that was never asked about is never reported as refused. |
+| Bare repository, or not a repository | Exit `2`. Syncing needs a working tree. |
+
+The fetch carries the same transport hardening as `canga git clone`. How a
+branch is advanced: [How sync advances a branch](docs/design.md#how-sync-advances-a-branch).
+
+### `canga git setup-hooks`
+
+```sh
+canga git setup-hooks            # point core.hooksPath at .canga/hooks
+canga git setup-hooks --symlink  # or link each hook into .git/hooks
+```
+
+Installs the git hooks a repository keeps, tracked, under `.canga/hooks`. By
+default it points git's `core.hooksPath` at that directory, which covers
+every hook at once and is undone with `git config --unset core.hooksPath`.
+git reads hooks from only one directory, so anything already in `.git/hooks`
+stops running; the command says so when that is the case, and `--symlink`
+links each hook individually instead, which keeps them.
+
+`--force` replaces a conflicting setting and moves any file in the way to
+`<name>.bak`. It never deletes, and it never overwrites an existing `.bak`:
+the first backup is the pristine one. The command works from any
+subdirectory of the repository, and fails with the reason outside one.
+
+The hooks are the repository's own files, so installing them means its
+content runs on every commit. Install them in repositories whose contents you
+would run anyway.
+
+### `canga workspace`
+
+```sh
+canga workspace https://github.com/acme/widget
+```
+
+Opens a repository and its sandbox environment side by side in one new
+[cmux](https://github.com/manaflow-ai/cmux) workspace, named `acme/widget`
+and focused:
+
+| Pane | Starts in | Runs |
+| --- | --- | --- |
+| Left | `~/src/github.com/acme/docker-sbx/envs/github.com/acme/widget-env`, the environment | `sbx env run --clone --auto-approve`, the repository's sandbox |
+| Right, focused | `~/src/github.com/acme/widget`, the clone, where `canga git clone` puts it | nothing |
+
+Use it when you keep each repository's sandbox environment outside the
+repository, so that an agent in the sandbox cannot edit the environment that
+runs it.
+
+cmux types the `sbx` command into the left pane when its terminal starts,
+the way you would. `--auto-approve` applies the environment plan without a
+confirmation prompt, since the workspace opens focused on the right pane and
+a prompt on the left would go unnoticed. When the sandbox exits, the pane
+keeps its shell in the environment directory, so you can start it again from
+there. If the left pane shows a prompt and no sandbox, cmux gave up waiting
+for the terminal (it waits a few seconds and drops the command without a
+message): type `sbx env run --clone --auto-approve` yourself.
+
+**Where the environment is found.** Environments live in their own
+repository, cloned under the same base as every other clone:
+`<base>/<environments repository>/envs/<host>/<owner>/<repo>-env`. By default
+the environments repository is the `docker-sbx` beside the opened repository
+(`<host>/<owner>/docker-sbx`), so `github.com/acme/widget` finds its
+environment in `github.com/acme/docker-sbx` with nothing to configure. For a
+nested group it is the `docker-sbx` in the same innermost group:
+`gitlab.com/acme/platform/widget` looks in `gitlab.com/acme/platform/docker-sbx`.
+To use environments kept elsewhere, for example to open another owner's
+repository with your own environments, set `CANGA_HOST_ENVS_REPO` to a path
+under the base (not a URL):
+
+```sh
+export CANGA_HOST_ENVS_REPO=github.com/brunovenceslau/docker-sbx
+canga workspace https://github.com/acme/widget
+```
+
+The left pane gets `GIT_CEILING_DIRECTORIES` set to the environments
+repository's `envs/`, so a `git` command there answers "not a git
+repository" instead of silently acting on the enclosing environments
+clone. To keep that working through your shell's rc files, and to get it in
+plain terminals too, see
+[Keeping git out of the envs repository](docs/design.md#keeping-git-out-of-the-envs-repository).
+Environment directories created before the `-env` suffix need a one-time
+rename: [Migrating](docs/migrating.md#environment-directories-without-the--env-suffix).
+
+**Requirements.**
+
+- cmux 0.64.23 or later. The workspace is created with one
+  `cmux new-workspace --layout` call, checked against 0.64.23 and 0.64.25.
+- Run it from a terminal inside cmux. cmux's default socket mode accepts
+  commands only from its own terminals, and its refusal is printed as it is.
+- The clone, the environments repository's clone, and the environment
+  directory in it already exist. `canga git clone` makes both clones.
+- `sbx` on the `PATH` of the shells cmux opens. canga does not check for it:
+  if it is missing, the left pane shows that shell's `command not found`.
+
+**What it refuses.** Each refusal happens before cmux is called, and nothing
+is created or cloned:
+
+| Situation | Exit |
+| --- | --- |
+| `CANGA_HOST_ENVS_REPO` is absolute, a URL, or has an empty, `.`, `..` or otherwise invalid segment | `2` |
+| A URL no `<host>/<owner>/<repo>` can be derived from | `2` |
+| No clone at the derived path. The message suggests `canga git clone <url>` | `1` |
+| No environment directory at the derived path. The message names the path and the fixes: clone the environments repository with `canga git clone`, update it with `canga git sync`, create the directory, or set `CANGA_HOST_ENVS_REPO` | `1` |
+| `cmux` is not on your PATH | `1` |
+| cmux fails. Its own message is shown | `1` |
+
+On success, stdout carries cmux's own reply, such as `OK workspace:3`.
+
+### `canga reminders`
+
+A per-repository TODO list that outlives the session that wrote it. An idea
+raised mid-task, on a topic unrelated to the work at hand, is otherwise lost
+when the session ends. Every session on the same repository, on the host or
+in any sandbox, sees the same list.
+
+```sh
+canga reminders add drop the temporary debug flag from the parser
+canga reminders list
+canga reminders reorder 20260915T142233.482913Z-9f3a1c07  # bump one to the top
+canga reminders path                                       # where they live
+canga reminders rm 20260915T142233.482913Z-9f3a1c07
+```
+
+| Subcommand | What it does | Sandbox build |
+| --- | --- | --- |
+| `add <text>...` | Record a reminder and print its id. The words are joined with spaces, so no quoting is needed. | yes |
+| `list` (`ls`) | Print one `<id><TAB><text>` record per line, ordered items first. The text is the reminder's first line. | yes |
+| `reorder <id>...` | Move the named reminders to the front, in the order given | no |
+| `path [<id>]` | Print the store directory, or one reminder's file, for an editor or a script | no |
+| `rm <id>...` (`remove`) | Remove reminders; every id is attempted and the failures are reported together | no |
+
+`canga todo` is an alias for `canga reminders`. Only records go to stdout, so
+`list` pipes.
+
+An agent may surface the list and record an idea, but the list belongs to
+the person on the host, so only the host build removes or reorders it. In
+the sandbox build those subcommands refuse with exit `2` and say so.
+
+Each reminder is a plain file under
+`${XDG_DATA_HOME:-$HOME/.local/share}/canga/reminders/`, one directory per
+repository, and editing one by hand is a supported way to use it. The store
+takes no lock: several sandboxes and the host can write it at once, and no
+write ever overwrites another. Sandboxes can write the store too, so treat a
+file `path` hands you like any file a sandbox could replace. Details:
+[Where the reminders live](docs/design.md#where-the-reminders-live) and
+[Concurrency](docs/design.md#concurrency).
+
+To share the list with a sandbox, see
+[How a sandbox shares the host's list](#how-a-sandbox-shares-the-hosts-list).
+
+### `canga upgrade`
+
+```sh
+canga upgrade                # install the newest release
+canga upgrade --check        # say what is available, change nothing
+canga upgrade --tag v0.10.5  # install exactly that release
+```
+
+Replaces the running binary with a published release, in place. Each build
+replaces itself with the same build: the host build installs a `canga-host_`
+archive, the sandbox build a `canga-sandbox_` one. Only the release tag goes
+to stdout, so `v=$(canga upgrade)` is the version now installed.
+
+Before it replaces anything:
+
+- The tag must pass [the release floor](#the-release-floor).
+- The archive must match its line in the release's `checksums.txt`. That
+  proves the download is intact, not that the release is genuine: the same
+  account publishes both. That is integrity, not authenticity; for
+  provenance, see [Verify a release](#verify-a-release).
+- The new binary is written beside the old one and **run once** to confirm
+  it reports the version and build it was downloaded as. Only then is it
+  renamed over the old one, so a bad archive leaves the working binary
+  untouched.
+
+It prints the path it is about to write, and `--check` prints the same path
+without touching it. It replaces the file a symlink points to, not the
+symlink; keeps the file's mode; and leaves no backup behind, since the
+previous release is one `canga upgrade --tag` away.
+
+A GitHub token is optional. `GH_TOKEN`, then `GITHUB_TOKEN`, then whatever
+`gh auth token` answers raises GitHub's rate limit from 60 to 5000 requests
+an hour; with none, or with one GitHub rejects, the release is read
+anonymously.
+
+**It refuses** on an operating system its build is not published for (exit
+`2`, before any request), and from a binary that is not a release, such as
+one built by `go install` (`dev`) or past its last tag
+(`v0.1.0-3-gabc1234`): name the release you mean with `--tag`.
+
+Details: [What upgrade verifies](docs/design.md#what-upgrade-verifies).
+
+#### Upgrade it in a sandbox
+
+`canga upgrade` moves a running sandbox to a newer release. The pin still
+decides the release every sandbox starts with: recreating the sandbox
+installs the pinned release again. To change the release of every sandbox,
+change the pin.
+
+The sandbox's egress policy must allow `api.github.com`, where canga reads
+the release, and `release-assets.githubusercontent.com`, where GitHub
+redirects the download. And you must be able to write to the directory that
+holds the binary, since the new binary is staged there. So run it with
+`sudo` when root owns the binary, as it does after `install_sandbox.sh` or
+the kit:
+
+```sh
+sudo canga upgrade
+```
+
+A copy in a directory you own, such as `~/.local/bin`, needs no `sudo`. On
+success, stdout holds the installed tag and stderr says
+`canga: installed <new> over <old> at <path>`. `canga --version` then reports
+the new release and the role `sandbox`.
+
+`sudo` resets the environment by default, so `GH_TOKEN` does not reach the
+upgrade and canga reads the release anonymously. The repository is public,
+so that still works, within GitHub's anonymous limit.
+
+### Shell completion
+
+The host build generates completion for bash, zsh, fish and PowerShell. For
+zsh, generate it once, at install time, and source the cached file; never
+`eval` a generator on the shell startup path:
+
+```sh
+mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/canga"
+canga completion zsh > "${XDG_CACHE_HOME:-$HOME/.cache}/canga/_canga"
+```
+
+Then, in `~/.zshrc`, after `compinit`:
+
+```sh
+source "${XDG_CACHE_HOME:-$HOME/.cache}/canga/_canga"
+```
+
+`canga completion <shell> --help` has the steps for each shell.
+
+`reminders rm` and `reorder` complete real stored ids, each shown with its
+reminder's first line. `-C` and `git clone`'s optional target complete
+directories only. The URL arguments of `git clone` and `workspace` complete
+nothing: a half-typed URL is not a path, and falling back to file completion
+there would offer the current directory's contents.
+
+## Configuration
+
+canga has no config file. Everything is an environment variable, and every
+one is optional on the host.
+
+| Variable | Default | What it sets | Read by |
+| --- | --- | --- | --- |
+| `CANGA_SRC_DIR` | `$HOME/src` | Root of the clone layout, and what an origin-less repository's key is relative to. In a sandbox there is no default: set it to the host's base, a host path. | both |
+| `CANGA_REMINDERS_DIR` | `${XDG_DATA_HOME:-$HOME/.local/share}/canga/reminders` | Root of the reminders store. In a sandbox, set it to the host's store root. | both |
+| `CANGA_HOST_SIGNING_KEY` | `git config --global user.signingkey` | SSH key stamped into a new clone. | `git clone` |
+| `CANGA_HOST_ALLOWED_SIGNERS` | `git config --global gpg.ssh.allowedSignersFile` | Allowed-signers file wired into a new clone, so `git log --show-signature` works there. | `git clone` |
+| `CANGA_HOST_ENVS_REPO` | `<host>/<owner>/docker-sbx`, beside the opened repository | The environments repository, as a path under the base, such as `github.com/acme/sandboxes`. | `workspace` |
+| `GH_TOKEN`, `GITHUB_TOKEN` | `gh auth token` | GitHub token for a higher rate limit. | `upgrade` |
+| `CI` | unset | When set to anything, drops git's `\r` progress meter. | `git clone` |
+
+`CANGA_HOST_BASE_DIR`, the old name of `CANGA_SRC_DIR`, is refused with exit
+`2` while it is set. Upgrading from devctl, agtctl or an older canga:
+[Migrating](docs/migrating.md).
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | success |
+| `1` | a runtime failure (including git failing to read a repository, such as an unreadable directory or `.git/config`), a clone target that already holds something, an id with nothing behind it, or a workspace whose clone or environment directory is missing |
+| `2` | a bad invocation, a directory that is not a repository, or has no usable `origin` and no key from its location, `CANGA_HOST_BASE_DIR` still set, an upgrade with no release to work from or on an operating system the build is not published for, or `workspace` with a `CANGA_HOST_ENVS_REPO` outside the base directory |
+
+## Contributing
+
+canga is written in Go (1.27 or later: the reminders store relies on its
+`os.Root` fixes). Every gate is a `make` target, and CI invokes the target
+rather than restating it, so what CI runs is what you checked locally.
+
+```sh
+make tools   # install the pinned golangci-lint and govulncheck
+make ci      # lint, license check, cross, test, e2e-sandbox, govulncheck: green before a push
+```
+
+| Target | What it does |
+| --- | --- |
+| `make build` | Build `bin/host/canga` and `bin/sandbox/canga`, version and commit stamped in |
+| `make install` | `go install` the host build into `GOBIN` |
+| `make fix` | Apply every automatic fix: `go fix`, the formatters, `--fix` linters |
+| `make lint` | `go vet` and golangci-lint, once for each published OS |
+| `make test` | `go test -race -shuffle=on ./...` with coverage |
+| `make test-host` | The host leg: host build, shared packages, `install_host.sh` |
+| `make test-sandbox` | The sandbox leg: sandbox build, shared packages, release tooling |
+| `make e2e-sandbox` | Build the sandbox binary and drive it as an agent would |
+| `make race` | The multi-process store race gate, verbosely |
+| `make cross` | Compile exactly the published set of platforms |
+| `make license-check` | Every commentable tracked file carries its SPDX tag |
+| `make release-preflight` | Checks to run on a signed tag before pushing it |
+| `make release-kit-bump TAG=vX.Y.Z` | Pin the sbx kit to a release the workflow published |
+
+Gates test exactly the expected usage: the host build's tests run on macOS,
+arm64 and Intel (`macos-26`, `macos-26-intel`), including a test of the
+reminders key on a real case-insensitive APFS volume; the sandbox build's
+tests and its E2E run on Linux, arm64 and x64 (`ubuntu-26.04-arm`,
+`ubuntu-26.04`). Runner labels are pinned, never `*-latest`, and the Ubuntu
+version tracks the sbx sandbox image. `make race RACE_PROCS=12` runs the
+store's concurrency gate at full size; the default is sized for CI.
+`make race RACE_STORE_DIR=/path` runs it against a filesystem of your
+choosing, which is how the store's invariants were checked over a virtiofs
+mount rather than assumed to hold there.
 
 ### Commit hook
 
 `.canga/hooks/pre-commit` runs `make pre-commit`, which applies every fix a
-tool can apply on its own, and then refuses the commit if anything changed. It
-refuses rather than amending on purpose: a hook that rewrites files and lets the
-commit through commits something you never read.
-
-Install it:
-
-```sh
-canga git setup-hooks
-```
-
-That points git's `core.hooksPath` at `.canga/hooks`, which covers every hook
-at once and is undone with `git config --unset core.hooksPath`. git reads hooks
-from only one directory, so anything already in `.git/hooks` stops running;
-`canga git setup-hooks` says so when that is the case, and `--symlink` links each
-hook individually instead, which keeps them.
-
-`--force` replaces a conflicting setting and moves any file in the way to
-`<name>.bak`. It never deletes, and it never overwrites an existing `.bak`: the
-first backup is the pristine one.
-
-The command works from any subdirectory of the repository, and fails with the
-reason if it is run outside one.
-
-The hooks are the repository's own tracked files, so installing them means its
-content runs on every commit. Install them in repositories whose contents you
-would run anyway.
+tool can apply on its own, and then refuses the commit if anything changed.
+It refuses rather than amending on purpose: a hook that rewrites files and
+lets the commit through commits something you never read. Install it with
+[`canga git setup-hooks`](#canga-git-setup-hooks).
 
 `make pre-commit` is deliberately a fast subset rather than `make ci`. A hook
 slow enough to be annoying is a hook that gets `--no-verify`d, and then it
 guards nothing.
 
+### Releasing
+
+A signed `v*` tag, pushed, is the whole trigger: `.github/workflows/release.yml`
+builds every platform with GoReleaser, attests it, and publishes the release.
+Nothing local builds or uploads an artifact. In short:
+
+1. Check that the previous release's kit bump has merged.
+2. `git tag -s vX.Y.Z -m vX.Y.Z`, then `make release-preflight`, then
+   `git push origin vX.Y.Z`.
+3. Watch the run: `gh run watch --repo brunovenceslau/canga`.
+4. Once it is green, `make release-kit-bump TAG=vX.Y.Z`, then push the
+   branch it prints and open, review and merge its pull request.
+
+The full runbook and the prerequisites (immutable releases and a tag
+ruleset) are in [docs/releasing.md](docs/releasing.md). Every refusal, with
+its fix, is in its table
+[What stops a release](docs/releasing.md#what-stops-a-release).
+
+### Immutable releases
+
+The repository runs with GitHub's immutable releases setting on: no asset of
+a published release can be replaced, added or deleted, and its tag cannot be
+moved. A bad release is fixed by a new patch release. `make
+release-preflight` refuses unless the setting is on. Details:
+[Immutable releases](docs/releasing.md#immutable-releases).
+
+### Move the sbx kit's pin
+
+`sbx-kit/spec.yaml` pins a release by version and by the sha256 of both
+`canga-sandbox_` archives, so the pin can only move after the release
+exists: `make release-kit-bump TAG=vX.Y.Z` verifies the published archives
+and commits the new pin on branch `chore/sbx-kit-vX.Y.Z`. If that branch is
+lost before it merges, run the same command again; it re-derives the
+identical pin from the release. Nothing merges it for you, and
+`make release-preflight` refuses the next release until it has merged. How
+it verifies, older release lines, and the lower-level `rewrite`:
+[Move the sbx kit's pin](docs/releasing.md#move-the-sbx-kits-pin).
+
+## Further reading
+
+- [How canga works](docs/design.md): the guarantees behind each command,
+  what they protect against, and where they stop.
+- [Releasing](docs/releasing.md): the maintainer's release runbook,
+  provenance, and the sbx kit pin.
+- [Migrating](docs/migrating.md): moving from devctl and agtctl, and other
+  one-time changes.
+- [docs/HANDOFF.md](docs/HANDOFF.md): the project's working log and open
+  items.
+
 ## License
+
+canga is free software under the [GNU General Public License v3.0 or
+later](LICENSE):
 
     canga, a developer control tool for repositories and sandboxes
     Copyright (C) 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
