@@ -131,6 +131,13 @@ type fenceCase struct {
 	checksums string
 	failName  string // the file the fake curl fails to download
 	skipName  string // the file the fake curl claims to download but never writes
+
+	// symlinkRoot spells the scratch tree through a symlink, as macOS spells
+	// its temporary directory (/var is a link to /private/var).
+	symlinkRoot bool
+	// ignoreTmpdir makes mktemp disregard TMPDIR, as macOS's does: its
+	// directory lands in the system temporary directory, not under root.
+	ignoreTmpdir bool
 }
 
 type fenceRun struct {
@@ -139,6 +146,8 @@ type fenceRun struct {
 	extracted bool
 }
 
+var _tarCwd = regexp.MustCompile(`(?m)^cwd (.+)$`)
+
 var _rc = regexp.MustCompile(`(?m)(?:^|\s)rc=(\d+)\s*$`)
 
 // runFence runs one README block under shell, in a scratch working directory
@@ -146,7 +155,7 @@ var _rc = regexp.MustCompile(`(?m)(?:^|\s)rc=(\d+)\s*$`)
 func runFence(t *testing.T, shell readmeShell, fence, asset string, c fenceCase) fenceRun {
 	t.Helper()
 
-	root := t.TempDir()
+	root := scratchRoot(t, c.symlinkRoot)
 	bin := filepath.Join(root, "bin")
 	release := filepath.Join(root, "release")
 	work := filepath.Join(root, "work")
@@ -159,6 +168,10 @@ func runFence(t *testing.T, shell readmeShell, fence, asset string, c fenceCase)
 	// The tools the block runs come from the real system; curl and tar do not.
 	// perl is linked because macOS shasum is a perl script.
 	for _, tool := range []string{"awk", "grep", "printf", "basename", "mktemp", "rm", "mkdir", "cat", "sha256sum", "shasum", "perl", "dirname", "uname", "env"} {
+		if tool == "mktemp" && c.ignoreTmpdir {
+			continue
+		}
+
 		if p, err := exec.LookPath(tool); err == nil {
 			require.NoError(t, os.Symlink(p, filepath.Join(bin, tool)))
 		}
@@ -166,6 +179,10 @@ func runFence(t *testing.T, shell readmeShell, fence, asset string, c fenceCase)
 
 	for name, body := range map[string]string{"curl": _readmeCurl, "tar": _readmeTar} {
 		require.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755))
+	}
+
+	if c.ignoreTmpdir {
+		writeTmpdirIgnoringMktemp(t, bin)
 	}
 
 	archive := []byte("the archive\n")
@@ -241,19 +258,74 @@ func runFence(t *testing.T, shell readmeShell, fence, asset string, c fenceCase)
 
 	assert.Equal(t, extracted, strings.Contains(string(logged), asset), "tar was handed another file")
 
+	assertBlockDir(t, string(logged), work, root, extracted)
+
+	return fenceRun{code: code, out: out.String(), extracted: extracted}
+}
+
+// scratchRoot returns a fresh directory, spelled through a symlink when asked.
+func scratchRoot(t *testing.T, viaSymlink bool) string {
+	t.Helper()
+
+	root := t.TempDir()
+	if !viaSymlink {
+		return root
+	}
+
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(root, link))
+
+	return link
+}
+
+// writeTmpdirIgnoringMktemp installs a mktemp that drops TMPDIR before running
+// the real one, which is how macOS's behaves.
+func writeTmpdirIgnoringMktemp(t *testing.T, bin string) {
+	t.Helper()
+
+	realMktemp, err := exec.LookPath("mktemp")
+	require.NoError(t, err)
+
+	shim := "#!/bin/sh\nunset TMPDIR\nexec " + realMktemp + " \"$@\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "mktemp"), []byte(shim), 0o755))
+}
+
+// assertBlockDir checks where tar ran and that the directory is gone. The
+// block's directory is wherever its mktemp puts it: TMPDIR is not honoured
+// everywhere (macOS's mktemp uses the user's temporary directory), so it is
+// read from where tar ran, not derived from root.
+func assertBlockDir(t *testing.T, logged, work, root string, extracted bool) {
+	t.Helper()
+
+	var blockDir string
+
+	if m := _tarCwd.FindStringSubmatch(logged); m != nil {
+		blockDir = m[1]
+	}
+
 	if extracted {
 		// The block must have left the caller's directory for its own.
-		realRoot, err := filepath.EvalSymlinks(root)
+		require.NotEmpty(t, blockDir, "tar did not log where it ran: %s", logged)
+		assert.True(t, strings.HasPrefix(filepath.Base(blockDir), "tmp."), "tar ran outside a mktemp directory: %s", blockDir)
+
+		realWork, err := filepath.EvalSymlinks(work)
 		require.NoError(t, err)
-		assert.Contains(t, string(logged), "cwd "+filepath.Join(realRoot, "tmp."), "tar ran outside the block's temporary directory")
+
+		realBlock, err := filepath.EvalSymlinks(blockDir)
+		if err == nil {
+			assert.NotEqual(t, realWork, realBlock, "tar ran in the caller's directory")
+		}
+	}
+
+	if blockDir != "" {
+		_, err := os.Stat(blockDir)
+		assert.True(t, os.IsNotExist(err), "the block left its temporary directory behind: %s", blockDir)
 	}
 
 	// The temporary directory the block made must be gone.
 	left, err := filepath.Glob(filepath.Join(root, "tmp.*"))
 	require.NoError(t, err)
 	assert.Empty(t, left, "the block left its temporary directory behind")
-
-	return fenceRun{code: code, out: out.String(), extracted: extracted}
 }
 
 func TestReadmeInstallBlocks(t *testing.T) {
@@ -282,6 +354,8 @@ func TestReadmeInstallBlocks(t *testing.T) {
 		wantNot string
 	}{
 		{"match", fenceCase{checksums: _listed}, true, "", ""},
+		{"match with the scratch tree behind a symlink", fenceCase{checksums: _listed, symlinkRoot: true}, true, "", ""},
+		{"match with a mktemp that ignores TMPDIR", fenceCase{checksums: _listed, ignoreTmpdir: true}, true, "", ""},
 		{"match among other lines", fenceCase{checksums: "0000  other.tar.gz\n@HASH@  @ASSET@\n"}, true, "", ""},
 		{"match beside a longer name", fenceCase{checksums: "0000  x-@ASSET@\n@HASH@  @ASSET@\n@HASH@  @ASSET@.sig\n"}, true, "", ""},
 		{"only a longer name", fenceCase{checksums: "@HASH@  @ASSET@.sig\n@HASH@  x-@ASSET@\n"}, false, "0 times", ""},
