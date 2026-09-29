@@ -2106,7 +2106,23 @@ is an asset checksums.txt does not list.
   PR's local gates** (F4, security-auditor Info): only Linux with
   `/usr/bin/shasum`, and `GOOS=darwin` vet and lint ran. The
   `macos-26`/`macos-26-intel` legs running `make test-host` are what cover
-  it. Result of those legs once this PR's CI finishes: TO FILL IN.
+  it. Result: the first run (6b26aa2) failed both legs, 15 subtests each
+  (the three matching cases across sh, bash, bash-posix, dash and
+  zsh-interactive): `runFence` derived the block's directory from the test's
+  scratch root (`TMPDIR=root`), but macOS's `mktemp -d` does not honour
+  `TMPDIR` and made the directory under `/private/var/folders/.../T/`, so
+  the assertion at `readme_install_test.go:248` failed. Fixed in efc67dc
+  (the directory is read from tar's logged cwd, checked to be a `tmp.*`
+  directory other than the caller's, and checked to be gone). The rerun on
+  efc67dc passed every leg, `macos-26` and `macos-26-intel` included
+  (run 36508280716). The `darwin_arm64` asset on the Intel leg is by design:
+  the README block hardcodes it and tells an Intel Mac to write `darwin_amd64`.
+  Debrief: the round-3 gate inferred from reading that `EvalSymlinks` handled
+  `/private/var`; the symlink was not the cause (a symlinked `TMPDIR` on
+  Linux passes the old test), and only a run on the real system, or a `mktemp`
+  that drops `TMPDIR` on Linux, reproduces it. The test now keeps both as
+  cases ("match with a mktemp that ignores TMPDIR", "match with the scratch
+  tree behind a symlink"), so the local Linux gate covers the class.
 - **The `zsh-interactive` subtest skips when zsh is absent**
   (`readme_install_test.go:318`, `:339-346`; F5, test-engineer optional), so
   on the Ubuntu legs the interactive-paste guard may never run. Accept, or
