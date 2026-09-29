@@ -31,7 +31,10 @@ canga is one binary built in two roles: a **host build** for your Mac and a
 **sandbox build** for the Linux sandboxes your agents run in. Both read and
 write the same reminders.
 
-**Try it** on a Mac in under a minute: install, confirm, clone.
+**Try it** on a Mac in under a minute: install, confirm, clone. The
+installer verifies the archive against the release's `checksums.txt` and
+refuses a tag below [the release floor](#the-release-floor); for who built
+the release, see [Verify a release](#verify-a-release).
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/brunovenceslau/canga/main/install_host.sh | sh
@@ -43,7 +46,8 @@ If the installer says `~/.local/bin` is not on your PATH, add it before
 running the next line. The clone lands in
 `~/src/github.com/brunovenceslau/canga`. When no signing key is set and no
 git configuration outside the clone turns signing on, the clone also prints
-a `canga: signing OFF` line on stderr naming what to set; that is expected.
+a `canga: signing OFF` line on stderr naming what to set; that is expected
+until you set up signing (see [Signing](docs/design.md#signing)).
 
 ## Contents
 
@@ -159,10 +163,10 @@ the archive against `checksums.txt`, and extracts only `canga` into
 `~/.local/bin`. On an Intel Mac, write `darwin_amd64` in place of
 `darwin_arm64`.
 
-These steps do not apply [the release floor](#the-release-floor): check the
-tag yourself. They prove integrity (the archive is
-the one `checksums.txt` lists), not provenance; for who built it, see
-[Verify a release](#verify-a-release).
+These steps do not apply [the release floor](#the-release-floor): check
+yourself that the tag is canonical `vX.Y.Z` and at least v0.10.5. They prove
+integrity (the archive is the one `checksums.txt` lists), not provenance;
+for who built it, see [Verify a release](#verify-a-release).
 
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
@@ -236,8 +240,9 @@ you.
 Set `tag` to the release this sandbox pins, and write `linux_amd64` in place
 of `linux_arm64` on an amd64 sandbox. Unlike the script, this installs into
 the current user's `~/.local/bin`, and it does not apply
-[the release floor](#the-release-floor): check the tag yourself. It proves
-integrity, not provenance; see [Verify a release](#verify-a-release).
+[the release floor](#the-release-floor): check yourself that the tag is
+canonical `vX.Y.Z` and at least v0.10.5. It proves integrity, not
+provenance; see [Verify a release](#verify-a-release).
 
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
