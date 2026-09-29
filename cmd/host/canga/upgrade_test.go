@@ -85,7 +85,7 @@ func TestUpgradeHelpSaysWhatItReplaces(t *testing.T) {
 
 	flat := clitest.Flatten(out)
 	assert.Contains(t, flat, "replaces the running")
-	assert.Contains(t, flat, "checksums.txt")
+	assert.Contains(t, flat, "The archive is checked against the SHA-256 the release publishes in checksums.txt.")
 	assert.Contains(t, flat, "not that the release is genuine")
 	assert.Contains(t, flat, "release's host build", "the host must upgrade into the host build")
 }

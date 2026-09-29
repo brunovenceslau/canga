@@ -326,9 +326,10 @@ would quietly turn one of those links into a regular file.
 An install names the file it replaced, a run that fails after choosing a
 release names the file it was working on, and `--check` names the file it
 would replace without touching it. A run that fails before choosing one,
-such as on a network error, prints only the error. Whether it also reports having followed a symlink is
-up to the operating system rather than to how you invoked it: on Linux the
-kernel hands back an already-resolved path, so there is no symlink left to
+such as a network error while looking up the release, prints only the
+error. Whether it also reports having followed a symlink is up to the
+operating system rather than to how you invoked it: on Linux the kernel
+hands back an already-resolved path, so there is no symlink left to
 mention, while on macOS it does not. The file replaced is the right one on
 both.
 
