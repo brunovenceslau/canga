@@ -2074,9 +2074,11 @@ is an asset checksums.txt does not list.
   every test for real. The two real-APFS tests
   (`cmd/host/canga/apfs_darwin_test.go`) each `t.Skip`/`t.Skipf` when the
   condition they need is not met: `TestHost_APFSWrongCaseKeysAsStored`
-  when the runner's temporary volume is case-sensitive (not APFS's
-  default), and `TestHost_APFSUnreadableSpellingFailsClosed` on the same
-  condition or when running as root. A `macos-26`/`macos-26-intel` Test
+  when `os.Stat` of the wrong-case path fails for any reason (the
+  case-sensitive volume it is written for, but also any other Stat error,
+  which it reports as a case-sensitive volume), and
+  `TestHost_APFSUnreadableSpellingFailsClosed` on the same condition or
+  when running as root. A `macos-26`/`macos-26-intel` Test
   workflow leg that lost its case-folding volume, or started running as
   root, would silently skip the exact tests meant to prove the fix on
   real APFS (docs/HANDOFF.md, "macOS case: measured, then fixed" and
