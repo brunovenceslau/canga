@@ -152,7 +152,7 @@ SANDBOX_TEST_PKGS := ./cmd/sandbox/... ./internal/... .
 
 test-host:
 	go test -race -shuffle=on $(HOST_TEST_PKGS)
-	go test -race -shuffle=on -run '^(TestInstallHost|TestPlatforms.*)$$' .
+	go test -race -shuffle=on -run '^(TestInstallHost|TestPlatforms.*|TestReadmeInstallBlocks)$$' .
 
 test-sandbox:
 	go test -race -shuffle=on $(SANDBOX_TEST_PKGS)
