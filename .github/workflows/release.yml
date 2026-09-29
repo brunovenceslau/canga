@@ -30,7 +30,9 @@ permissions: {}
 jobs:
   release:
     name: Release
-    runs-on: ubuntu-latest
+    # Pinned, never *-latest: the Ubuntu version tracks the sbx sandbox image
+    # (measured 26.04 on 2026-09-28) and moves with it; see test.yml.
+    runs-on: ubuntu-26.04
     # 30 minutes: all 9 successful runs from v0.6.0 (35308883501) through
     # v0.10.5 (36345101054) finished in 1m04s-1m56s (`gh run list --workflow
     # release.yml`, measured 2026-09-27; per-run figures in

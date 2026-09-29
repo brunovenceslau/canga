@@ -8,6 +8,7 @@ import (
 	"runtime"
 
 	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/repo"
 	"github.com/spf13/cobra"
 )
 
@@ -18,14 +19,15 @@ import (
 const role = "host"
 
 func newRootCmd() *cobra.Command {
-	a := &cli.App{}
+	a := &cli.App{BaseDir: repo.BaseDir}
 
 	root := &cobra.Command{
 		Use:   "canga",
 		Short: "Repositories, sandboxes and reminders, from the host",
 		Long: "canga runs small, deterministic operations on the repositories and\n" +
 			"sandboxes of a working day. Every subcommand is keyed by the repository\n" +
-			"the current directory belongs to, derived from its origin remote.",
+			"the current directory belongs to, derived from its origin remote, or,\n" +
+			"for a repository with no origin, from its path below the clone base.",
 		Version: fmt.Sprintf("%s (%s, %s, %s)", version, role, commit, runtime.Version()),
 		// An error is a line on stderr, not a wall of help text, and main is the
 		// only thing that prints it, so its format stays canga's own.

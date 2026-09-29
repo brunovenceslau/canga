@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,20 +60,32 @@ const (
 	// Roles, and what the fake uname answers.
 	_host    = "host"
 	_linux   = "Linux"
+	_darwin  = "Darwin"
 	_amd64   = "amd64"
 	_aarch64 = "aarch64"
 
-	// The two checksum tools, and the two ways mangleChecksums breaks
-	// checksums.txt.
+	// The two checksum tools, a third bin directory whose sha256sum accepts
+	// empty input (see _lenientSha256sum), and the three ways mangleChecksums
+	// breaks checksums.txt.
 	_sha256sum = "sha256sum"
 	_shasum    = "shasum"
+	_lenient   = "lenient sha256sum"
 	_wrong     = "wrong"
 	_absent    = "absent"
+	_twice     = "twice"
 
 	// The release floor's two refusal messages (install_host.sh,
 	// install_sandbox.sh): below it, or not canonical vX.Y.Z at all.
 	_wantBelowFloor   = "is older than v0.10.5"
 	_wantNotCanonical = "is not vX.Y.Z"
+
+	// Both installers' refusal of an asset checksums.txt lists zero times
+	// or more than once.
+	_wantNotOnce = "not exactly once"
+
+	// Both installers' refusal of an asset's line in checksums.txt that is
+	// not goreleaser's shape.
+	_wantMalformed = "is not a lowercase sha256"
 )
 
 // _fakeCurl serves $FAKE_RELEASES/<tag>/<file> for
@@ -129,6 +142,29 @@ const _fakeID = `#!/bin/sh
 [ "$1" = -u ] && echo "$FAKE_UID"
 `
 
+// _lenientSha256sum is a sha256sum whose check mode (-c) skips every line
+// it cannot parse and exits 0 when no line is left, as the one on the
+// macos-26 CI runners does with empty input (PR #42's first macOS run) and
+// probably with malformed lines too (inferred, ship-gate security re-audit
+// of the installer fix). The lines it keeps, and every call outside check
+// mode, go to the real sha256sum, whose path replaces REAL. GNU and uutils
+// sha256sum, and shasum, refuse such input, so without this stand-in only a
+// Mac could show an installer that leaves a refusal to the checker. HEX64
+// is replaced by a pattern of 64 hex digits. It uses shell builtins only:
+// PATH holds the bin directory alone.
+const _lenientSha256sum = `#!/bin/sh
+[ "$1" = -c ] || exec 'REAL' "$@"
+input=
+while IFS= read -r line; do
+	case "$line" in
+	HEX64'  '?* | HEX64' *'?*) input="$input$line
+" ;;
+	esac
+done
+[ -n "$input" ] || exit 0
+printf '%s' "$input" | 'REAL' "$@"
+`
+
 // _tools are the real programs the scripts (and the fake curl) run, linked
 // into the bin directory. A checksum tool is linked separately, per case.
 var _tools = []string{"tar", "gzip", "awk", "mktemp", "mkdir", "rm", "cp", "install"}
@@ -181,6 +217,42 @@ func newBins(t *testing.T) map[string]string {
 		bins[sha] = bin
 	}
 
+	// The lenient checker: the sha256sum bin's tools, its sha256sum swapped
+	// for _lenientSha256sum around the real one.
+	if strict, ok := bins[_sha256sum]; ok {
+		shaPath, err := exec.LookPath(_sha256sum)
+		require.NoError(t, err)
+
+		bin := t.TempDir()
+
+		entries, err := os.ReadDir(strict)
+		require.NoError(t, err)
+
+		for _, entry := range entries {
+			if entry.Name() == _sha256sum {
+				continue
+			}
+
+			target, err := os.Readlink(filepath.Join(strict, entry.Name()))
+			if err != nil { // a fake: a regular file, copied
+				body, err := os.ReadFile(filepath.Join(strict, entry.Name()))
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(filepath.Join(bin, entry.Name()), body, 0o755))
+
+				continue
+			}
+
+			require.NoError(t, os.Symlink(target, filepath.Join(bin, entry.Name())))
+		}
+
+		require.NotContains(t, shaPath, "'", "the real sha256sum's path is quoted into the lenient one")
+		lenient := strings.ReplaceAll(_lenientSha256sum, "REAL", shaPath)
+		lenient = strings.ReplaceAll(lenient, "HEX64", strings.Repeat("[0-9a-fA-F]", 64))
+		require.NoError(t, os.WriteFile(filepath.Join(bin, _sha256sum), []byte(lenient), 0o755))
+
+		bins[_lenient] = bin
+	}
+
 	return bins
 }
 
@@ -201,7 +273,8 @@ func newEnv(t *testing.T, bin string) env {
 	return e
 }
 
-// writeRelease writes every host and sandbox archive of _tag into dir, and a
+// writeRelease writes every archive a release of _tag publishes into dir (the
+// host build for darwin only, the sandbox build for linux only), and a
 // checksums.txt listing their real sha256.
 func writeRelease(t *testing.T, dir string) {
 	t.Helper()
@@ -212,8 +285,6 @@ func writeRelease(t *testing.T, dir string) {
 	for _, asset := range []struct{ role, platform string }{
 		{_host, "darwin_amd64"},
 		{_host, "darwin_arm64"},
-		{_host, "linux_amd64"},
-		{_host, "linux_arm64"},
 		{"sandbox", "linux_amd64"},
 		{"sandbox", "linux_arm64"},
 	} {
@@ -259,30 +330,62 @@ func buildArchive(t *testing.T, role string) []byte {
 	return buf.Bytes()
 }
 
+// _malformed are the ways mangleChecksums can rewrite every line of
+// checksums.txt so that it still names the archive exactly once, but not in
+// the one shape goreleaser writes (64 lowercase hex digits, two spaces, the
+// name). Every one of them must be refused, even the ones whose hash is the
+// archive's real one: a line in any other shape is not what the release
+// pipeline wrote.
+var _malformed = map[string]func(hash, name string) string{
+	"not hex":       func(_, name string) string { return "zzzz  " + name },
+	"short hash":    func(hash, name string) string { return hash[:63] + "  " + name },
+	"long hash":     func(hash, name string) string { return hash + "0  " + name },
+	"uppercase":     func(hash, name string) string { return strings.ToUpper(hash) + "  " + name },
+	"tab":           func(hash, name string) string { return hash + "\t" + name },
+	"one space":     func(hash, name string) string { return hash + " " + name },
+	"leading space": func(hash, name string) string { return " " + hash + "  " + name },
+}
+
 // mangleChecksums makes checksums.txt refuse the archives: "wrong" swaps every
-// hash for another, "absent" leaves no line for any archive.
+// hash for another, "absent" leaves no line for any archive, "twice" lists
+// every archive twice, each time with its real hash, and a key of _malformed
+// rewrites every line in that shape.
 func (e env) mangleChecksums(t *testing.T, how string) {
 	t.Helper()
 
 	path := filepath.Join(e.releases, _tag, "checksums.txt")
 
-	switch how {
-	case "":
-		return
-	case _wrong:
+	rewrite := func(line func(hash, name string) string) {
 		data, err := os.ReadFile(path)
 		require.NoError(t, err)
 
 		var out strings.Builder
 
-		for line := range strings.Lines(string(data)) {
-			_, name, _ := strings.Cut(line, "  ")
-			fmt.Fprintf(&out, "%s  %s", strings.Repeat("0", 64), name)
+		for l := range strings.Lines(string(data)) {
+			hash, name, _ := strings.Cut(strings.TrimSuffix(l, "\n"), "  ")
+			fmt.Fprintln(&out, line(hash, name))
 		}
 
 		require.NoError(t, os.WriteFile(path, []byte(out.String()), 0o644))
+	}
+
+	if line, ok := _malformed[how]; ok {
+		rewrite(line)
+
+		return
+	}
+
+	switch how {
+	case "":
+		return
+	case _wrong:
+		rewrite(func(_, name string) string { return strings.Repeat("0", 64) + "  " + name })
 	case _absent:
 		require.NoError(t, os.WriteFile(path, []byte(strings.Repeat("0", 64)+"  other.tar.gz\n"), 0o644))
+	case _twice:
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, slices.Concat(data, data), 0o644))
 	default:
 		t.Fatalf("unknown checksums mangling %q", how)
 	}
@@ -407,7 +510,7 @@ type installCase struct {
 	os, arch  string
 	uid       string // what `id -u` says; only install_sandbox.sh asks
 	sha       string // the one checksum tool on PATH: sha256sum or shasum
-	checksums string // "", "wrong" or "absent": see mangleChecksums
+	checksums string // "", "wrong", "absent", "twice" or a key of _malformed: see mangleChecksums
 	wantExit  int
 	// Every request, in order, or nil for a run refused before any.
 	wantRequests []string
@@ -426,34 +529,44 @@ func TestInstallHost(t *testing.T) {
 	}
 
 	host := func(asset string) string { return fmt.Sprintf("canga-host_%s_%s.tar.gz", _version, asset) }
-	newest := append([]string{requested("latest")}, downloads(_tag, host("linux_amd64"))...)
+	newest := append([]string{requested("latest")}, downloads(_tag, host("darwin_amd64"))...)
 	tests := []installCase{
-		{name: "newest release", os: _linux, arch: "x86_64", sha: sha, wantRequests: newest, wantStderr: "is not on your PATH"},
+		{name: "newest release", os: _darwin, arch: "x86_64", sha: sha, wantRequests: newest, wantStderr: "is not on your PATH"},
 		{name: "pinned tag on a mac", args: []string{_tag}, os: "Darwin", arch: "arm64", sha: sha, wantRequests: downloads(_tag, host("darwin_arm64"))},
-		{name: "shasum only", args: []string{_tag}, os: _linux, arch: _aarch64, sha: _shasum, wantRequests: downloads(_tag, host("linux_arm64"))},
-		{name: "checksum mismatch", args: []string{_tag}, os: _linux, arch: _amd64, sha: sha, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
-		{name: "no checksum line", args: []string{_tag}, os: _linux, arch: _amd64, sha: sha, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
-		{name: "checksum mismatch, shasum", args: []string{_tag}, os: _linux, arch: _amd64, sha: _shasum, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
-		{name: "no checksum line, shasum", args: []string{_tag}, os: _linux, arch: _amd64, sha: _shasum, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("linux_amd64"))},
-		{name: "release that does not exist", args: []string{"v9.9.9"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v9.9.9/canga-host_9.9.9_linux_amd64.tar.gz")}, wantStderr: "404"},
-		{name: "not a release tag", args: []string{"latest"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: `"latest" is not a release tag`},
+		{name: "shasum only", args: []string{_tag}, os: _darwin, arch: _aarch64, sha: _shasum, wantRequests: downloads(_tag, host("darwin_arm64"))},
+		{name: "checksum mismatch", args: []string{_tag}, os: _darwin, arch: _amd64, sha: sha, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "no checksum line", args: []string{_tag}, os: _darwin, arch: _amd64, sha: sha, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "checksum mismatch, shasum", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _shasum, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "no checksum line, shasum", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _shasum, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		// The installer itself refuses an asset checksums.txt does not list
+		// exactly once, whatever the checker does with what it is handed:
+		// macOS's own sha256sum accepts empty input, and a checker handed two
+		// matching lines passes both.
+		{name: "no checksum line, lenient sha256sum", args: []string{_tag}, os: _darwin, arch: _aarch64, sha: _lenient, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, host("darwin_arm64")), wantStderr: _wantNotOnce},
+		{name: "checksum line twice", args: []string{_tag}, os: _darwin, arch: _amd64, sha: sha, checksums: _twice, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64")), wantStderr: _wantNotOnce},
+		{name: "checksum line twice, shasum", args: []string{_tag}, os: _darwin, arch: _aarch64, sha: _shasum, checksums: _twice, wantExit: 1, wantRequests: downloads(_tag, host("darwin_arm64")), wantStderr: _wantNotOnce},
+		{name: "lenient sha256sum still installs a listed asset", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _lenient, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "lenient sha256sum still refuses a mismatch", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _lenient, checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "shasum installs a listed asset", args: []string{_tag}, os: _darwin, arch: _amd64, sha: _shasum, wantRequests: downloads(_tag, host("darwin_amd64"))},
+		{name: "release that does not exist", args: []string{"v9.9.9"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v9.9.9/canga-host_9.9.9_darwin_amd64.tar.gz")}, wantStderr: "404"},
+		{name: "not a release tag", args: []string{"latest"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: `"latest" is not a release tag`},
 		// A version above the release floor is accepted: it reaches the
 		// network, exactly like "release that does not exist" above, since
 		// neither has a fixture on disk. Reaching (and failing) the download
 		// is how "accepted" is told apart from "refused before any request".
-		{name: "a version above the release floor", args: []string{"v0.10.6"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v0.10.6/canga-host_0.10.6_linux_amd64.tar.gz")}, wantStderr: "404"},
-		{name: "a version well above the release floor", args: []string{"v1.0.0"}, os: _linux, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v1.0.0/canga-host_1.0.0_linux_amd64.tar.gz")}, wantStderr: "404"},
+		{name: "a version above the release floor", args: []string{"v0.10.6"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v0.10.6/canga-host_0.10.6_darwin_amd64.tar.gz")}, wantStderr: "404"},
+		{name: "a version well above the release floor", args: []string{"v1.0.0"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 22, wantRequests: []string{requested("download/v1.0.0/canga-host_1.0.0_darwin_amd64.tar.gz")}, wantStderr: "404"},
 		// Below the release floor is refused before any request: the release
 		// could have been recreated with unverified bytes (docs/HANDOFF.md,
 		// "Immutability is not retroactive").
-		{name: "a version below the release floor", args: []string{"v0.10.4"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantBelowFloor},
-		{name: "a version well below the release floor", args: []string{"v0.1.0"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantBelowFloor},
+		{name: "a version below the release floor", args: []string{"v0.10.4"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantBelowFloor},
+		{name: "a version well below the release floor", args: []string{"v0.1.0"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantBelowFloor},
 		// Defense in depth: the newest-release path (no tag on the command
 		// line) applies the floor too, to whichever tag /releases/latest
 		// resolves to. The redirect itself still has to be followed to learn
 		// that tag, so exactly one request is made before the refusal.
 		{
-			name: "the newest release resolves below the release floor", os: _linux, arch: _amd64, sha: sha,
+			name: "the newest release resolves below the release floor", os: _darwin, arch: _amd64, sha: sha,
 			wantExit: 1, wantStderr: _wantBelowFloor, wantRequests: []string{requested("latest")},
 			vars: []string{"FAKE_LATEST=v0.10.4"},
 		},
@@ -463,10 +576,26 @@ func TestInstallHost(t *testing.T) {
 		// itself compared equal to it and was wrongly accepted; a leading
 		// zero was likewise read as if it were not there. Both are refused
 		// before any request, the same way a version below the floor is.
-		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantNotCanonical},
-		{name: "a leading zero", args: []string{"v00.10.5"}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantNotCanonical},
-		{name: "unsupported architecture", os: _linux, arch: "riscv64", sha: sha, wantExit: 1, wantStderr: "unsupported architecture riscv64"},
+		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantNotCanonical},
+		{name: "a leading zero", args: []string{"v00.10.5"}, os: _darwin, arch: _amd64, sha: sha, wantExit: 1, wantStderr: _wantNotCanonical},
+		{name: "unsupported architecture", os: _darwin, arch: "riscv64", sha: sha, wantExit: 1, wantStderr: "unsupported architecture riscv64"},
 		{name: "unsupported system", os: "FreeBSD", arch: _amd64, sha: sha, wantExit: 1, wantStderr: "unsupported system FreeBSD"},
+		// The host build is published for macOS only (operator decision,
+		// 2026-09-28): on Linux, which only ever runs the sandbox build, the
+		// script says so and where to go instead, before any request.
+		{name: "linux is refused", args: []string{_tag}, os: _linux, arch: _amd64, sha: sha, wantExit: 1, wantStderr: "published for macOS only"},
+		{name: "linux is refused, newest release", os: _linux, arch: _aarch64, sha: sha, wantExit: 1, wantStderr: "install_sandbox.sh"},
+	}
+
+	// A line in any shape but goreleaser's is refused, under the lenient
+	// checker and under shasum, the two checkers a Mac runs.
+	for _, how := range slices.Sorted(maps.Keys(_malformed)) {
+		for _, checker := range []string{_lenient, _shasum} {
+			tests = append(tests, installCase{
+				name: "malformed line, " + how + ", " + checker, args: []string{_tag}, os: _darwin, arch: _aarch64, sha: checker,
+				checksums: how, wantExit: 1, wantRequests: downloads(_tag, host("darwin_arm64")), wantStderr: _wantMalformed,
+			})
+		}
 	}
 
 	runCases(t, _host, tests, func(t *testing.T, e env) (string, string) {
@@ -491,6 +620,13 @@ func TestInstallSandbox(t *testing.T) {
 	tests := []installCase{
 		{name: "pinned tag as root", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", wantRequests: downloads(_tag, sandbox)},
 		{name: "checksum mismatch", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", checksums: _wrong, wantExit: 1, wantRequests: downloads(_tag, sandbox)},
+		// The same refusals as install_host.sh's: the installer, not the
+		// checker, refuses an asset checksums.txt does not list exactly once.
+		{name: "no checksum line", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, sandbox), wantStderr: _wantNotOnce},
+		{name: "no checksum line, lenient sha256sum", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", sha: _lenient, checksums: _absent, wantExit: 1, wantRequests: downloads(_tag, sandbox), wantStderr: _wantNotOnce},
+		{name: "checksum line twice", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", checksums: _twice, wantExit: 1, wantRequests: downloads(_tag, sandbox), wantStderr: _wantNotOnce},
+		{name: "lenient sha256sum still installs a listed asset", args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", sha: _lenient, wantRequests: downloads(_tag, sandbox)},
+		{name: "pinned tag as root, amd64", args: []string{_tag}, os: _linux, arch: "x86_64", uid: "0", wantRequests: downloads(_tag, "canga-sandbox_"+_version+"_linux_amd64.tar.gz")},
 		{name: "no tag", os: _linux, arch: _aarch64, uid: "0", wantExit: 2, wantStderr: "usage: install_sandbox.sh"},
 		{name: "two arguments", args: []string{_tag, "extra"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 2, wantStderr: "usage: install_sandbox.sh"},
 		{name: "not a release tag", args: []string{"0.9"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 2, wantStderr: `"0.9" is not a release tag`},
@@ -512,8 +648,17 @@ func TestInstallSandbox(t *testing.T) {
 		{name: "a pre-release of the floor itself", args: []string{"v0.10.5-rc1"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: _wantNotCanonical},
 		{name: "a leading zero", args: []string{"v00.10.5"}, os: _linux, arch: _aarch64, uid: "0", wantExit: 1, wantStderr: _wantNotCanonical},
 	}
+	for _, how := range slices.Sorted(maps.Keys(_malformed)) {
+		tests = append(tests, installCase{
+			name: "malformed line, " + how, args: []string{_tag}, os: _linux, arch: _aarch64, uid: "0", sha: _lenient,
+			checksums: how, wantExit: 1, wantRequests: downloads(_tag, sandbox), wantStderr: _wantMalformed,
+		})
+	}
+
 	for i := range tests {
-		tests[i].sha = _sha256sum
+		if tests[i].sha == "" {
+			tests[i].sha = _sha256sum
+		}
 	}
 
 	runCases(t, "sandbox", tests, func(t *testing.T, e env) (string, string) {

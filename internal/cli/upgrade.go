@@ -58,10 +58,12 @@ func NewUpgradeCmd(role, version string) *cobra.Command {
 			// working on.
 			reportUpgrade(cmd, options, result, err)
 
-			// Both are answered by naming a release on the command line, so
-			// they are bad invocations: running the same command again cannot
+			// The first two are answered by naming a release on the command
+			// line, and the third by running the other build: all three are
+			// bad invocations, since running the same command again cannot
 			// fix them.
-			if errors.Is(err, upgrade.ErrNotRelease) || errors.Is(err, upgrade.ErrBadTag) {
+			if errors.Is(err, upgrade.ErrNotRelease) || errors.Is(err, upgrade.ErrBadTag) ||
+				errors.Is(err, upgrade.ErrUnsupportedPlatform) {
 				return Usage(err)
 			}
 

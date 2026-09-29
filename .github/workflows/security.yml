@@ -20,7 +20,9 @@ permissions:
 jobs:
   govulncheck:
     name: govulncheck
-    runs-on: ubuntu-latest
+    # Pinned, never *-latest: the Ubuntu version tracks the sbx sandbox image
+    # (measured 26.04 on 2026-09-28) and moves with it; see test.yml.
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

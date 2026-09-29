@@ -30,7 +30,7 @@ func workspaceLayout(t *testing.T, clone, env bool) {
 	t.Helper()
 
 	base, bin := t.TempDir(), t.TempDir()
-	t.Setenv("CANGA_HOST_BASE_DIR", base)
+	t.Setenv("CANGA_SRC_DIR", base)
 	t.Setenv(workspace.EnvsRepoVar, "")
 	t.Setenv("PATH", bin)
 

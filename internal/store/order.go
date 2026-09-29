@@ -27,6 +27,11 @@ const (
 	// pruned from under us — which needs orderKeepVersions publishes to land in
 	// the gap, so one retry is already generous.
 	maxHeadReads = 8
+
+	// maxOrderBytes bounds one order document: one id and a newline per
+	// ordered item, some 34 bytes each, so 4 MiB holds over 100,000 of them.
+	// Like maxItemBytes, it keeps a planted file from exhausting memory.
+	maxOrderBytes = 4 << 20
 )
 
 // ErrContended reports maxCASAttempts lost races in a row on the order
@@ -140,7 +145,7 @@ func (s *Store) orderHead() (int, []string, error) {
 			return 0, nil, nil
 		}
 
-		data, err := s.root.ReadFile(orderFile(head))
+		data, err := s.read(orderFile(head), maxOrderBytes)
 		if err == nil {
 			return head, parseOrder(data), nil
 		}

@@ -51,8 +51,10 @@ var (
 // assetPrefix is what an archive of role's build is named by: canga-host_ or
 // canga-sandbox_. Each build upgrades itself from its own archives only.
 //
-// The platform suffix alone does not name one file: "_linux_arm64.tar.gz" ends
-// both canga-host_ and canga-sandbox_ archives. Both builds are called canga,
+// The platform suffix alone is not relied on to name one file. Today each
+// role is published for its own operating system, but "_linux_arm64.tar.gz"
+// ended both canga-host_ and canga-sandbox_ archives up to v0.10.5, and a
+// release could carry both again. Both builds are called canga,
 // so the binary's name cannot tell them apart either; the role in the archive
 // name does. A sandbox that matched on the suffix could install the HOST
 // build, and with it the commands the sandbox build leaves out.

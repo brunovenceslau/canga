@@ -21,8 +21,35 @@ import (
 // ever merges into or overwrites an existing tree.
 var ErrTargetNotEmpty = errors.New("refusing to clone into a non-empty path")
 
-// envBaseDir overrides the root of the deterministic clone layout.
-const envBaseDir = "CANGA_HOST_BASE_DIR"
+// BaseDirVar overrides the root of the deterministic clone layout. It is also
+// the root an origin-less repository's reminders key is taken relative to, so
+// the two can never disagree about where "the layout" is; see PathUnder.
+//
+// It is CANGA_, not CANGA_HOST_, because both builds read it: the sandbox build
+// is handed the host's value, the way it is handed CANGA_REMINDERS_DIR.
+const BaseDirVar = "CANGA_SRC_DIR"
+
+// renamedBaseDirVar is BaseDirVar's name before v0.11.
+const renamedBaseDirVar = "CANGA_HOST_BASE_DIR"
+
+// ErrRenamedVariable reports a variable canga no longer reads under that name.
+//
+// Refused rather than ignored. Ignored, a machine that still sets the old name
+// would clone into, and key reminders relative to, $HOME/src instead of the
+// directory it named, and nothing would say so until a list came back empty.
+var ErrRenamedVariable = errors.New("a renamed variable is still set")
+
+// refuseRenamed fails while the old name is set, whether or not the new one is:
+// two names for one directory can disagree, and nothing here can know which
+// one was meant.
+func refuseRenamed() error {
+	if os.Getenv(renamedBaseDirVar) == "" {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s was renamed to %s; rename it wherever you set it, including sandbox environment files",
+		ErrRenamedVariable, renamedBaseDirVar, BaseDirVar)
+}
 
 // clonePerm is what the PARENT directories of a clone are created with. git
 // creates the clone itself, under the caller's umask, and this does not touch it.
@@ -102,7 +129,7 @@ func Clone(ctx context.Context, url string, opts CloneOptions) (CloneResult, err
 }
 
 // TargetDir is where Clone puts a repository when no directory is named:
-// ${CANGA_HOST_BASE_DIR:-$HOME/src} joined with the URL's "<host>/<owner>/<repo>".
+// ${CANGA_SRC_DIR:-$HOME/src} joined with the URL's "<host>/<owner>/<repo>".
 //
 // The tail keeps its readable spelling here, and is deliberately NOT passed
 // through EscapePath the way the reminder store's directory is. A clone is a
@@ -126,13 +153,17 @@ func TargetDir(url string) (string, error) {
 
 // BaseDir is the root of the deterministic clone layout, as an absolute path.
 //
-// Absolute even when CANGA_HOST_BASE_DIR is not, because the derived path is
+// Absolute even when CANGA_SRC_DIR is not, because the derived path is
 // PRINTED for a caller to use: `cd $(canga git clone <url>)` from another
 // directory needs an answer that does not depend on where canga was standing.
 // It is also what makes the non-empty check and the clone itself agree about
 // one place.
 func BaseDir() (string, error) {
-	dir := os.Getenv(envBaseDir)
+	if err := refuseRenamed(); err != nil {
+		return "", err
+	}
+
+	dir := os.Getenv(BaseDirVar)
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -148,6 +179,34 @@ func BaseDir() (string, error) {
 	}
 
 	return absolute, nil
+}
+
+// ErrNoBaseDir reports a process that needs the base directory handed to it and
+// was not handed a usable one.
+var ErrNoBaseDir = errors.New("the base directory is not set")
+
+// HandedBaseDir is BaseDir for a process whose $HOME is not the host's: the
+// sandbox build, where HOME is /home/agent while repositories are mounted at
+// their host paths. There, $HOME/src names a directory no mounted repository
+// lives under, so the variable is the ONLY source, the same arrangement as
+// CANGA_REMINDERS_DIR, and it must be absolute: it is a host path, and
+// resolving a relative one against the sandbox's working directory would
+// invent a base the host never had.
+func HandedBaseDir() (string, error) {
+	if err := refuseRenamed(); err != nil {
+		return "", err
+	}
+
+	dir := os.Getenv(BaseDirVar)
+	if dir == "" {
+		return "", fmt.Errorf("%w: %s is empty or unset, and this build does not default it", ErrNoBaseDir, BaseDirVar)
+	}
+
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("%w: %s=%q is not an absolute path", ErrNoBaseDir, BaseDirVar, dir)
+	}
+
+	return filepath.Clean(dir), nil
 }
 
 // resolveTarget decides where a clone lands.

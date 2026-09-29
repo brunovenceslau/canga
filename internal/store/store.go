@@ -30,6 +30,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/brunovenceslau/canga/internal/boundedread"
 )
 
 // Store layout, relative to the store directory.
@@ -48,6 +50,14 @@ const (
 	// genuinely exhausted id space fails loudly instead of spinning; the race
 	// gate deliberately saturates a tiny space to exercise the retry.
 	maxIDAttempts = 512
+
+	// maxItemBytes bounds one item file, header included. A reminder is a
+	// line or a few paragraphs; 1 MiB is some thousand times that, and more
+	// than one command line can carry on macOS (ARG_MAX is 1 MiB there), so
+	// no reminder `add` accepts comes near it. It exists so that a file
+	// planted in a store the sandboxes share cannot exhaust the host
+	// build's memory.
+	maxItemBytes = 1 << 20
 )
 
 var (
@@ -60,6 +70,10 @@ var (
 	// ErrEmptyText reports an add with nothing in it.
 	ErrEmptyText = errors.New("empty reminder text")
 
+	// ErrTextTooLarge reports an add whose item would exceed maxItemBytes,
+	// and so could never be read back.
+	ErrTextTooLarge = errors.New("reminder text too large")
+
 	// ErrExhausted reports maxIDAttempts collisions in a row. In production it
 	// means the id space is saturated, which 32 random bits behind a per-second
 	// timestamp makes effectively impossible.
@@ -71,10 +85,11 @@ var (
 	// under the store vanished", which is not.
 	ErrNoStore = errors.New("no reminder store")
 
-	// ErrSymlinkedStore reports a store directory that is itself a symbolic
-	// link. os.Root keeps every path BELOW the directory inside it, but the
-	// directory's own path is followed, so a link there would carry every
-	// read and write to wherever it points.
+	// ErrSymlinkedStore reports a store directory, or any directory between
+	// the store base and it, that is a symbolic link. os.Root keeps every
+	// path BELOW a directory inside it, but the directory's own path is
+	// followed, so a link there would carry every read and write to wherever
+	// it points.
 	ErrSymlinkedStore = errors.New("reminder store directory is a symbolic link")
 
 	// errStoreReplaced reports a store directory swapped for another between
@@ -83,10 +98,25 @@ var (
 	errStoreReplaced = errors.New("reminder store directory was replaced while it was being opened")
 )
 
+// DataDirs returns the names the store creates inside its directory. A
+// repository key must never contain one, or one store would nest inside
+// another's data; internal/repo refuses them in a location-derived key.
+func DataDirs() []string {
+	return []string{itemsDir, tmpDir, orderDir}
+}
+
 // Config is the identity of a store. Every field is required: Dir says where
 // the store lives, and Repo and Scope are stamped into each item's header so a
 // file remains self-describing after it is copied out of its directory.
 type Config struct {
+	// Base is the root every repository's store hangs under. It is optional,
+	// and every production caller sets it: with it, each directory from Base
+	// down to Dir is opened relative to its parent WITHOUT following a link,
+	// so nothing below Base, which sandboxes share and can write, can carry
+	// the store elsewhere. Base itself may be a link: it is the user's own
+	// layout. Empty means filepath.Dir(Dir), which holds only Dir itself to
+	// that rule.
+	Base  string
 	Dir   string // the store directory, "<base>/<host>/<owner>/<repo>/<scope>"
 	Repo  string // "<host>/<owner>/<repo>", as derived by internal/repo
 	Scope string
@@ -144,29 +174,27 @@ func open(cfg Config, create bool, opts []Option) (*Store, error) {
 		return nil, errors.New("store: no directory configured")
 	}
 
-	// Refused BEFORE MkdirAll and OpenRoot, the two calls that would follow
-	// the link. Checked here, a dangling link is named for what it is instead
-	// of surfacing as MkdirAll's "file exists" or as an empty store.
-	if err := refuseSymlink(cfg.Dir); err != nil {
+	base, segments, err := belowBase(cfg)
+	if err != nil {
 		return nil, err
 	}
 
-	// The tree is created BEFORE the root is opened, since os.Root can only
-	// contain paths beneath a directory that already exists.
-	if create {
-		if err := os.MkdirAll(cfg.Dir, dirPerm); err != nil {
-			return nil, fmt.Errorf("create store: %w", err)
-		}
-	}
-
-	// Options are applied before the root is opened, so a test hook can reach
-	// the window between OpenRoot and checkRoot.
+	// Options are applied before any root is opened, so a test hook can reach
+	// the window between OpenRoot and the identity check.
 	store := &Store{cfg: cfg, newID: newID}
 	for _, opt := range opts {
 		opt(store)
 	}
 
-	root, err := os.OpenRoot(cfg.Dir)
+	// The base is created and followed like any directory of the user's: it
+	// is not shared, so a link there is their layout, not an attack.
+	if create {
+		if err := os.MkdirAll(base, dirPerm); err != nil {
+			return nil, fmt.Errorf("create store: %w", err)
+		}
+	}
+
+	root, err := os.OpenRoot(base)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("%w at %s", ErrNoStore, cfg.Dir)
@@ -175,13 +203,8 @@ func open(cfg Config, create bool, opts []Option) (*Store, error) {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
 
-	if store.hookAfterOpenRoot != nil {
-		store.hookAfterOpenRoot()
-	}
-
-	if err := checkRoot(root, cfg.Dir); err != nil {
-		_ = root.Close()
-
+	root, err = descend(root, base, segments, create, store.hookAfterOpenRoot)
+	if err != nil {
 		return nil, err
 	}
 
@@ -200,49 +223,126 @@ func open(cfg Config, create bool, opts []Option) (*Store, error) {
 	return store, nil
 }
 
-// refuseSymlink fails when dir is a symbolic link, dangling or not. A missing
-// dir passes: Open goes on to create it, and OpenExisting to answer ErrNoStore.
-// Only dir itself is checked. A link higher up the path, such as a symlinked
-// ~/.local/share, is the user's own layout and stays legal.
-func refuseSymlink(dir string) error {
-	info, err := os.Lstat(dir)
+// descend enters every directory below the base one step at a time, relative
+// to its already-open parent, and refuses any that is a link. os.Root alone
+// would not do: it keeps paths inside the base but FOLLOWS a link that stays
+// inside, and a link from one key's directory to another's would read and
+// write another repository's store. It takes ownership of root: every root it
+// leaves behind is closed, and it returns the store directory's.
+func descend(root *os.Root, base string, segments []string, create bool, leafHook func()) (*os.Root, error) {
+	where := base
+
+	for i, segment := range segments {
+		where = filepath.Join(where, segment)
+
+		var hook func()
+		if i == len(segments)-1 {
+			hook = leafHook
+		}
+
+		child, err := enter(root, segment, where, create, hook)
+		_ = root.Close()
+
+		if err != nil {
+			return nil, err
+		}
+
+		root = child
+	}
+
+	return root, nil
+}
+
+// belowBase returns the base to open and the directories from it down to
+// cfg.Dir, refusing a Dir that is not strictly below the base.
+func belowBase(cfg Config) (string, []string, error) {
+	dir := filepath.Clean(cfg.Dir)
+
+	base := cfg.Base
+	if base == "" {
+		base = filepath.Dir(dir)
+	}
+
+	base = filepath.Clean(base)
+
+	rel, err := filepath.Rel(base, dir)
+	if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", nil, fmt.Errorf("store: %s is not below the store base %s", cfg.Dir, base)
+	}
+
+	return base, strings.Split(rel, string(filepath.Separator)), nil
+}
+
+// enter opens the directory name inside parent, creating it when create is
+// set, and refuses it if it is a link, dangling or not. path is only for
+// messages.
+//
+// The check is made on both sides of the open. Before it, a link is named for
+// what it is instead of surfacing as Mkdir's "file exists" or an empty store.
+// After it, the open handle is compared with a fresh Lstat: a link swapped in
+// and back out between the two would otherwise go unseen, and the handle pins
+// its directory's identity for as long as it is open, which a link never
+// shares.
+func enter(parent *os.Root, name, path string, create bool, hook func()) (*os.Root, error) {
+	info, err := parent.Lstat(name)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		if !create {
+			return nil, fmt.Errorf("%w at %s", ErrNoStore, path)
+		}
+
+		if err := parent.Mkdir(name, dirPerm); err != nil && !errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("create store: %w", err)
+		}
+
+		info, err = parent.Lstat(name)
 	}
 
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return nil, fmt.Errorf("open store: %w", err)
 	}
 
 	if info.Mode()&fs.ModeSymlink != 0 {
-		return fmt.Errorf("%w: %s", ErrSymlinkedStore, dir)
+		return nil, fmt.Errorf("%w: %s", ErrSymlinkedStore, path)
 	}
 
-	return nil
+	child, err := parent.OpenRoot(name)
+	if err != nil {
+		return nil, fmt.Errorf("open store: %w", err)
+	}
+
+	if hook != nil {
+		hook()
+	}
+
+	if err := checkRoot(parent, child, name, path); err != nil {
+		_ = child.Close()
+
+		return nil, err
+	}
+
+	return child, nil
 }
 
-// checkRoot confirms that root is the directory at dir NOW, reached without a
-// link. refuseSymlink alone leaves a window between its Lstat and OpenRoot, in
-// which a link can be swapped in and back out again. Comparing the open handle
-// with a fresh Lstat closes it: the handle pins its directory's identity for
-// as long as it is open, and a link never shares that identity.
-func checkRoot(root *os.Root, dir string) error {
-	opened, err := root.Stat(".")
+// checkRoot confirms that child is the directory at name in parent NOW,
+// reached without a link.
+func checkRoot(parent, child *os.Root, name, path string) error {
+	opened, err := child.Stat(".")
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
 
-	current, err := os.Lstat(dir)
+	current, err := parent.Lstat(name)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
 
 	if current.Mode()&fs.ModeSymlink != 0 {
-		return fmt.Errorf("%w: %s", ErrSymlinkedStore, dir)
+		return fmt.Errorf("%w: %s", ErrSymlinkedStore, path)
 	}
 
 	if !os.SameFile(opened, current) {
-		return fmt.Errorf("%w: %s", errStoreReplaced, dir)
+		return fmt.Errorf("%w: %s", errStoreReplaced, path)
 	}
 
 	return nil
@@ -282,6 +382,12 @@ func (s *Store) Add(text string) (Item, error) {
 		item.ID = s.newID()
 		if err := checkID(item.ID); err != nil {
 			return Item{}, err
+		}
+
+		// What is written must read back: Get and List refuse a file over
+		// maxItemBytes.
+		if size := len(item.encode()); size > maxItemBytes {
+			return Item{}, fmt.Errorf("%w: %d bytes, over %d", ErrTextTooLarge, size, maxItemBytes)
 		}
 
 		err := s.place(item)
@@ -350,7 +456,7 @@ func (s *Store) Get(id string) (Item, error) {
 		return Item{}, err
 	}
 
-	data, err := s.root.ReadFile(itemFile(id))
+	data, err := s.read(itemFile(id), maxItemBytes)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return Item{}, fmt.Errorf("%w: %s", ErrNotFound, id)
@@ -467,10 +573,16 @@ func (s *Store) items() (map[string]Item, error) {
 			continue
 		}
 
-		data, err := s.root.ReadFile(itemFile(id))
+		data, err := s.read(itemFile(id), maxItemBytes)
 		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
 				continue // removed between the directory read and this one
+			case errors.Is(err, boundedread.ErrNotRegular):
+				// Like a directory here: not an item. A FIFO or a link is
+				// skipped, never waited on or followed, and the rest of
+				// the list still reads.
+				continue
 			}
 
 			return nil, fmt.Errorf("read %s: %w", id, err)
@@ -480,6 +592,19 @@ func (s *Store) items() (map[string]Item, error) {
 	}
 
 	return items, nil
+}
+
+// read reads name, inside the root, only if it is a regular file of at most
+// limit bytes that is not a link. The store is shared with sandboxes that can
+// write it, so a plain read would wait forever on a FIFO, read a planted
+// giant file into memory, and follow a link into another repository's store.
+func (s *Store) read(name string, limit int64) ([]byte, error) {
+	return boundedread.Regular(
+		func(flag int) (*os.File, error) { return s.root.OpenFile(name, flag, 0) },
+		// os.Root follows a link that stays inside it, O_NOFOLLOW or not;
+		// the re-read by name is what refuses one.
+		func() (fs.FileInfo, error) { return s.root.Lstat(name) },
+		limit)
 }
 
 // itemFile is an item's path inside the root.

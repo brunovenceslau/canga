@@ -50,6 +50,12 @@ agentInstructions:
     Without it, `canga` falls back to a store inside this sandbox, which
     does not outlive it.
 
+    A repository with no `origin` remote is keyed by its path below
+    `$CANGA_SRC_DIR` (for example `local/OS`); a linked worktree of it is
+    keyed by its main working tree, so every worktree reads one list. In the
+    sandbox that variable has no default: without it, or for a repository
+    outside it, `canga reminders` exits 2 and says why.
+
 # Deny-by-default egress; allow only the hosts this kit's binary is fetched
 # from, so the kit works whatever other kits the environment lists.
 #

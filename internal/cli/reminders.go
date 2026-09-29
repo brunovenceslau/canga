@@ -28,7 +28,10 @@ func NewRemindersCmd(a *App, verbs ...Subcommand) *cobra.Command {
 		Long: "reminders is a per-repository TODO store that survives the session that\n" +
 			"wrote it. Every session working on the same repository, in any sandbox,\n" +
 			"sees the same list, and each item is a plain file meant to be edited by\n" +
-			"hand as readily as by this command.",
+			"hand as readily as by this command.\n\n" +
+			"A repository is keyed by its origin remote's <host>/<owner>/<repo>. One\n" +
+			"with no origin is keyed by its working tree's path below the clone base\n" +
+			"(CANGA_SRC_DIR), so <base>/local/OS keys as local/OS.",
 		Args: UsageArgs(cobra.NoArgs),
 		RunE: RunHelp,
 	}
@@ -133,7 +136,10 @@ func RemindersPath(a *App) *cobra.Command {
 		Short: "Print the store directory, or one reminder's file",
 		Long: "path prints where the reminders live, so an editor or a script can be\n" +
 			"pointed at them. It creates nothing: with no argument it reports the\n" +
-			"store directory whether or not anything has been recorded there yet.",
+			"store directory whether or not anything has been recorded there yet.\n\n" +
+			"It only prints a path. Whatever opens it later follows what is there\n" +
+			"by then, and sandboxes can write the store, so treat an item's file\n" +
+			"like any file a sandbox can replace, a symbolic link included.",
 		Args:              UsageArgs(cobra.MaximumNArgs(1)),
 		ValidArgsFunction: a.completeIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {

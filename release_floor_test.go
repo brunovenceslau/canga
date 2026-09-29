@@ -152,7 +152,7 @@ func TestReleaseFloorShapeAgreesAcrossInstallersAndGo(t *testing.T) {
 
 			hostEnv := newEnv(t, bin)
 			hostRes := hostEnv.run(t, shell, hostScript, []string{tt.tag},
-				"HOME="+hostEnv.root, "FAKE_OS="+_linux, "FAKE_ARCH="+_amd64)
+				"HOME="+hostEnv.root, "FAKE_OS="+_darwin, "FAKE_ARCH="+_amd64)
 			assert.Equal(t, tt.accepted, len(hostRes.requests) > 0,
 				"install_host.sh %q: reached the network = %v; stderr:\n%s", tt.tag, len(hostRes.requests) > 0, hostRes.stderr)
 

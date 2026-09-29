@@ -1,9 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Bruno Marques Venceslau de Souza <b@venceslau.dev>
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Tests and cross-compilation. Both jobs invoke a `make` target rather than
+# Tests and cross-compilation. Every job invokes a `make` target rather than
 # restating the flags, so what CI runs is what a push was checked against
 # locally.
+#
+# Gates test exactly the expected usage (operator rule, 2026-09-28): the host
+# build runs on the operator's Macs, so its tests run on macOS, arm64 and
+# Intel; the sandbox build runs in sbx sandboxes, linux VMs of the host's
+# architecture, so its tests run on Linux, arm64 and x64. Compiling for a
+# platform is not running on it: a case-insensitive APFS, or a macOS
+# userland, is only exercised where it exists.
+#
+# Runner labels are PINNED, never *-latest: "latest" moves on GitHub's
+# schedule and changes the verdict without this file changing. The Ubuntu
+# version tracks the sbx sandbox image (docker/sandbox-templates:claude-code,
+# measured Ubuntu 26.04.1 on 2026-09-28) and moves when that image moves.
 name: Tests
 
 on:
@@ -15,9 +27,14 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
+  host:
+    name: Host build (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-26 is Apple silicon (arm64); macos-26-intel is x64.
+        runner: [macos-26, macos-26-intel]
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -27,38 +44,48 @@ jobs:
         with:
           go-version: stable
 
-      # Without zsh, TestCompletionScript skips its `zsh -n` parse of the
-      # generated completion script and still reports a pass. Installing it
-      # keeps the gate real rather than letting a missing shell look green.
-      #
-      # TestSbxKitPin_ReleaseJQ pipes scripts/sbx-kit-pin.sh's own --jq
-      # strings through a real jq binary, so a syntax or semantic error in
-      # either never reaches the real GitHub API undetected. Runner images
-      # already carry a jq, but installed here explicitly so the gate does
-      # not depend on that runner-image detail: an explicit install
-      # guarantees jq is present regardless of what the image ships. Unlike
-      # shellcheck below, this does not pin jq's version - a version bump
-      # to the jq apt package can still change the verdict without this
-      # workflow file changing.
-      - name: Install zsh and jq
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh jq
-
-      # TestSbxKit_Shellcheck lints the sbx kit's install script and
-      # scripts/sbx-kit-pin.sh, and fails under CI without shellcheck. Pinned
-      # by version and sha256 rather than taken from the runner image, whose
-      # copy changes with the image and would change the verdict with it.
-      - name: Install shellcheck
-        env:
-          SHELLCHECK_VERSION: v0.11.0
-          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+      # Pinned shellcheck and jq, and zsh where the image lacks it: see the
+      # script for why none of them is taken from the runner image.
+      - name: Install test tools
         run: |
-          archive="shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
-          curl -fsSL -o "${RUNNER_TEMP}/${archive}" \
-            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/${archive}"
-          echo "${SHELLCHECK_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum -c -
-          tar -xJf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
-          sudo install -m 0755 "${RUNNER_TEMP}/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
-          shellcheck --version
+          scripts/ci-tools.sh "${RUNNER_TEMP}/bin"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      # The host build, the shared packages and install_host.sh. It includes
+      # TestHost_APFSWrongCaseKeysAsStored, which runs only on darwin and
+      # checks the key on a real case-insensitive volume.
+      - name: Test
+        run: make test-host
+
+      - name: Build the host binary
+        run: go build -trimpath -o "${RUNNER_TEMP}/canga" ./cmd/host/canga && "${RUNNER_TEMP}/canga" --version
+
+  sandbox:
+    name: Sandbox build (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-26.04-arm, ubuntu-26.04]
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      # TestSbxKit_Shellcheck and TestSbxKitPin_ReleaseJQ fail under CI when
+      # their tool is missing, rather than skip, so a gate that stopped
+      # checking cannot look green.
+      - name: Install test tools
+        run: |
+          scripts/ci-tools.sh "${RUNNER_TEMP}/bin"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
       - name: Verify dependencies
         run: |
@@ -76,15 +103,22 @@ jobs:
       - name: Check go fix
         run: go fix -diff ./...
 
+      # The sandbox build, the shared packages, install_sandbox.sh and the
+      # release tooling, which all run on Linux.
       - name: Test
-        run: make test
+        run: make test-sandbox
 
-  # A second operating system in the test matrix would cost a runner to catch
-  # what compiling for that system catches directly. This builds every platform
-  # a release ships, from whichever one the runner happens to be.
+      # Builds the sandbox binary and drives it as an agent in a sandbox
+      # would: host paths handed over, HOME its own.
+      - name: Sandbox E2E
+        run: make e2e-sandbox
+
+  # Compiles every platform a release ships, and nothing else, so a build
+  # tag or syscall missing on one of them fails here rather than at release
+  # time. It complements the legs above; it does not stand in for them.
   cross:
     name: Cross-compile
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

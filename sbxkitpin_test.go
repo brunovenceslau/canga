@@ -408,7 +408,7 @@ func assetsBodyMeta(version, amd64, arm64, uploader string, draft, prerelease bo
 	var b strings.Builder
 
 	b.WriteString(metaLine(draft, prerelease) + "\n")
-	fmt.Fprintf(&b, "canga-host_%s_linux_amd64.tar.gz sha256:%s %s\n", version, strings.Repeat("0", 64), naOr(uploader))
+	fmt.Fprintf(&b, "canga-host_%s_darwin_amd64.tar.gz sha256:%s %s\n", version, strings.Repeat("0", 64), naOr(uploader))
 
 	for arch, digest := range map[string]string{_amd64: amd64, _arm64: arm64} {
 		fmt.Fprintf(&b, "canga-sandbox_%s_linux_%s.tar.gz %s %s\n", version, arch, naOr(digest), naOr(uploader))
@@ -604,7 +604,7 @@ func (w pinWorld) run(t *testing.T, args ...string) pinRun {
 // canga-sandbox_ lines after the host ones.
 func checksums(sandbox ...string) string {
 	var b strings.Builder
-	for _, platform := range []string{"darwin_amd64", "darwin_arm64", "linux_amd64", "linux_arm64"} {
+	for _, platform := range []string{"darwin_amd64", "darwin_arm64"} {
 		fmt.Fprintf(&b, "%s  canga-host_%s_%s.tar.gz\n", strings.Repeat("0", 64), _bumpVersion, platform)
 	}
 
@@ -1760,7 +1760,7 @@ func TestSbxKitPin_CheckClobber(t *testing.T) {
 			case tt.serverError:
 				writeFile(t, filepath.Join(w.gh, "api-500"), "")
 			case tt.noSandbox:
-				hostOnly := "canga-host_" + _nextVersion + "_linux_amd64.tar.gz sha256:" + strings.Repeat("0", 64) + "\n"
+				hostOnly := "canga-host_" + _nextVersion + "_darwin_amd64.tar.gz sha256:" + strings.Repeat("0", 64) + "\n"
 				writeFile(t, filepath.Join(w.gh, _nextTag+".assets"), hostOnly)
 			default:
 				w.setAssets(t, _nextTag, _nextVersion, digestAMD64, digestARM64, _botUploader)
@@ -2340,7 +2340,7 @@ func TestSbxKitPin_ReleaseJQ(t *testing.T) {
 		"assets": [
 			{"name": "canga-sandbox_9.8.7_linux_amd64.tar.gz", "digest": "sha256:aaaa", "uploader": {"login": "github-actions[bot]"}},
 			{"name": "canga-sandbox_9.8.7_linux_arm64.tar.gz", "digest": null, "uploader": {"login": "github-actions[bot]"}},
-			{"name": "canga-host_9.8.7_linux_amd64.tar.gz", "digest": "", "uploader": {"login": ""}},
+			{"name": "canga-host_9.8.7_darwin_amd64.tar.gz", "digest": "", "uploader": {"login": ""}},
 			{"name": "checksums.txt", "digest": "sha256:cccc", "uploader": null}
 		]
 	}`
@@ -2348,7 +2348,7 @@ func TestSbxKitPin_ReleaseJQ(t *testing.T) {
 	want := []string{
 		"canga-sandbox_9.8.7_linux_amd64.tar.gz sha256:aaaa github-actions[bot]",
 		"canga-sandbox_9.8.7_linux_arm64.tar.gz - github-actions[bot]",
-		"canga-host_9.8.7_linux_amd64.tar.gz - -",
+		"canga-host_9.8.7_darwin_amd64.tar.gz - -",
 		"checksums.txt sha256:cccc -",
 	}
 

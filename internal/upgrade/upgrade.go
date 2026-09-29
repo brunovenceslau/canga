@@ -30,6 +30,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 )
 
 var (
@@ -51,7 +52,47 @@ var (
 	// assumption holding, not evidence that it has ever been observed to
 	// fail.
 	ErrTagMismatch = errors.New("github's release document names a different tag than was asked for")
+
+	// ErrUnsupportedPlatform reports a build running on an operating system
+	// its role is not published for: the host build is published for macOS
+	// only, and the sandbox build for Linux only (operator decision,
+	// 2026-09-28). There is no archive to upgrade into, so the run is refused
+	// before anything is requested rather than failing to find one.
+	ErrUnsupportedPlatform = errors.New("this build is not published for this operating system")
 )
+
+// PlatformFor is the one operating system role's build is published for, as
+// runtime.GOOS spells it. .goreleaser.yml, the Makefile's cross gate and the
+// install scripts publish and install exactly this.
+func PlatformFor(role string) string {
+	switch role {
+	case RoleHost:
+		return "darwin"
+	case RoleSandbox:
+		return "linux"
+	default:
+		return ""
+	}
+}
+
+// platform is the operating system this run is on: runtime.GOOS, unless a
+// test set the seam.
+func (o Options) platform() string {
+	if o.goos != "" {
+		return o.goos
+	}
+
+	return runtime.GOOS
+}
+
+// checkPlatform refuses role on an operating system it is not published for.
+func checkPlatform(role, goos string) error {
+	if want := PlatformFor(role); goos != want {
+		return fmt.Errorf("%w: the %s build is published for %s only, and this is %s", ErrUnsupportedPlatform, role, want, goos)
+	}
+
+	return nil
+}
 
 // The two builds of canga, as a release names them: in its archives
 // (canga-host_..., canga-sandbox_...) and in the second field of
@@ -86,6 +127,10 @@ type Options struct {
 	// Check resolves and reports what is available without changing anything.
 	Check bool
 
+	// goos is a test seam for the operating system checkPlatform sees. Empty,
+	// which is every production run, means runtime.GOOS.
+	goos string
+
 	// baseURL and path are test seams, not settings. An environment override
 	// for either would let whoever set it choose both the code canga installs
 	// and where it lands.
@@ -116,6 +161,12 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 
 	wanted, err := wantedTag(opts)
 	if err != nil {
+		return Result{}, err
+	}
+
+	// After the tag, which every test binary is refused on first, and before
+	// anything is requested.
+	if err := checkPlatform(opts.Role, opts.platform()); err != nil {
 		return Result{}, err
 	}
 

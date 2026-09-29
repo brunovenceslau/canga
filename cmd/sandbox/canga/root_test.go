@@ -172,3 +172,99 @@ func TestSandbox_OutsideARepository(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitUsage, cli.ExitCode(err))
 }
+
+// TestSandbox_OriginLessIsKeyedByItsHostPath is the arrangement the fallback
+// exists for: HOME is the sandbox's own, the repository is mounted at its HOST
+// path, and the environment file hands over the host's base directory the way
+// it hands over CANGA_REMINDERS_DIR. The key is the path below that base, and
+// the store is the one the host build resolves for the same tree.
+func TestSandbox_OriginLessIsKeyedByItsHostPath(t *testing.T) {
+	testrepo.Hermetic(t)
+
+	hostBase, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	dir := filepath.Join(hostBase, "local", "OS")
+	testrepo.Init(t, dir, "")
+
+	// $HOME/src must play no part: nothing is mounted under the sandbox's home.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CANGA_SRC_DIR", hostBase)
+
+	out, _, err := execute(t, remindersCmd, "add", "-C", dir, "from", "the", "sandbox")
+	require.NoError(t, err)
+
+	id := strings.TrimSpace(out)
+
+	out, _, err = execute(t, remindersCmd, "list", "-C", dir)
+	require.NoError(t, err)
+	assert.Equal(t, id+"\tfrom the sandbox\n", out)
+
+	_, err = os.Stat(filepath.Join(os.Getenv(cli.ReminderDirVar), "local", "!o!s", cli.ScopeRepo, "items", id+".md"))
+	require.NoError(t, err, "the item must land under the path-derived key, case escaped")
+}
+
+// TestSandbox_OriginLessWithoutTheBaseIsRefused: the sandbox build never
+// defaults the base to its own $HOME/src, which would key a tree by a path the
+// host does not have. Unset, an origin-less repository keeps today's usage
+// error, and the message names the variable to set.
+func TestSandbox_OriginLessWithoutTheBaseIsRefused(t *testing.T) {
+	testrepo.Hermetic(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Exactly where a $HOME/src default would find it.
+	dir := filepath.Join(home, "src", "local", "OS")
+	testrepo.Init(t, dir, "")
+
+	_, _, err := execute(t, remindersCmd, "add", "-C", dir, "nope")
+	require.Error(t, err)
+	assert.Equal(t, cli.ExitUsage, cli.ExitCode(err))
+	assert.Contains(t, err.Error(), "CANGA_SRC_DIR")
+}
+
+// TestSandbox_RenamedBaseVariableIsAUsageError: an environment file still
+// setting CANGA_HOST_BASE_DIR must fail loudly in the sandbox too, not quietly
+// key nothing, even with CANGA_SRC_DIR set beside it.
+func TestSandbox_RenamedBaseVariableIsAUsageError(t *testing.T) {
+	testrepo.Hermetic(t)
+
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	dir := filepath.Join(base, "local", "OS")
+	testrepo.Init(t, dir, "")
+
+	t.Setenv("CANGA_SRC_DIR", base)
+	t.Setenv("CANGA_HOST_BASE_DIR", base)
+
+	_, _, err = execute(t, remindersCmd, "add", "-C", dir, "nope")
+	require.Error(t, err)
+	assert.Equal(t, cli.ExitUsage, cli.ExitCode(err))
+	assert.Contains(t, err.Error(), "CANGA_HOST_BASE_DIR was renamed to CANGA_SRC_DIR")
+}
+
+// TestSandbox_RelativeBaseIsAUsageError: a relative CANGA_SRC_DIR would be
+// resolved against a working directory the host never had, so the sandbox
+// build refuses it, exit 2, and names the variable (ship-gate round 2,
+// test-engineer Low: covered only below the CLI before).
+func TestSandbox_RelativeBaseIsAUsageError(t *testing.T) {
+	testrepo.Hermetic(t)
+
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	dir := filepath.Join(base, "local", "OS")
+	testrepo.Init(t, dir, "")
+
+	// Relative, and naming the right directory from where the test stands:
+	// only the refusal can make it fail.
+	t.Chdir(base)
+	t.Setenv("CANGA_SRC_DIR", ".")
+
+	_, _, err = execute(t, remindersCmd, "add", "-C", dir, "nope")
+	require.Error(t, err)
+	assert.Equal(t, cli.ExitUsage, cli.ExitCode(err))
+	assert.Contains(t, err.Error(), "CANGA_SRC_DIR")
+}

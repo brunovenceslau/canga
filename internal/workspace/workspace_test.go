@@ -33,7 +33,7 @@ func layout(t *testing.T) string {
 	t.Helper()
 
 	base := t.TempDir()
-	t.Setenv("CANGA_HOST_BASE_DIR", base)
+	t.Setenv("CANGA_SRC_DIR", base)
 	t.Setenv(EnvsRepoVar, "")
 
 	return base
