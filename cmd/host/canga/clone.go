@@ -21,8 +21,9 @@ func newCloneCmd() *cobra.Command {
 			"directory to override that; a relative one is resolved against the\n" +
 			"current directory.\n\n" +
 			"The resolved path is printed on stdout and nothing else is, so\n" +
-			"`cd \"$(canga git clone <url>)\"` works. It refuses a target that already holds\n" +
-			"anything, and never merges into or overwrites an existing tree.\n\n" +
+			"`cd \"$(canga git clone <url>)\"` works. It refuses a target that\n" +
+			"already holds anything, and never merges into or overwrites an\n" +
+			"existing tree.\n\n" +
 			"The clone is hardened at the transport level: the ext and fd remote\n" +
 			"helpers, which run a command, are turned off on the command line, so no\n" +
 			"git configuration can turn them back on, and are removed from\n" +

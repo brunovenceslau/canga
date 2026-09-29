@@ -145,7 +145,7 @@ func RemindersPath(a *App) *cobra.Command {
 			"by then, and sandboxes can write the store, so treat an item's file\n" +
 			"like any file a sandbox can replace, a symbolic link included.",
 		Example: "  canga reminders path\n" +
-			"  $EDITOR \"$(canga reminders path 20260915T142233.482913Z-9f3a1c07)\"",
+			"  canga reminders path 20260915T142233.482913Z-9f3a1c07",
 		Args:              UsageArgs(cobra.MaximumNArgs(1)),
 		ValidArgsFunction: a.completeIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {

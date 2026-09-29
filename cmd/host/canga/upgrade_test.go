@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/clitest"
 	"github.com/brunovenceslau/canga/internal/upgrade"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,8 +82,10 @@ func TestUpgradeHelpSaysWhatItReplaces(t *testing.T) {
 
 	out, err := execute(t, upgradeCmd, "--help")
 	require.NoError(t, err)
-	assert.Contains(t, out, "replaces the running")
-	assert.Contains(t, out, "checksums.txt")
-	assert.Contains(t, out, "not that the release is genuine")
-	assert.Contains(t, out, "release's host build", "the host must upgrade into the host build")
+
+	flat := clitest.Flatten(out)
+	assert.Contains(t, flat, "replaces the running")
+	assert.Contains(t, flat, "checksums.txt")
+	assert.Contains(t, flat, "not that the release is genuine")
+	assert.Contains(t, flat, "release's host build", "the host must upgrade into the host build")
 }
