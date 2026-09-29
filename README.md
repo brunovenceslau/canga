@@ -80,18 +80,35 @@ write access, with bytes and a `checksums.txt` of their own choosing
 
 To do the same by hand, download, verify against the published checksums, then
 extract. The steps below do not apply the release floor the scripts apply:
-check yourself that the tag is canonical `vX.Y.Z` and at least v0.10.5.
+check yourself that the tag is canonical `vX.Y.Z` and at least v0.10.5. On an
+Intel Mac, write `darwin_amd64` in place of `darwin_arm64`. The steps prove
+the archive is the one `checksums.txt` lists, which is integrity, not
+provenance: for who built it, see [Verify a release](#verify-a-release).
 
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
 tag=$(basename "$(curl -fsSL -o /dev/null -w '%{url_effective}' "$releases/latest")")
-asset=canga-host_${tag#v}_darwin_arm64.tar.gz   # or darwin_amd64
+asset=canga-host_${tag#v}_darwin_arm64.tar.gz
 
-curl -fsSLO "$releases/download/$tag/$asset"
-curl -fsSLO "$releases/download/$tag/checksums.txt"
-mkdir -p "$HOME/.local/bin"
-awk -v a="$asset" '$2 == a' checksums.txt | shasum -a 256 -c - \
-  && tar -xzf "$asset" -C "$HOME/.local/bin" canga
+(
+  dir=$(mktemp -d) && cd "$dir" || exit 1
+  trap 'rm -rf "$dir"' EXIT
+  trap 'exit 1' INT TERM
+  curl -fsSLO "$releases/download/$tag/$asset" || exit 1
+  curl -fsSLO "$releases/download/$tag/checksums.txt" || exit 1
+
+  line=$(awk -v a="$asset" '$2 == a' checksums.txt)
+  count=$(printf '%s\n' "$line" | awk 'NF { n++ } END { print n + 0 }')
+  [ "$count" = 1 ] || { echo "checksums.txt lists $asset $count times, not exactly once" >&2; exit 1; }
+  want=${line%%" "*}
+  [ "${#want}" -eq 64 ] && printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$' && [ "$line" = "$want  $asset" ] || {
+    echo "the checksums.txt line for $asset is not a lowercase sha256, two spaces and the name" >&2; exit 1; }
+  got=$(shasum -a 256 "$asset" | awk '{ print $1 }')
+  printf '%s' "$got" | grep -Eq '^[0-9a-f]{64}$' || { echo "could not compute the sha256 of $asset" >&2; exit 1; }
+  [ "$got" = "$want" ] || { echo "$asset has sha256 $got, but checksums.txt lists $want" >&2; exit 1; }
+
+  mkdir -p "$HOME/.local/bin" && tar -xzf "$asset" -C "$HOME/.local/bin" canga
+)
 ```
 
 `$releases/latest` redirects to the newest release, so `%{url_effective}` names
@@ -99,17 +116,28 @@ its tag without parsing any JSON. `-L` makes curl follow that redirect; without
 it, the effective URL is `$releases/latest` itself and the tag comes out as
 `latest`.
 
-Read the last two lines as one command. `&&` is what makes the checksum a gate:
-without it a pasted block runs every line in turn, and a `FAILED` verification is
-followed by the extraction it was supposed to stop.
-
 `awk` selects the one line of `checksums.txt` naming this asset, matching the
-filename field for equality. `grep` would read the dots in the filename as
-wildcards. An asset absent from `checksums.txt` yields no line, and `shasum`
-rejects empty input rather than reporting success.
+filename field for equality; `grep` would read the dots in the filename as
+wildcards. The asset must be listed exactly once: an absent asset yields no
+line, and a release whose `checksums.txt` somehow names it twice is refused
+rather than letting either line win by accident. The line is then required to
+be exactly what goreleaser writes (64 lowercase hex digits, two spaces, the
+name) before its digest is trusted at all, and only then is it compared,
+string for string, against the archive's own sha256, computed here with
+`shasum -a 256`. This mirrors `install_host.sh`'s own check rather than piping
+to a checker's `-c`/check mode: on the macOS runners' `sha256sum`, check mode
+exits 0 on empty input instead of refusing it, which would have silently
+"verified" an asset `checksums.txt` never listed at all
+(`docs/HANDOFF.md`, "Round 5: the first macOS run found an installer checksum
+bypass").
 
-Running the block again in a directory that already holds an earlier download
-overwrites it: `curl -O` replaces a file rather than refusing.
+The whole block after the variables is one subshell, `( ... )`, so a refusal
+(`exit 1`) leaves only that subshell: the reason is printed to stderr, your
+own shell stays open, and the `tar` line, the last one inside it, never runs.
+A failed download stops it the same way. It works in a fresh temporary
+directory that it removes on the way out, so an archive or `checksums.txt`
+already lying in your current directory is never the one verified, and the
+archive is not kept: only `canga` is installed.
 
 The archive also carries `LICENSE` and `README.md`. Naming `canga` in the `tar`
 command extracts the binary alone.
@@ -817,19 +845,47 @@ canonical `vX.Y.Z` or is older than v0.10.5, before downloading anything
 
 By hand, verify the archive against `checksums.txt` before extracting it, and
 check yourself that the tag is canonical `vX.Y.Z` and at least v0.10.5, since
-these steps do not apply the release floor:
+these steps do not apply the release floor. Set `tag` to the release this
+sandbox pins, and write `linux_amd64` in place of `linux_arm64` on an amd64
+sandbox. The steps prove integrity, not provenance: for who built the
+archive, see [Verify a release](#verify-a-release).
 
 ```sh
 releases=https://github.com/brunovenceslau/canga/releases
-tag=vX.Y.Z                                          # the release this sandbox pins
-asset=canga-sandbox_${tag#v}_linux_arm64.tar.gz     # or linux_amd64
+tag=vX.Y.Z
+asset=canga-sandbox_${tag#v}_linux_arm64.tar.gz
 
-curl -fsSLO "$releases/download/$tag/$asset"
-curl -fsSLO "$releases/download/$tag/checksums.txt"
-mkdir -p "$HOME/.local/bin"
-awk -v a="$asset" '$2 == a' checksums.txt | sha256sum -c - \
-  && tar -xzf "$asset" -C "$HOME/.local/bin" canga
+(
+  dir=$(mktemp -d) && cd "$dir" || exit 1
+  trap 'rm -rf "$dir"' EXIT
+  trap 'exit 1' INT TERM
+  curl -fsSLO "$releases/download/$tag/$asset" || exit 1
+  curl -fsSLO "$releases/download/$tag/checksums.txt" || exit 1
+
+  line=$(awk -v a="$asset" '$2 == a' checksums.txt)
+  count=$(printf '%s\n' "$line" | awk 'NF { n++ } END { print n + 0 }')
+  [ "$count" = 1 ] || { echo "checksums.txt lists $asset $count times, not exactly once" >&2; exit 1; }
+  want=${line%%" "*}
+  [ "${#want}" -eq 64 ] && printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$' && [ "$line" = "$want  $asset" ] || {
+    echo "the checksums.txt line for $asset is not a lowercase sha256, two spaces and the name" >&2; exit 1; }
+  got=$(sha256sum "$asset" | awk '{ print $1 }')
+  printf '%s' "$got" | grep -Eq '^[0-9a-f]{64}$' || { echo "could not compute the sha256 of $asset" >&2; exit 1; }
+  [ "$got" = "$want" ] || { echo "$asset has sha256 $got, but checksums.txt lists $want" >&2; exit 1; }
+
+  mkdir -p "$HOME/.local/bin" && tar -xzf "$asset" -C "$HOME/.local/bin" canga
+)
 ```
+
+This mirrors `install_host.sh`'s own check (see [Install a release
+binary](#install-a-release-binary) above): the asset must be listed exactly
+once in `checksums.txt`, that one line must be exactly goreleaser's shape (64
+lowercase hex digits, two spaces, the name), and only then is it compared,
+string for string, against the archive's own sha256, computed here with
+`sha256sum`, rather than trusted to a checker's `-c`/check mode
+(`docs/HANDOFF.md`, "Round 5: the first macOS run found an installer checksum
+bypass"). As above, the block is one subshell in a temporary directory: a
+refusal or a failed download prints why and leaves your shell open, and
+`tar` runs only when every check passed.
 
 Pin the tag rather than following `latest`, so every sandbox built from one
 definition runs the same binary. `canga --version` prints the version, the role

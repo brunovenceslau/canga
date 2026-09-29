@@ -2068,3 +2068,65 @@ is an asset checksums.txt does not list.
   (`TestHost_APFSUnreadableSpellingFailsClosed`, the folding branch of
   `TestCanonical`, and every new test's behavior on APFS and macOS's git)
   run only on the macOS legs.
+- **`make test-host` hides a skip.** `go test -race -shuffle=on
+  $(HOST_TEST_PKGS)` (`Makefile:153-155`) runs without `-v`, so a package
+  that only passes and skips reports the same `ok` line as one that ran
+  every test for real. The two real-APFS tests
+  (`cmd/host/canga/apfs_darwin_test.go`) each `t.Skip`/`t.Skipf` when the
+  condition they need is not met: `TestHost_APFSWrongCaseKeysAsStored`
+  when `os.Stat` of the wrong-case path fails for any reason (the
+  case-sensitive volume it is written for, but also any other Stat error,
+  which it reports as a case-sensitive volume), and
+  `TestHost_APFSUnreadableSpellingFailsClosed` on the same condition or
+  when running as root. A `macos-26`/`macos-26-intel` Test
+  workflow leg that lost its case-folding volume, or started running as
+  root, would silently skip the exact tests meant to prove the fix on
+  real APFS (docs/HANDOFF.md, "macOS case: measured, then fixed" and
+  "Round 4: ship-gate round 2 findings") and the gate would still read
+  green. Fix direction: run `test-host` with `-v` and grep/report `---
+  SKIP` lines (or a `go test -json` pass that counts skips), and fail or
+  warn on an unexpected skip of an APFS-only test on a runner that is
+  supposed to be real APFS.
+- **README by-hand blocks: `trap 'exit 1' INT TERM` is untested** (README.md:96
+  and :861; ship-gate round 3, F1, raised by test-engineer, code-reviewer
+  Optional and security-auditor Low). Deleting it leaves
+  `TestReadmeInstallBlocks` green, yet without it dash (TERM) and zsh (INT,
+  TERM) leave the tempdir with the downloaded archive behind after a Ctrl-C.
+  Fix: statically assert both blocks carry the trap, or better a case where
+  the fake curl sleeps and the test sends INT and TERM, asserting a non-zero
+  rc, a surviving caller and no `tmp.*` left behind.
+- **HUP leaves the tempdir under dash** (F2, security-auditor Info): closing
+  the terminal ends the block with rc=129 and the tempdir stays. Fix:
+  `trap 'exit 1' HUP INT TERM` (README.md:96 and :861).
+- **curl calls lack `--proto '=https' --proto-redir '=https'`** (F3,
+  security-auditor Info): README.md:90, :97, :98, :862, :863 and
+  `install_host.sh:81,160,161`, `install_sandbox.sh:142`. Change the scripts
+  and the README together, in a separate PR.
+- **The host (macOS) README block is not verified on real macOS in this
+  PR's local gates** (F4, security-auditor Info): only Linux with
+  `/usr/bin/shasum`, and `GOOS=darwin` vet and lint ran. The
+  `macos-26`/`macos-26-intel` legs running `make test-host` are what cover
+  it. Result: the first run (6b26aa2) failed both legs, 15 subtests each
+  (the three matching cases across sh, bash, bash-posix, dash and
+  zsh-interactive): `runFence` derived the block's directory from the test's
+  scratch root (`TMPDIR=root`), but macOS's `mktemp -d` does not honour
+  `TMPDIR` and made the directory under `/private/var/folders/.../T/`, so
+  the assertion at `readme_install_test.go:248` failed. Fixed in efc67dc
+  (the directory is read from tar's logged cwd, checked to be a `tmp.*`
+  directory other than the caller's, and checked to be gone). The rerun on
+  efc67dc passed every leg, `macos-26` and `macos-26-intel` included
+  (run 36508280716). The `darwin_arm64` asset on the Intel leg is by design:
+  the README block hardcodes it and tells an Intel Mac to write `darwin_amd64`.
+  Debrief: the round-3 gate inferred from reading that `EvalSymlinks` handled
+  `/private/var`; the symlink was not the cause (a symlinked `TMPDIR` on
+  Linux passes the old test), and only a run on the real system, or a `mktemp`
+  that drops `TMPDIR` on Linux, reproduces it. The test now keeps both as
+  cases ("match with a mktemp that ignores TMPDIR", "match with the scratch
+  tree behind a symlink"), so the local Linux gate covers the class.
+- **The `zsh-interactive` subtest skips when zsh is absent**
+  (`readme_install_test.go:318`, `:339-346`; F5, test-engineer optional), so
+  on the Ubuntu legs the interactive-paste guard may never run. Accept, or
+  install zsh on the Ubuntu leg.
+- **`runFence` needs a comment on why `perl` is linked** (F8, code-reviewer
+  Nit): added in this PR (`readme_install_test.go:160`); recorded here only
+  so the ship-gate list is complete.
