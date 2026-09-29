@@ -25,13 +25,12 @@ func NewUpgradeCmd(role, version string) *cobra.Command {
 		// The role is spelled out, not described: it is the one thing that
 		// differs between the builds, and the help is where a test can see
 		// which role a build actually passed in.
-		Long: "upgrade downloads the newest canga release and replaces the running\n" +
-			"binary with that release's " + role + " build, in place.\n\n" +
-			"This is NOT dotfiles-upgrade. That one fetches git and updates a\n" +
-			"checkout; this one swaps an executable file for a release artifact.\n\n" +
+		Long: "upgrade downloads a canga release, the newest one or the one --tag\n" +
+			"names, and replaces the running binary with that release's " + role + " build,\n" +
+			"in place.\n\n" +
 			"The archive is checked against the SHA-256 the release publishes in\n" +
-			"checksums.txt. That proves the download is the file the release names\n" +
-			"— not that the release is genuine, since the same account publishes\n" +
+			"checksums.txt. That proves the download is the file the release names,\n" +
+			"not that the release is genuine, since the same account publishes\n" +
 			"both. The new binary is written beside the old one, run once to\n" +
 			"confirm it reports the version and build it was downloaded as, and\n" +
 			"only then renamed over it, so an interrupted upgrade leaves the\n" +
@@ -46,6 +45,9 @@ func NewUpgradeCmd(role, version string) *cobra.Command {
 			"been recreated by anyone with write access, with bytes and a\n" +
 			"checksums.txt of their own choosing, and this command has no way to\n" +
 			"tell that apart from the real thing.",
+		Example: "  canga upgrade                # install the newest release\n" +
+			"  canga upgrade --check        # say what is available, change nothing\n" +
+			"  canga upgrade --tag " + upgrade.MinReleaseTag + "  # install exactly that release",
 		Args: UsageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			options.Token = upgrade.Token(cmd.Context())

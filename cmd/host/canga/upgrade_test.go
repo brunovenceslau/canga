@@ -73,15 +73,16 @@ func TestUpgradeUsage(t *testing.T) {
 	}
 }
 
-// TestUpgradeHelpSeparatesItFromDotfilesUpgrade keeps the one distinction that
-// is easy to lose: dotfiles-upgrade fetches git and updates a checkout, and
-// this replaces a binary. Two mechanisms that share a verb.
-func TestUpgradeHelpSeparatesItFromDotfilesUpgrade(t *testing.T) {
+// TestUpgradeHelpSaysWhatItReplaces: the help says the command replaces the
+// running binary with a release, that the checksum check does not prove the
+// release genuine, and which build it installs.
+func TestUpgradeHelpSaysWhatItReplaces(t *testing.T) {
 	t.Parallel()
 
 	out, err := execute(t, upgradeCmd, "--help")
 	require.NoError(t, err)
-	assert.Contains(t, out, "dotfiles-upgrade")
+	assert.Contains(t, out, "replaces the running")
 	assert.Contains(t, out, "checksums.txt")
+	assert.Contains(t, out, "not that the release is genuine")
 	assert.Contains(t, out, "release's host build", "the host must upgrade into the host build")
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brunovenceslau/canga/internal/testrepo"
@@ -182,6 +183,44 @@ func commandNames(cmd *cobra.Command) []string {
 	}
 
 	return names
+}
+
+// TestRoot_EveryLeafCommandHasAnExample: help shows a command before it
+// explains it, so every visible command that does the work carries an
+// Examples section. Groups print help and are left out, and so is
+// completion, whose text is cobra's own.
+func TestRoot_EveryLeafCommandHasAnExample(t *testing.T) {
+	t.Parallel()
+
+	root := newRootCmd()
+	// cobra adds completion lazily, at Execute; initialising it here makes the
+	// exclusion above a real one rather than a no-op.
+	root.InitDefaultCompletionCmd()
+	assert.Empty(t, commandsWithoutExample(root), "commands without an Example")
+}
+
+// commandsWithoutExample walks cmd's tree and returns the path of every leaf
+// command with no Example.
+func commandsWithoutExample(cmd *cobra.Command) []string {
+	var missing []string
+
+	for _, sub := range cmd.Commands() {
+		if sub.Hidden || sub.Name() == "help" || sub.Name() == "completion" {
+			continue
+		}
+
+		if sub.HasAvailableSubCommands() {
+			missing = append(missing, commandsWithoutExample(sub)...)
+
+			continue
+		}
+
+		if strings.TrimSpace(sub.Example) == "" {
+			missing = append(missing, sub.CommandPath())
+		}
+	}
+
+	return missing
 }
 
 // TestCompletionScript asserts the generated completion rather than eyeballing

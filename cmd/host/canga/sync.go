@@ -25,6 +25,8 @@ func newSyncCmd(a *cli.App) *cobra.Command {
 			"Everything it does is therefore recoverable, which is what makes it safe\n" +
 			"to run across every repository on a machine without reading them first.\n\n" +
 			"Use -C to name a repository other than the current directory.",
+		Example: "  canga git sync\n" +
+			"  canga git sync -C ~/src/github.com/acme/widget",
 		Args: cli.UsageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			result, err := repo.Sync(cmd.Context(), a.RepoDir)

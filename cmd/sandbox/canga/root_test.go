@@ -14,6 +14,7 @@ import (
 
 	"github.com/brunovenceslau/canga/internal/cli"
 	"github.com/brunovenceslau/canga/internal/upgrade"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -125,7 +126,8 @@ func TestSandbox_RefusesHostOnlyCommands(t *testing.T) {
 
 // TestSandbox_Upgrade: the sandbox build carries a real upgrade, listed in
 // help, and its help says what differs in a sandbox: the binary is root's,
-// and the kit's pin wins again when the sandbox is recreated. GH_TOKEN keeps
+// and the provisioned release comes back when the sandbox is provisioned
+// again. GH_TOKEN keeps
 // `gh auth token` out of the run.
 func TestSandbox_Upgrade(t *testing.T) {
 	t.Setenv("GH_TOKEN", "token")
@@ -138,8 +140,12 @@ func TestSandbox_Upgrade(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "release's sandbox build", "the sandbox must upgrade into the sandbox build")
 	assert.Contains(t, out, "sudo canga upgrade")
-	assert.Contains(t, out, "recreated from the kit's pin")
-	assert.Contains(t, out, "install_sandbox.sh runs again", "the way back from a --tag downgrade")
+	assert.Contains(t, out, "the tag passed to install_sandbox.sh")
+	assert.Contains(t, out, "is provisioned again")
+	assert.Contains(t, out, "sudo canga upgrade --tag "+upgrade.MinReleaseTag, "the example must name a release the floor accepts")
+	// The release floor refuses every release whose sandbox build had no
+	// upgrade command, so help must not describe --tag installing one.
+	assert.NotContains(t, out, "v0.6.0")
 
 	// A test binary reports "dev", which is refused before any request: that
 	// the refusal is the upgrade's own, and not errHostOnly, is the point.
@@ -267,4 +273,38 @@ func TestSandbox_RelativeBaseIsAUsageError(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, cli.ExitUsage, cli.ExitCode(err))
 	assert.Contains(t, err.Error(), "CANGA_SRC_DIR")
+}
+
+// TestSandbox_EveryLeafCommandHasAnExample: help shows a command before it
+// explains it, so every visible command that does the work carries an
+// Examples section. Groups print help and are left out, as are the hidden
+// host-only stubs.
+func TestSandbox_EveryLeafCommandHasAnExample(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, commandsWithoutExample(newRootCmd()), "commands without an Example")
+}
+
+// commandsWithoutExample walks cmd's tree and returns the path of every leaf
+// command with no Example.
+func commandsWithoutExample(cmd *cobra.Command) []string {
+	var missing []string
+
+	for _, sub := range cmd.Commands() {
+		if sub.Hidden || sub.Name() == "help" {
+			continue
+		}
+
+		if sub.HasAvailableSubCommands() {
+			missing = append(missing, commandsWithoutExample(sub)...)
+
+			continue
+		}
+
+		if strings.TrimSpace(sub.Example) == "" {
+			missing = append(missing, sub.CommandPath())
+		}
+	}
+
+	return missing
 }
