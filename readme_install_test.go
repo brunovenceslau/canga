@@ -157,6 +157,7 @@ func runFence(t *testing.T, shell readmeShell, fence, asset string, c fenceCase)
 	}
 
 	// The tools the block runs come from the real system; curl and tar do not.
+	// perl is linked because macOS shasum is a perl script.
 	for _, tool := range []string{"awk", "grep", "printf", "basename", "mktemp", "rm", "mkdir", "cat", "sha256sum", "shasum", "perl", "dirname", "uname", "env"} {
 		if p, err := exec.LookPath(tool); err == nil {
 			require.NoError(t, os.Symlink(p, filepath.Join(bin, tool)))
