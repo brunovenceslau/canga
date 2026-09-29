@@ -311,9 +311,10 @@ wrong platform, or the other build, fails at that step with the working
 binary untouched, instead of after taking its place on your PATH.
 
 Nothing is written outside the directory the binary already lives in, and
-no backup is left behind: the previous release is always one
-`canga upgrade --tag` away, and a stale `canga.bak` on PATH is a worse
-problem than the backup solves.
+no backup is left behind: any release at or above
+[the release floor](#the-release-floor) is one `canga upgrade --tag` away,
+and a stale `canga.bak` on PATH is a worse problem than the backup solves.
+A release below the floor cannot be installed again: `--tag` refuses it.
 
 ### Which file it replaces
 
@@ -322,9 +323,10 @@ replaced. `~/.local/bin` is often a directory of symlinks placed by a
 dotfiles manager, and replacing the *name* rather than the file behind it
 would quietly turn one of those links into a regular file.
 
-An install names the file it replaced, a run that stopped partway names the
-file it was working on, and `--check` names the file it would replace
-without touching it. Whether it also reports having followed a symlink is
+An install names the file it replaced, a run that fails after choosing a
+release names the file it was working on, and `--check` names the file it
+would replace without touching it. A run that fails before choosing one,
+such as on a network error, prints only the error. Whether it also reports having followed a symlink is
 up to the operating system rather than to how you invoked it: on Linux the
 kernel hands back an already-resolved path, so there is no symlink left to
 mention, while on macOS it does not. The file replaced is the right one on
@@ -376,8 +378,9 @@ leading zero) and at or above v0.10.5.
 
 Every release before v0.10.5 was deleted for carrying no build provenance
 attestation, tags kept, and could be recreated by anyone with write access,
-with bytes and a `checksums.txt` of their own choosing (see "Immutability
-is not retroactive" in [the handoff notes](HANDOFF.md#left-open-1)). Only
+with bytes and a `checksums.txt` of their own choosing (see the
+"Immutability is not retroactive" item in the handoff notes'
+[release provenance section](HANDOFF.md#release-provenance-attestation-draft-first-immutable-releases-pr-36)). Only
 v0.10.5 onward is published, but the old tags still exist, so an empty
 release list was not a guarantee on its own: the tools refuse those tags
 outright rather than rely on there being nothing published there to find.

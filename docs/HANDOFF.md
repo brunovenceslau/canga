@@ -2135,7 +2135,9 @@ is an asset checksums.txt does not list.
   cases ("match with a mktemp that ignores TMPDIR", "match with the scratch
   tree behind a symlink"), so the local Linux gate covers the class.
 - **The `zsh-interactive` subtest skips when zsh is absent**
-  (`readme_install_test.go:391-392`, `:413-419`; F5, test-engineer optional), so
+  (`TestReadmeInstallBlocks` registers the `zsh-interactive` shell only when
+  `exec.LookPath("zsh")` finds one, and otherwise reports a
+  `<block>/zsh-interactive` subtest skipped; F5, test-engineer optional), so
   on the Ubuntu legs the interactive-paste guard may never run. Accept, or
   install zsh on the Ubuntu leg.
 - **`runFence` needs a comment on why `perl` is linked** (F8, code-reviewer

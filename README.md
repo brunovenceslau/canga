@@ -685,11 +685,12 @@ Before it replaces anything:
   renamed over the old one, so a bad archive leaves the working binary
   untouched.
 
-On stderr it names the file it replaced, or the one it was working on when
-it stopped, and `--check` names the file it would replace without touching
-it. It replaces the file a symlink points to, not the symlink; keeps the
-file's mode; and leaves no backup behind, since the previous release is one
-`canga upgrade --tag` away.
+On stderr it names the file it replaced, or, when a run fails after choosing
+a release, the file it was working on; `--check` names the file it would
+replace without touching it. It replaces the file a symlink points to, not
+the symlink; keeps the file's mode; and leaves no backup behind. Any release
+at or above [the release floor](#the-release-floor) is one
+`canga upgrade --tag` away; a release below it cannot be installed again.
 
 A GitHub token is optional. `GH_TOKEN`, then `GITHUB_TOKEN`, then whatever
 `gh auth token` answers raises GitHub's rate limit from 60 to 5000 requests
