@@ -2068,3 +2068,20 @@ is an asset checksums.txt does not list.
   (`TestHost_APFSUnreadableSpellingFailsClosed`, the folding branch of
   `TestCanonical`, and every new test's behavior on APFS and macOS's git)
   run only on the macOS legs.
+- **`make test-host` hides a skip.** `go test -race -shuffle=on
+  $(HOST_TEST_PKGS)` (`Makefile:153-155`) runs without `-v`, so a package
+  that only passes and skips reports the same `ok` line as one that ran
+  every test for real. The two real-APFS tests
+  (`cmd/host/canga/apfs_darwin_test.go`) each `t.Skip`/`t.Skipf` when the
+  condition they need is not met: `TestHost_APFSWrongCaseKeysAsStored`
+  when the runner's temporary volume is case-sensitive (not APFS's
+  default), and `TestHost_APFSUnreadableSpellingFailsClosed` on the same
+  condition or when running as root. A `macos-26`/`macos-26-intel` Test
+  workflow leg that lost its case-folding volume, or started running as
+  root, would silently skip the exact tests meant to prove the fix on
+  real APFS (docs/HANDOFF.md, "macOS case: measured, then fixed" and
+  "Round 4: ship-gate round 2 findings") and the gate would still read
+  green. Fix direction: run `test-host` with `-v` and grep/report `---
+  SKIP` lines (or a `go test -json` pass that counts skips), and fail or
+  warn on an unexpected skip of an APFS-only test on a runner that is
+  supposed to be real APFS.
