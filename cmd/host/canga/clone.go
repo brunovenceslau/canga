@@ -20,9 +20,10 @@ func newCloneCmd() *cobra.Command {
 			"same path whatever protocol it was cloned with, on every machine. Name a\n" +
 			"directory to override that; a relative one is resolved against the\n" +
 			"current directory.\n\n" +
-			"The resolved path is printed on stdout and nothing else is, so `cd\n" +
-			"$(canga git clone <url>)` works. It refuses a target that already holds\n" +
-			"anything, and never merges into or overwrites an existing tree.\n\n" +
+			"The resolved path is printed on stdout and nothing else is, so\n" +
+			"`cd \"$(canga git clone <url>)\"` works. It refuses a target that\n" +
+			"already holds anything, and never merges into or overwrites an\n" +
+			"existing tree.\n\n" +
 			"The clone is hardened at the transport level: the ext and fd remote\n" +
 			"helpers, which run a command, are turned off on the command line, so no\n" +
 			"git configuration can turn them back on, and are removed from\n" +
@@ -32,6 +33,9 @@ func newCloneCmd() *cobra.Command {
 			"CANGA_HOST_SIGNING_KEY and CANGA_HOST_ALLOWED_SIGNERS, or from the machine's\n" +
 			"global git config. When neither resolves nothing is stamped, and the\n" +
 			"command says whether git configuration outside the clone signs anyway.",
+		Example: "  canga git clone git@github.com:acme/widget.git     # into ~/src/github.com/acme/widget\n" +
+			"  cd \"$(canga git clone https://github.com/acme/widget)\"\n" +
+			"  canga git clone https://github.com/acme/widget /tmp/scratch",
 		Args:              cli.UsageArgs(cobra.RangeArgs(1, 2)),
 		ValidArgsFunction: completeCloneArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

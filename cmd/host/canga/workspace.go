@@ -26,12 +26,14 @@ func newWorkspaceCmd() *cobra.Command {
 			"repository that holds the environments, itself a clone under the same\n" +
 			"base directory: by default <host>/<owner>/docker-sbx, the same owner's\n" +
 			"docker-sbx. The \"-env\" suffix keeps the environment directory's\n" +
-			"basename apart from the clone's, so the two are never confused. Set " +
-			workspace.EnvsRepoVar + " to another path under the\n" +
-			"base directory, such as github.com/acme/sandboxes, to use another one.\n\n" +
+			"basename apart from the clone's, so the two are never confused.\n" +
+			"Set " + workspace.EnvsRepoVar + " to another path under the base\n" +
+			"directory, such as github.com/acme/sandboxes, to use another one.\n\n" +
 			"Nothing is created: a missing clone or environment directory is refused\n" +
 			"before cmux is called. Run it from a terminal inside cmux, which only\n" +
 			"accepts commands from its own terminals by default.",
+		Example: "  canga workspace https://github.com/acme/widget\n" +
+			"  CANGA_HOST_ENVS_REPO=github.com/acme/sandboxes canga workspace https://github.com/acme/widget",
 		Args:              cli.UsageArgs(cobra.ExactArgs(1)),
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(cmd *cobra.Command, args []string) error {

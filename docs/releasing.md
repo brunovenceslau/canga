@@ -35,8 +35,9 @@ Two repository settings, both on before any tag is pushed:
 - [Immutable releases](#immutable-releases). `make release-preflight` checks
   this one itself (`check-immutable`).
 - A ruleset on `refs/tags/v*` restricting tag creation, update and deletion
-  to the admin role. Nothing here checks it independently; see
-  `docs/HANDOFF.md`, "Left open", for the exact payload. The ruleset is what
+  to the admin role. Nothing here checks it independently; the exact
+  payload is the "Tag ruleset for `v*`" item in the handoff notes'
+  [release provenance section](HANDOFF.md#release-provenance-attestation-draft-first-immutable-releases-pr-36). The ruleset is what
   actually restricts who can push a `v*` tag at all - and so who can trigger
   a release, or tag a commit whose `release.yml` an attestation would then
   vouch for (see [Verify a release](#verify-a-release)).
@@ -245,12 +246,13 @@ with a 404; they are checked by digest and uploader alone (see
 
 The repository runs with GitHub's immutable releases setting on. It was
 enabled on 2026-09-27, after the draft-first workflow above had merged and
-before v0.10.5 was tagged (`docs/HANDOFF.md`, "Confirmed: immutable releases
-were enabled before v0.10.5 (2026-09-27)"). The order mattered: an immutable
-release refuses any asset change once it is published, so a workflow that
-published first and uploaded afterwards would fail on its own upload. Draft
-first works, because a draft stays editable until the workflow publishes
-it.
+before v0.10.5 was tagged (the "Confirmed: immutable releases were enabled
+before v0.10.5 (2026-09-27)" item in the handoff notes'
+[release provenance section](HANDOFF.md#release-provenance-attestation-draft-first-immutable-releases-pr-36)).
+The order mattered: an immutable release refuses any asset change once it
+is published, so a workflow that published first and uploaded afterwards
+would fail on its own upload. Draft first works, because a draft stays
+editable until the workflow publishes it.
 
 What it changes:
 

@@ -13,6 +13,7 @@ import (
 	"github.com/brunovenceslau/canga/internal/testrepo"
 
 	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/clitest"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -182,6 +183,16 @@ func commandNames(cmd *cobra.Command) []string {
 	}
 
 	return names
+}
+
+// TestRoot_EveryLeafCommandHasAnExample: help shows a command before it
+// explains it, so every visible command that does the work carries an
+// Examples section. Groups print help and are left out; cobra's own help and
+// completion commands are not in an unexecuted tree (see clitest).
+func TestRoot_EveryLeafCommandHasAnExample(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, clitest.CommandsWithoutExample(newRootCmd()), "commands without an Example")
 }
 
 // TestCompletionScript asserts the generated completion rather than eyeballing

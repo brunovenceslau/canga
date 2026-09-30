@@ -51,7 +51,8 @@ func RemindersAdd(a *App) *cobra.Command {
 		Long: "add records a reminder. The arguments are joined with spaces, so the\n" +
 			"text needs no quoting. This is the only subcommand that creates the\n" +
 			"store; the rest refuse to bring one into existence just by asking.",
-		Args: UsageArgs(cobra.MinimumNArgs(1)),
+		Example: "  canga reminders add drop the debug flag from the parser",
+		Args:    UsageArgs(cobra.MinimumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.WithNewStore(cmd, func(reminders *store.Store) error {
 				item, err := reminders.Add(strings.Join(args, " "))
@@ -76,8 +77,10 @@ func RemindersList(a *App) *cobra.Command {
 		Long: "list prints one <id><TAB><text> record per line, ordered items first.\n" +
 			"The text is the reminder's FIRST LINE: a multi-line reminder keeps the\n" +
 			"rest in its file.\n\n" +
-			"A repository with no store yet lists nothing and succeeds — having\n" +
+			"A repository with no store yet lists nothing and succeeds: having\n" +
 			"recorded nothing is not an error.",
+		Example: "  canga reminders list\n" +
+			"  canga reminders list | cut -f2    # the texts alone",
 		Args: UsageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			err := a.WithStore(cmd, func(reminders *store.Store) error {
@@ -111,6 +114,7 @@ func RemindersRemove(a *App) *cobra.Command {
 		Long: "rm removes each named reminder. Every id is attempted even if an\n" +
 			"earlier one fails, so one stale id on the line does not silently skip\n" +
 			"the rest; the failures are reported together.",
+		Example:           "  canga reminders rm 20260915T142233.482913Z-9f3a1c07",
 		Args:              UsageArgs(cobra.MinimumNArgs(1)),
 		ValidArgsFunction: a.completeIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -140,6 +144,8 @@ func RemindersPath(a *App) *cobra.Command {
 			"It only prints a path. Whatever opens it later follows what is there\n" +
 			"by then, and sandboxes can write the store, so treat an item's file\n" +
 			"like any file a sandbox can replace, a symbolic link included.",
+		Example: "  canga reminders path\n" +
+			"  canga reminders path 20260915T142233.482913Z-9f3a1c07",
 		Args:              UsageArgs(cobra.MaximumNArgs(1)),
 		ValidArgsFunction: a.completeIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -187,6 +193,7 @@ func RemindersReorder(a *App) *cobra.Command {
 			"the same verb with every id listed.\n\n" +
 			"It takes no lock. A reorder that loses a race against another writer\n" +
 			"recomputes against the winner's result rather than overwriting it.",
+		Example:           "  canga reminders reorder 20260915T142233.482913Z-9f3a1c07  # bump one to the top",
 		Args:              UsageArgs(cobra.MinimumNArgs(1)),
 		ValidArgsFunction: a.completeIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {

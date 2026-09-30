@@ -685,10 +685,12 @@ Before it replaces anything:
   renamed over the old one, so a bad archive leaves the working binary
   untouched.
 
-It prints the path it is about to write, and `--check` prints the same path
-without touching it. It replaces the file a symlink points to, not the
-symlink; keeps the file's mode; and leaves no backup behind, since the
-previous release is one `canga upgrade --tag` away.
+On stderr it names the file it replaced, or, when a run fails after choosing
+a release, the file it was working on; `--check` names the file it would
+replace without touching it. It replaces the file a symlink points to, not
+the symlink; keeps the file's mode; and leaves no backup behind. Any release
+at or above [the release floor](#the-release-floor) is one
+`canga upgrade --tag` away; a release below it cannot be installed again.
 
 A GitHub token is optional. `GH_TOKEN`, then `GITHUB_TOKEN`, then whatever
 `gh auth token` answers raises GitHub's rate limit from 60 to 5000 requests
@@ -783,12 +785,16 @@ one is optional on the host.
 
 ## Contributing
 
+How to report a bug, install the commit hook, commit conventions, what CI
+runs, and which page a change belongs in: [CONTRIBUTING.md](CONTRIBUTING.md).
+This section is the build, test and release reference.
+
 canga is written in Go (1.27 or later: the reminders store relies on its
 `os.Root` fixes). Every gate is a `make` target, and CI invokes the target
 rather than restating it, so what CI runs is what you checked locally.
 
 ```sh
-make tools   # install the pinned golangci-lint and govulncheck
+make tools   # install the pinned golangci-lint and govulncheck (GOBIN, else GOPATH/bin)
 make ci      # lint, license check, cross, test, e2e-sandbox, govulncheck: green before a push
 ```
 
@@ -821,11 +827,11 @@ mount rather than assumed to hold there.
 
 ### Commit hook
 
-`.canga/hooks/pre-commit` runs `make pre-commit`, which applies every fix a
-tool can apply on its own, and then refuses the commit if anything changed.
-It refuses rather than amending on purpose: a hook that rewrites files and
-lets the commit through commits something you never read. Install it with
-[`canga git setup-hooks`](#canga-git-setup-hooks).
+`.canga/hooks/pre-commit` runs `make pre-commit` (`go fix`, the
+`golangci-lint fmt` formatters and `go vet`), and then refuses the commit if
+that changed any file. It refuses rather than amending on purpose: a hook
+that rewrites files and lets the commit through commits something you never
+read. How to install it: [CONTRIBUTING.md](CONTRIBUTING.md#get-a-change-green).
 
 `make pre-commit` is deliberately a fast subset rather than `make ci`. A hook
 slow enough to be annoying is a hook that gets `--no-verify`d, and then it
@@ -877,6 +883,8 @@ it verifies, older release lines, and the lower-level `rewrite`:
   provenance, and the sbx kit pin.
 - [Migrating](docs/migrating.md): moving from devctl and agtctl, and other
   one-time changes.
+- [Contributing](CONTRIBUTING.md): reporting a bug, commit conventions,
+  and where a change is documented.
 - [docs/HANDOFF.md](docs/HANDOFF.md): the project's working log and open
   items.
 

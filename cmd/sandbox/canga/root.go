@@ -11,6 +11,7 @@ import (
 
 	"github.com/brunovenceslau/canga/internal/cli"
 	"github.com/brunovenceslau/canga/internal/repo"
+	"github.com/brunovenceslau/canga/internal/upgrade"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +38,9 @@ func newRootCmd() *cobra.Command {
 		Short: "Reminders for an agent in a sandbox",
 		Long: "canga, in its sandbox build, reads and adds to the per-repository\n" +
 			"reminders that the host build manages, keyed by the repository the\n" +
-			"current directory belongs to.",
+			"current directory belongs to, and upgrades itself to another release.\n" +
+			"The host build keeps git, workspace, completion, and reminders rm,\n" +
+			"reorder and path.",
 		Version: fmt.Sprintf("%s (%s, %s, %s)", version, role, commit, runtime.Version()),
 		// An error is a line on stderr, not a wall of help text, and main is the
 		// only thing that prints it.
@@ -81,13 +84,14 @@ func newUpgradeCmd() *cobra.Command {
 	cmd := cli.NewUpgradeCmd(role, version)
 
 	cmd.Long += "\n\n" +
-		"In a sandbox, the canga-sandbox kit installs /usr/local/bin/canga\n" +
-		"owned by root, so run `sudo canga upgrade`. The kit pins the release a\n" +
-		"sandbox is provisioned with; an upgrade replaces it in this sandbox\n" +
-		"only, until the sandbox is recreated from the kit's pin.\n\n" +
-		"--tag can install a release whose sandbox build has no upgrade command\n" +
-		"(v0.6.0 and earlier). After that, `canga upgrade` in this sandbox refuses\n" +
-		"until the sandbox is recreated or install_sandbox.sh runs again."
+		"In a sandbox, the sbx kit and install_sandbox.sh both install\n" +
+		"/usr/local/bin/canga owned by root, so run `sudo canga upgrade`.\n" +
+		"The kit's pin, or the tag passed to install_sandbox.sh, picks the\n" +
+		"release a sandbox starts with; an upgrade lasts until the sandbox\n" +
+		"is provisioned again."
+	cmd.Example = "  sudo canga upgrade                # install the newest release\n" +
+		"  canga upgrade --check             # say what is available, change nothing\n" +
+		"  sudo canga upgrade --tag " + upgrade.MinReleaseTag + "  # install exactly that release"
 
 	return cmd
 }

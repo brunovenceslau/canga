@@ -25,6 +25,8 @@ func newSetupHooksCmd(a *cli.App) *cobra.Command {
 			"The hooks are the repository's own tracked files, so installing them\n" +
 			"means its content runs on every commit. Install them in repositories\n" +
 			"whose contents you would run anyway.",
+		Example: "  canga git setup-hooks            # point core.hooksPath at .canga/hooks\n" +
+			"  canga git setup-hooks --symlink  # or link each hook into .git/hooks",
 		Args: cli.UsageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			report, err := hooks.Install(cmd.Context(), a.RepoDir, options)

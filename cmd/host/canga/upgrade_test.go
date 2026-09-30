@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/brunovenceslau/canga/internal/cli"
+	"github.com/brunovenceslau/canga/internal/clitest"
 	"github.com/brunovenceslau/canga/internal/upgrade"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,15 +74,18 @@ func TestUpgradeUsage(t *testing.T) {
 	}
 }
 
-// TestUpgradeHelpSeparatesItFromDotfilesUpgrade keeps the one distinction that
-// is easy to lose: dotfiles-upgrade fetches git and updates a checkout, and
-// this replaces a binary. Two mechanisms that share a verb.
-func TestUpgradeHelpSeparatesItFromDotfilesUpgrade(t *testing.T) {
+// TestUpgradeHelpSaysWhatItReplaces: the help says the command replaces the
+// running binary with a release, that the checksum check does not prove the
+// release genuine, and which build it installs.
+func TestUpgradeHelpSaysWhatItReplaces(t *testing.T) {
 	t.Parallel()
 
 	out, err := execute(t, upgradeCmd, "--help")
 	require.NoError(t, err)
-	assert.Contains(t, out, "dotfiles-upgrade")
-	assert.Contains(t, out, "checksums.txt")
-	assert.Contains(t, out, "release's host build", "the host must upgrade into the host build")
+
+	flat := clitest.Flatten(out)
+	assert.Contains(t, flat, "replaces the running")
+	assert.Contains(t, flat, "The archive is checked against the SHA-256 the release publishes in checksums.txt.")
+	assert.Contains(t, flat, "not that the release is genuine")
+	assert.Contains(t, flat, "release's host build", "the host must upgrade into the host build")
 }
